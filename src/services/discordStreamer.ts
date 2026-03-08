@@ -171,7 +171,8 @@ export class DiscordStreamer {
         // Verify authorization with a proper fetch
         const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
         if (!isAuthorized(member)) {
-          await interaction.reply({ content: 'You are not authorized.', ephemeral: true }).catch(() => {});
+          await interaction.reply({ content: 'You are not authorized.', ephemeral: true })
+            .catch((e) => console.warn('[toolApproval] ephemeral reply failed:', e));
           continue; // Wait for another click
         }
 
@@ -196,7 +197,8 @@ export class DiscordStreamer {
       await msg.edit({ components: [disabledRow] }).catch(() => {});
 
       return result;
-    } catch {
+    } catch (err) {
+      console.error('[toolApproval] Failed:', err);
       return 'deny';
     }
   }
@@ -242,7 +244,8 @@ export class DiscordStreamer {
 
           const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
           if (!isAuthorized(member)) {
-            await interaction.reply({ content: 'You are not authorized.', ephemeral: true }).catch(() => {});
+            await interaction.reply({ content: 'You are not authorized.', ephemeral: true })
+              .catch((e) => console.warn('[askUser] ephemeral reply failed:', e));
             continue;
           }
 
@@ -277,7 +280,7 @@ export class DiscordStreamer {
 
           const member = await reply.guild?.members.fetch(reply.author.id).catch(() => null) ?? null;
           if (!isAuthorized(member)) {
-            await reply.reply({ content: 'You are not authorized.' }).catch(() => {});
+            // Silently ignore unauthorized messages to avoid leaking auth state
             continue;
           }
 

@@ -20,7 +20,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   try {
     resolvedPath = realpathSync(path);
   } catch {
-    await interaction.reply({ content: `Path \`${path}\` could not be resolved (broken symlink?).`, ephemeral: true });
+    await interaction.reply({ content: 'The provided path could not be resolved (broken symlink or inaccessible).', ephemeral: true });
     return;
   }
   if (config.projectsBaseDir) {

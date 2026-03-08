@@ -8,6 +8,7 @@ import {
   ComponentType,
   ButtonInteraction,
 } from 'discord.js';
+import { config } from '../config.js';
 import { chunkText } from '../utils/chunker.js';
 
 const EDIT_INTERVAL_MS = 1500;
@@ -271,7 +272,8 @@ export class DiscordStreamer {
       if (result.sessionId) embed.addFields({ name: 'Session', value: `\`${result.sessionId.slice(0, 8)}\``, inline: true });
     }
 
-    try { await this.thread.send({ content: '<@208892666962903041>', embeds: [embed] }); } catch {}
+    const ping = config.notifyUserId ? `<@${config.notifyUserId}>` : '';
+    try { await this.thread.send({ content: ping, embeds: [embed] }); } catch {}
   }
 }
 

@@ -16,9 +16,21 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   }
 
   // Resolve symlinks and validate against allowed base directory
-  const resolvedPath = realpathSync(path);
+  let resolvedPath: string;
+  try {
+    resolvedPath = realpathSync(path);
+  } catch {
+    await interaction.reply({ content: `Path \`${path}\` could not be resolved (broken symlink?).`, ephemeral: true });
+    return;
+  }
   if (config.projectsBaseDir) {
-    const resolvedBase = realpathSync(config.projectsBaseDir);
+    let resolvedBase: string;
+    try {
+      resolvedBase = realpathSync(config.projectsBaseDir);
+    } catch {
+      await interaction.reply({ content: 'Server misconfiguration: PROJECTS_BASE_DIR could not be resolved.', ephemeral: true });
+      return;
+    }
     if (!resolvedPath.startsWith(resolvedBase + '/') && resolvedPath !== resolvedBase) {
       await interaction.reply({
         content: `Path must be within the allowed base directory: \`${config.projectsBaseDir}\``,
@@ -69,10 +81,14 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
       await interaction.followUp({ content: 'Webhook URL sent to your DMs.', ephemeral: true });
     } catch {
       // If DMs are disabled, fall back to ephemeral follow-up
-      await interaction.followUp({
-        content: `**Roborev webhook URL:**\n\`\`\`\n${webhookUrl}\n\`\`\`\nAdd this to your roborev config to route reviews to Discord.`,
-        ephemeral: true,
-      });
+      try {
+        await interaction.followUp({
+          content: `**Roborev webhook URL:**\n\`\`\`\n${webhookUrl}\n\`\`\`\nAdd this to your roborev config to route reviews to Discord.`,
+          ephemeral: true,
+        });
+      } catch (followUpErr) {
+        console.error(`[addProject] Failed to send webhook URL to user ${interaction.user.id}:`, followUpErr);
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -1,6 +1,5 @@
 import {
   AnyThreadChannel,
-  GuildMember,
   Message,
   EmbedBuilder,
   ActionRowBuilder,
@@ -153,16 +152,35 @@ export class DiscordStreamer {
     try {
       const msg = await this.thread.send({ embeds: [embed], components: [row] });
 
-      const interaction = await msg.awaitMessageComponent({
-        componentType: ComponentType.Button,
-        time: 300_000, // 5 minutes
-        filter: (i) => {
-          const member = i.guild?.members.cache.get(i.user.id) as GuildMember | undefined ?? null;
-          return isAuthorized(member);
-        },
-      }).catch(() => null);
+      // Collect-then-verify: awaitMessageComponent filter must be sync,
+      // so we accept the interaction and verify auth with an async fetch after.
+      const deadline = Date.now() + 300_000;
+      let result: 'allow' | 'deny' = 'deny';
 
-      // Disable buttons after interaction
+      while (Date.now() < deadline) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+
+        const interaction = await msg.awaitMessageComponent({
+          componentType: ComponentType.Button,
+          time: remaining,
+        }).catch(() => null);
+
+        if (!interaction) break; // Timeout
+
+        // Verify authorization with a proper fetch
+        const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
+        if (!isAuthorized(member)) {
+          await interaction.reply({ content: 'You are not authorized.', ephemeral: true }).catch(() => {});
+          continue; // Wait for another click
+        }
+
+        await interaction.deferUpdate();
+        result = interaction.customId === 'tool_allow' ? 'allow' : 'deny';
+        break;
+      }
+
+      // Disable buttons
       const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId('tool_allow')
@@ -177,10 +195,7 @@ export class DiscordStreamer {
       );
       await msg.edit({ components: [disabledRow] }).catch(() => {});
 
-      if (!interaction) return 'deny'; // Timeout = deny
-
-      await interaction.deferUpdate();
-      return interaction.customId === 'tool_allow' ? 'allow' : 'deny';
+      return result;
     } catch {
       return 'deny';
     }
@@ -209,35 +224,68 @@ export class DiscordStreamer {
         }
 
         const msg = await this.thread.send({ embeds: [embed], components: [row] });
-        const interaction = await msg.awaitMessageComponent({
-          componentType: ComponentType.Button,
-          time: 300_000,
-          filter: (i) => {
-            const member = i.guild?.members.cache.get(i.user.id) as GuildMember | undefined ?? null;
-            return isAuthorized(member);
-          },
-        }).catch(() => null);
 
-        if (interaction) {
+        // Collect-then-verify pattern for async auth
+        const askDeadline = Date.now() + 300_000;
+        let answered = false;
+
+        while (Date.now() < askDeadline) {
+          const remaining = askDeadline - Date.now();
+          if (remaining <= 0) break;
+
+          const interaction = await msg.awaitMessageComponent({
+            componentType: ComponentType.Button,
+            time: remaining,
+          }).catch(() => null);
+
+          if (!interaction) break; // Timeout
+
+          const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
+          if (!isAuthorized(member)) {
+            await interaction.reply({ content: 'You are not authorized.', ephemeral: true }).catch(() => {});
+            continue;
+          }
+
           await interaction.deferUpdate();
           answers[q.question] = interaction.customId.replace('ask_', '');
-        } else {
+          answered = true;
+          break;
+        }
+
+        if (!answered) {
           answers[q.question] = q.options[0].label; // Default to first option on timeout
         }
       } else {
-        // Free-text: wait for a message in the thread
+        // Free-text: wait for a message in the thread, then verify auth
         await this.thread.send({ embeds: [embed] });
-        const collected = await this.thread.awaitMessages({
-          max: 1,
-          time: 300_000,
-          filter: (m: Message) => {
-            if (m.author.bot) return false;
-            const member = m.guild?.members.cache.get(m.author.id) as GuildMember | undefined ?? null;
-            return isAuthorized(member);
-          },
-        }).catch(() => null);
 
-        answers[q.question] = collected?.first()?.content ?? 'skip';
+        const textDeadline = Date.now() + 300_000;
+        let textAnswer = 'skip';
+
+        while (Date.now() < textDeadline) {
+          const remaining = textDeadline - Date.now();
+          if (remaining <= 0) break;
+
+          const collected = await this.thread.awaitMessages({
+            max: 1,
+            time: remaining,
+            filter: (m: Message) => !m.author.bot,
+          }).catch(() => null);
+
+          const reply = collected?.first();
+          if (!reply) break; // Timeout
+
+          const member = await reply.guild?.members.fetch(reply.author.id).catch(() => null) ?? null;
+          if (!isAuthorized(member)) {
+            await reply.reply({ content: 'You are not authorized.' }).catch(() => {});
+            continue;
+          }
+
+          textAnswer = reply.content;
+          break;
+        }
+
+        answers[q.question] = textAnswer;
       }
     }
 

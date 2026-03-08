@@ -1,4 +1,7 @@
-import { spawn, execFileSync, ChildProcess } from 'node:child_process';
+import { spawn, execFile, ChildProcess } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import { WebhookClient, EmbedBuilder } from 'discord.js';
 import { config } from '../config.js';
 import { getAllProjects } from './projectStore.js';
@@ -37,13 +40,14 @@ function matchProject(repoPath: string): Project | undefined {
   return projects.find(p => repoPath.startsWith(p.workingDirectory));
 }
 
-function getReviewBody(jobId: number): string {
+async function getReviewBody(jobId: number): Promise<string> {
   try {
-    return execFileSync(config.roborevCliPath, ['show', String(jobId)], {
+    const { stdout } = await execFileAsync(config.roborevCliPath, ['show', String(jobId)], {
       encoding: 'utf-8',
       timeout: 10000,
       env: { ...process.env, CLAUDECODE: '' },
-    }).trim();
+    });
+    return stdout.trim();
   } catch {
     return '';
   }
@@ -85,7 +89,7 @@ async function handleEvent(event: StreamEvent): Promise<void> {
     const verdictInfo = VERDICT_CONFIG[event.verdict ?? ''] ?? { color: 0x95a5a6, label: 'Unknown', emoji: '❓' };
 
     // Fetch full review body
-    const reviewBody = getReviewBody(event.job_id);
+    const reviewBody = await getReviewBody(event.job_id);
 
     const embed = new EmbedBuilder()
       .setColor(verdictInfo.color)

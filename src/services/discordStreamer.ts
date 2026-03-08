@@ -7,7 +7,6 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ComponentType,
-  ButtonInteraction,
 } from 'discord.js';
 import { config } from '../config.js';
 import { chunkText } from '../utils/chunker.js';

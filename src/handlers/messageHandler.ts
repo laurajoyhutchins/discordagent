@@ -30,7 +30,7 @@ export async function handleMessage(message: Message): Promise<void> {
   if (!project) return;
   if (message.channelId !== project.claudeChannelId) return;
 
-  const member = message.guild.members.cache.get(message.author.id) ?? null;
+  const member = await message.guild.members.fetch(message.author.id).catch(() => null);
   if (!isAuthorized(member)) {
     await message.reply('You are not authorized to use this bot.');
     return;

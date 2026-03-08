@@ -9,7 +9,7 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
   if (!interaction.isChatInputCommand()) return;
 
   // Auth check
-  const member = interaction.guild?.members.cache.get(interaction.user.id) ?? null;
+  const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
   if (!isAuthorized(member)) {
     await interaction.reply({ content: 'You are not authorized to use this bot.', ephemeral: true });
     return;
@@ -34,11 +34,11 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
     }
   } catch (err) {
     console.error(`Error handling command ${interaction.commandName}:`, err);
-    const msg = err instanceof Error ? err.message : 'An error occurred';
+    const userMsg = 'An unexpected error occurred. Check server logs for details.';
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(`Error: ${msg}`).catch(() => {});
+      await interaction.editReply(userMsg).catch(() => {});
     } else {
-      await interaction.reply({ content: `Error: ${msg}`, ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: userMsg, ephemeral: true }).catch(() => {});
     }
   }
 }

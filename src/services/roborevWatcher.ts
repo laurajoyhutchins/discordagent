@@ -1,14 +1,25 @@
-import { spawn, ChildProcess } from 'node:child_process';
+import { spawn, execFileSync, ChildProcess } from 'node:child_process';
 import { WebhookClient, EmbedBuilder } from 'discord.js';
 import { config } from '../config.js';
 import { getAllProjects } from './projectStore.js';
-import type { RoborevEvent, Project } from '../types.js';
+import type { Project } from '../types.js';
 
 let roborevProcess: ChildProcess | null = null;
 let backoffMs = 1000;
 const MAX_BACKOFF = 60000;
 
 const webhookClients = new Map<string, WebhookClient>();
+
+interface StreamEvent {
+  type: string;
+  ts: string;
+  job_id: number;
+  repo: string;
+  repo_name: string;
+  sha: string;
+  agent: string;
+  verdict?: string;
+}
 
 function getWebhookClient(project: Project): WebhookClient {
   const key = project.roborevWebhookId;
@@ -26,44 +37,87 @@ function matchProject(repoPath: string): Project | undefined {
   return projects.find(p => repoPath.startsWith(p.workingDirectory));
 }
 
-const SEVERITY_COLORS: Record<string, number> = {
-  info: 0x3498db,
-  warning: 0xf39c12,
-  error: 0xe74c3c,
-};
-
-function buildEmbed(event: RoborevEvent): EmbedBuilder {
-  const embed = new EmbedBuilder()
-    .setColor(SEVERITY_COLORS[event.severity ?? 'info'] ?? 0x95a5a6)
-    .setTitle(`${(event.severity ?? 'info').toUpperCase()}: ${event.file ?? 'Unknown file'}`)
-    .setDescription(event.message ?? 'No message');
-
-  if (event.line) embed.addFields({ name: 'Line', value: String(event.line), inline: true });
-  if (event.commit) embed.addFields({ name: 'Commit', value: event.commit.slice(0, 8), inline: true });
-  if (event.author) embed.addFields({ name: 'Author', value: event.author, inline: true });
-  if (event.suggestion) embed.addFields({ name: 'Suggestion', value: event.suggestion });
-
-  return embed;
-}
-
-async function handleEvent(event: RoborevEvent): Promise<void> {
-  if (!event.repo) return;
-
-  const project = matchProject(event.repo);
-  if (!project) return;
-
-  const webhook = getWebhookClient(project);
-  const embed = buildEmbed(event);
-
+function getReviewBody(jobId: number): string {
   try {
-    await webhook.send({ embeds: [embed] });
-  } catch (err) {
-    console.error(`Failed to send roborev embed for ${project.name}:`, err);
+    return execFileSync(config.roborevCliPath, ['show', String(jobId)], {
+      encoding: 'utf-8',
+      timeout: 10000,
+      env: { ...process.env, CLAUDECODE: '' },
+    }).trim();
+  } catch {
+    return '';
   }
 }
 
+const VERDICT_CONFIG: Record<string, { color: number; label: string; emoji: string }> = {
+  A: { color: 0x2ecc71, label: 'Approved', emoji: '✅' },
+  B: { color: 0x3498db, label: 'Minor Issues', emoji: '💡' },
+  C: { color: 0xf39c12, label: 'Needs Changes', emoji: '⚠️' },
+  D: { color: 0xe67e22, label: 'Significant Issues', emoji: '🔶' },
+  F: { color: 0xe74c3c, label: 'Critical Issues', emoji: '❌' },
+};
+
+async function handleEvent(event: StreamEvent): Promise<void> {
+  if (event.type === 'review.started') {
+    const project = matchProject(event.repo);
+    if (!project) return;
+
+    const webhook = getWebhookClient(project);
+    const embed = new EmbedBuilder()
+      .setColor(0x95a5a6)
+      .setTitle(`🔍 Reviewing ${event.sha.slice(0, 8)}`)
+      .setDescription(`Agent: **${event.agent}**`)
+      .setTimestamp(new Date(event.ts));
+
+    try {
+      await webhook.send({ embeds: [embed] });
+    } catch (err) {
+      console.error(`[roborev] Failed to send started embed:`, err);
+    }
+    return;
+  }
+
+  if (event.type === 'review.completed') {
+    const project = matchProject(event.repo);
+    if (!project) return;
+
+    const webhook = getWebhookClient(project);
+    const verdictInfo = VERDICT_CONFIG[event.verdict ?? ''] ?? { color: 0x95a5a6, label: 'Unknown', emoji: '❓' };
+
+    // Fetch full review body
+    const reviewBody = getReviewBody(event.job_id);
+
+    const embed = new EmbedBuilder()
+      .setColor(verdictInfo.color)
+      .setTitle(`${verdictInfo.emoji} Review: ${event.sha.slice(0, 8)} — ${verdictInfo.label}`)
+      .setTimestamp(new Date(event.ts));
+
+    if (reviewBody) {
+      // Truncate to Discord embed limit (4096 chars)
+      const body = reviewBody.length > 4000 ? reviewBody.slice(0, 4000) + '\n...(truncated)' : reviewBody;
+      embed.setDescription(body);
+    } else {
+      embed.setDescription(`Verdict: **${verdictInfo.label}** (${event.verdict})\nRun \`roborev show ${event.job_id}\` for details.`);
+    }
+
+    embed.addFields(
+      { name: 'Commit', value: `\`${event.sha.slice(0, 8)}\``, inline: true },
+      { name: 'Agent', value: event.agent, inline: true },
+      { name: 'Verdict', value: `${verdictInfo.emoji} ${event.verdict}`, inline: true }
+    );
+
+    try {
+      await webhook.send({ embeds: [embed] });
+    } catch (err) {
+      console.error(`[roborev] Failed to send completed embed:`, err);
+    }
+    return;
+  }
+
+  console.log(`[roborev] Unhandled event type: ${event.type}`);
+}
+
 export function startRoborevWatcher(): void {
-  // Kill any existing process first
   if (roborevProcess) {
     roborevProcess.removeAllListeners('close');
     roborevProcess.kill('SIGTERM');
@@ -75,6 +129,7 @@ export function startRoborevWatcher(): void {
   roborevProcess = spawn(config.roborevCliPath, ['stream'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
+    env: { ...process.env, CLAUDECODE: '' },
   });
 
   let lineBuf = '';
@@ -87,7 +142,8 @@ export function startRoborevWatcher(): void {
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
-        const event = JSON.parse(line) as RoborevEvent;
+        const event = JSON.parse(line) as StreamEvent;
+        console.log(`[roborev] Event: ${event.type} job=${event.job_id} repo=${event.repo_name}`);
         handleEvent(event).catch(err =>
           console.error('[roborev] Error handling event:', err)
         );
@@ -121,7 +177,6 @@ export function startRoborevWatcher(): void {
     }, backoffMs);
   });
 
-  // Reset backoff on successful start
   setTimeout(() => {
     if (roborevProcess) backoffMs = 1000;
   }, 5000);

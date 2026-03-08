@@ -1,5 +1,6 @@
 import {
   AnyThreadChannel,
+  GuildMember,
   Message,
   EmbedBuilder,
   ActionRowBuilder,
@@ -10,6 +11,7 @@ import {
 } from 'discord.js';
 import { config } from '../config.js';
 import { chunkText } from '../utils/chunker.js';
+import { isAuthorized } from '../utils/permissions.js';
 
 const EDIT_INTERVAL_MS = 1500;
 
@@ -155,6 +157,10 @@ export class DiscordStreamer {
       const interaction = await msg.awaitMessageComponent({
         componentType: ComponentType.Button,
         time: 300_000, // 5 minutes
+        filter: (i) => {
+          const member = i.guild?.members.cache.get(i.user.id) as GuildMember | undefined ?? null;
+          return isAuthorized(member);
+        },
       }).catch(() => null);
 
       // Disable buttons after interaction
@@ -207,6 +213,10 @@ export class DiscordStreamer {
         const interaction = await msg.awaitMessageComponent({
           componentType: ComponentType.Button,
           time: 300_000,
+          filter: (i) => {
+            const member = i.guild?.members.cache.get(i.user.id) as GuildMember | undefined ?? null;
+            return isAuthorized(member);
+          },
         }).catch(() => null);
 
         if (interaction) {
@@ -221,7 +231,11 @@ export class DiscordStreamer {
         const collected = await this.thread.awaitMessages({
           max: 1,
           time: 300_000,
-          filter: (m: Message) => !m.author.bot,
+          filter: (m: Message) => {
+            if (m.author.bot) return false;
+            const member = m.guild?.members.cache.get(m.author.id) as GuildMember | undefined ?? null;
+            return isAuthorized(member);
+          },
         }).catch(() => null);
 
         answers[q.question] = collected?.first()?.content ?? 'skip';

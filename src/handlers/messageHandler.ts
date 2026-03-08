@@ -18,7 +18,7 @@ export async function handleMessage(message: Message): Promise<void> {
     const project = getProjectByChannel(parentId);
     if (!project || parentId !== project.claudeChannelId) return;
 
-    const member = message.guild.members.cache.get(message.author.id) ?? null;
+    const member = await message.guild.members.fetch(message.author.id).catch(() => null);
     if (!isAuthorized(member)) return;
 
     await continueInThread(prompt, project.workingDirectory, project.name, message);

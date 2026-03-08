@@ -10,10 +10,10 @@ const activeSessions = new Map<string, ActiveSession>();
 // Map thread IDs to their parent channel's session ID for resume
 const threadSessionMap = new Map<string, string>();
 
-// Tools that are auto-approved (read-only)
+// Tools that are auto-approved (read-only, no side effects)
 const AUTO_APPROVED_TOOLS = [
   'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
-  'TodoRead', 'TodoWrite', 'Agent',
+  'TodoRead', 'TodoWrite',
 ];
 
 export function getSession(channelId: string): ActiveSession | undefined {
@@ -144,6 +144,13 @@ export async function runClaude(
 
   activeSessions.set(channelId, session);
 
+  // Auto-cancel after configured timeout
+  const timeout = setTimeout(() => {
+    if (session.busy) {
+      abortController.abort();
+    }
+  }, config.claudeTimeoutMs);
+
   try {
     const q = query({
       prompt,
@@ -151,7 +158,7 @@ export async function runClaude(
         cwd: projectDir,
         abortController,
         permissionMode: 'default',
-        settingSources: ['user', 'project', 'local'],
+        settingSources: ['user'],
         env: { ...process.env, CLAUDECODE: undefined },
         ...(resumeId ? { resume: resumeId } : {}),
         canUseTool: makeCanUseTool(streamer),
@@ -175,6 +182,8 @@ export async function runClaude(
       await streamer.finish({ exitType: 'error' });
       try { await originalMessage.react('❌'); } catch {}
     }
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -224,6 +233,13 @@ export async function continueInThread(
 
   activeSessions.set(parentChannelId, activeSession);
 
+  // Auto-cancel after configured timeout
+  const timeout = setTimeout(() => {
+    if (activeSession.busy) {
+      abortController.abort();
+    }
+  }, config.claudeTimeoutMs);
+
   try {
     const q = query({
       prompt,
@@ -231,7 +247,7 @@ export async function continueInThread(
         cwd: projectDir,
         abortController,
         permissionMode: 'default',
-        settingSources: ['user', 'project', 'local'],
+        settingSources: ['user'],
         env: { ...process.env, CLAUDECODE: undefined },
         resume: resumeId,
         canUseTool: makeCanUseTool(streamer),
@@ -250,6 +266,8 @@ export async function continueInThread(
       streamer.append(`\n[error] ${msg}\n`);
       await streamer.finish({ exitType: 'error' });
     }
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

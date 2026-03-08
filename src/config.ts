@@ -16,4 +16,5 @@ export const config = {
   notifyUserId: process.env.NOTIFY_USER_ID ?? '',
   claudeTimeoutMs: parseInt(process.env.CLAUDE_TIMEOUT_MS ?? '900000', 10),
   roborevCliPath: process.env.ROBOREV_CLI_PATH ?? 'roborev',
+  projectsBaseDir: process.env.PROJECTS_BASE_DIR ?? '',
 } as const;

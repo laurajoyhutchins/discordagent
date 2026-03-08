@@ -23,14 +23,3 @@ export interface ActiveSession {
   busy: boolean; // Currently processing a query
 }
 
-export interface RoborevEvent {
-  type: string;
-  repo?: string;
-  file?: string;
-  line?: number;
-  severity?: 'info' | 'warning' | 'error';
-  message?: string;
-  suggestion?: string;
-  commit?: string;
-  author?: string;
-}

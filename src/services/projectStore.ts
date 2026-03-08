@@ -42,6 +42,15 @@ export function addProject(project: Project): void {
   save(store);
 }
 
+export function updateProjectSession(name: string, sessionId: string): void {
+  const store = load();
+  const project = store.projects.find(p => p.name === name);
+  if (project) {
+    project.sessionId = sessionId;
+    save(store);
+  }
+}
+
 export function removeProject(name: string): Project | undefined {
   const store = load();
   const idx = store.projects.findIndex(p => p.name === name);

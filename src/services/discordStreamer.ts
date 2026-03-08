@@ -262,17 +262,16 @@ export class DiscordStreamer {
     const isSuccess = result?.exitType === 'success';
     const embed = new EmbedBuilder()
       .setColor(isSuccess ? 0x2ecc71 : 0xe74c3c)
-      .setTitle(isSuccess ? '✅ Session Complete' : '❌ Session Ended')
+      .setTitle(isSuccess ? '✅ Ready for next prompt' : '❌ Session error')
       .setTimestamp();
 
     if (result) {
-      if (result.cost != null) embed.addFields({ name: 'Cost', value: `$${result.cost.toFixed(4)}`, inline: true });
+      if (result.cost != null) embed.addFields({ name: 'Est. Usage', value: `~$${result.cost.toFixed(4)} (included in sub)`, inline: true });
       if (result.duration != null) embed.addFields({ name: 'Duration', value: `${(result.duration / 1000).toFixed(1)}s`, inline: true });
       if (result.sessionId) embed.addFields({ name: 'Session', value: `\`${result.sessionId.slice(0, 8)}\``, inline: true });
-      embed.addFields({ name: 'Status', value: result.exitType });
     }
 
-    try { await this.thread.send({ embeds: [embed] }); } catch {}
+    try { await this.thread.send({ content: '<@208892666962903041>', embeds: [embed] }); } catch {}
   }
 }
 

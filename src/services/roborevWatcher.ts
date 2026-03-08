@@ -63,7 +63,12 @@ async function handleEvent(event: RoborevEvent): Promise<void> {
 }
 
 export function startRoborevWatcher(): void {
-  if (roborevProcess) return;
+  // Kill any existing process first
+  if (roborevProcess) {
+    roborevProcess.removeAllListeners('close');
+    roborevProcess.kill('SIGTERM');
+    roborevProcess = null;
+  }
 
   console.log('[roborev] Starting watcher...');
 

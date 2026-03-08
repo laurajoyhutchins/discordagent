@@ -1,5 +1,3 @@
-import type { Query } from '@anthropic-ai/claude-agent-sdk';
-
 export interface Project {
   name: string;
   workingDirectory: string;
@@ -8,6 +6,7 @@ export interface Project {
   roborevChannelId: string;
   roborevWebhookId: string;
   roborevWebhookToken: string;
+  sessionId?: string; // Persisted session ID for resume
 }
 
 export interface ProjectStore {
@@ -15,14 +14,13 @@ export interface ProjectStore {
 }
 
 export interface ActiveSession {
-  query: Query;
   abortController: AbortController;
   channelId: string;
   threadId: string;
   projectName: string;
   sessionId: string | null;
   startedAt: number;
-  timeout: ReturnType<typeof setTimeout>;
+  busy: boolean; // Currently processing a query
 }
 
 export interface RoborevEvent {

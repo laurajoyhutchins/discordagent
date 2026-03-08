@@ -2,7 +2,8 @@ import { Client, GatewayIntentBits, Partials, REST, Routes } from 'discord.js';
 import { config } from './config.js';
 import { handleInteraction } from './handlers/interactionHandler.js';
 import { handleMessage } from './handlers/messageHandler.js';
-import { startRoborevWatcher } from './services/roborevWatcher.js';
+import { handleThreadDelete } from './handlers/threadDeleteHandler.js';
+import { startRoborevWatcher, stopRoborevWatcher } from './services/roborevWatcher.js';
 import { commands } from './commands/definitions.js';
 
 const client = new Client({
@@ -40,21 +41,20 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', handleInteraction);
 client.on('messageCreate', handleMessage);
+client.on('threadDelete', handleThreadDelete);
 
 client.on('error', (err) => {
   console.error('Discord client error:', err);
 });
 
-process.on('SIGINT', () => {
+function shutdown() {
   console.log('Shutting down...');
+  stopRoborevWatcher();
   client.destroy();
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', () => {
-  console.log('Shutting down...');
-  client.destroy();
-  process.exit(0);
-});
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 client.login(config.discordToken);

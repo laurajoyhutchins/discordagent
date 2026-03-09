@@ -4,6 +4,7 @@ import { parseDuration, startLoop } from '../services/loopRunner.js';
 
 const DEFAULT_INTERVAL_MS = 10 * 60_000;
 
+// Note: Authorization is enforced by interactionHandler.ts before this handler is called.
 export async function handleLoop(interaction: ChatInputCommandInteraction): Promise<void> {
   const project = getProjectByChannel(interaction.channelId);
   if (!project || interaction.channelId !== project.claudeChannelId) {

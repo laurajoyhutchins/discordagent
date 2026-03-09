@@ -153,7 +153,7 @@ export async function startLoop(
     loop.iteration++;
 
     try {
-      const iterMsg = await channel.send(`🔁 **Loop iteration #${loop.iteration}** — \`${prompt.slice(0, 80)}\``);
+      const iterMsg = await channel.send(`🔁 **Loop iteration #${loop.iteration}**`);
       await runClaude(prompt, project.workingDirectory, project.name, iterMsg, project.sessionId);
     } catch (err) {
       console.error(`[loop] Iteration ${loop.iteration} failed:`, err);

@@ -1,4 +1,4 @@
-import { Message, TextChannel, AnyThreadChannel, EmbedBuilder } from 'discord.js';
+import { Message, TextChannel, ChannelType, EmbedBuilder } from 'discord.js';
 import { runClaude } from './claudeRunner.js';
 import type { Project } from '../types.js';
 
@@ -10,8 +10,9 @@ interface ActiveLoop {
   channelId: string;
   startedBy: string;
   startedAt: number;
-  timer: ReturnType<typeof setInterval>;
+  timer: ReturnType<typeof setTimeout> | null;
   iteration: number;
+  stopped: boolean;
 }
 
 const activeLoops = new Map<string, ActiveLoop>();
@@ -32,7 +33,8 @@ export function parseDuration(input: string): number | null {
   const minutes = parseInt(match[2] ?? '0', 10);
   const seconds = parseInt(match[3] ?? '0', 10);
 
-  return (hours * 3600 + minutes * 60 + seconds) * 1000;
+  const ms = (hours * 3600 + minutes * 60 + seconds) * 1000;
+  return ms > 0 ? ms : null;
 }
 
 /**
@@ -122,26 +124,12 @@ export async function startLoop(
 
   await message.reply({ embeds: [embed] });
 
-  const channel = message.channel as TextChannel;
-
-  // Run the prompt immediately for the first iteration
-  const runIteration = async () => {
-    const loop = activeLoops.get(channelId);
-    if (!loop) return;
-
-    loop.iteration++;
-
-    // Create a synthetic-looking message to trigger runClaude
-    // We send a new message in the channel so runClaude can create a thread from it
-    try {
-      const iterMsg = await channel.send(`🔁 **Loop iteration #${loop.iteration}** — \`${prompt.slice(0, 80)}\``);
-      await runClaude(prompt, project.workingDirectory, project.name, iterMsg, project.sessionId);
-    } catch (err) {
-      console.error(`[loop] Iteration ${loop.iteration} failed:`, err);
-    }
-  };
-
-  const timer = setInterval(runIteration, intervalMs);
+  // Verify channel type supports sending messages
+  const channel = message.channel;
+  if (channel.type !== ChannelType.GuildText) {
+    await message.reply('Loops can only be started in text channels.');
+    return;
+  }
 
   const loop: ActiveLoop = {
     id: loopId,
@@ -151,11 +139,31 @@ export async function startLoop(
     channelId,
     startedBy: message.author.id,
     startedAt: Date.now(),
-    timer,
+    timer: null,
     iteration: 0,
+    stopped: false,
   };
 
   activeLoops.set(channelId, loop);
+
+  // Use setTimeout chaining to prevent overlapping iterations
+  const runIteration = async () => {
+    if (loop.stopped || !activeLoops.has(channelId)) return;
+
+    loop.iteration++;
+
+    try {
+      const iterMsg = await channel.send(`🔁 **Loop iteration #${loop.iteration}** — \`${prompt.slice(0, 80)}\``);
+      await runClaude(prompt, project.workingDirectory, project.name, iterMsg, project.sessionId);
+    } catch (err) {
+      console.error(`[loop] Iteration ${loop.iteration} failed:`, err);
+    }
+
+    // Schedule next iteration only after current one completes
+    if (!loop.stopped && activeLoops.has(channelId)) {
+      loop.timer = setTimeout(runIteration, intervalMs);
+    }
+  };
 
   // Run first iteration immediately
   await runIteration();
@@ -171,7 +179,8 @@ export async function stopLoop(channelId: string, message: Message): Promise<voi
     return;
   }
 
-  clearInterval(loop.timer);
+  loop.stopped = true;
+  if (loop.timer) clearTimeout(loop.timer);
   activeLoops.delete(channelId);
 
   const embed = new EmbedBuilder()
@@ -199,7 +208,8 @@ export function getLoop(channelId: string): ActiveLoop | undefined {
  */
 export function stopAllLoops(): void {
   for (const loop of activeLoops.values()) {
-    clearInterval(loop.timer);
+    loop.stopped = true;
+    if (loop.timer) clearTimeout(loop.timer);
   }
   activeLoops.clear();
 }

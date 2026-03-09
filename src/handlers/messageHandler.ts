@@ -76,7 +76,7 @@ async function handleBotCommand(
   }
 
   // /stop-loop
-  if (lower.startsWith('/stop-loop') || lower.startsWith('/stoploops') || lower.startsWith('/stop loop')) {
+  if (lower.startsWith('/stop-loop') || lower.startsWith('/stoploop') || lower.startsWith('/stop loop')) {
     await stopLoop(project.claudeChannelId, message);
     return true;
   }

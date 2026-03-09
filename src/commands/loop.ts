@@ -19,7 +19,7 @@ export async function handleLoop(interaction: ChatInputCommandInteraction): Prom
     const parsed = parseDuration(intervalStr);
     if (parsed === null) {
       await interaction.reply({
-        content: `Invalid interval: \`${intervalStr}\`. Use formats like \`5m\`, \`1h\`, \`30s\`, \`2h30m\`.`,
+        content: 'Invalid interval. Use formats like `5m`, `1h`, `30s`, `2h30m`.',
         ephemeral: true,
       });
       return;

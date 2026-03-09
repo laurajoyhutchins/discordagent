@@ -6,8 +6,27 @@ import { handleRemoveProject } from '../commands/removeProject.js';
 import { handleCancel } from '../commands/cancel.js';
 import { handleLoop } from '../commands/loop.js';
 import { handleStopLoop } from '../commands/stopLoop.js';
+import { stopLoopFromButton } from '../services/loopRunner.js';
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
+  // Handle button interactions (e.g., loop stop button)
+  if (interaction.isButton()) {
+    if (interaction.customId.startsWith('loop_stop_')) {
+      const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
+      if (!isAuthorized(member)) {
+        await interaction.reply({ content: 'You are not authorized.', ephemeral: true });
+        return;
+      }
+
+      const channelId = interaction.customId.replace('loop_stop_', '');
+      await stopLoopFromButton(channelId, interaction);
+      return;
+    }
+
+    // Other button interactions (tool approval, ask user) are handled by discordStreamer
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   // Auth check

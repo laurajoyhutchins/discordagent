@@ -1,5 +1,15 @@
-import { Message, TextChannel, ChannelType, EmbedBuilder } from 'discord.js';
-import { runClaude } from './claudeRunner.js';
+import {
+  Message,
+  TextChannel,
+  AnyThreadChannel,
+  ChannelType,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ButtonInteraction,
+} from 'discord.js';
+import { runClaudeInThread } from './claudeRunner.js';
 import type { Project } from '../types.js';
 
 interface ActiveLoop {
@@ -8,22 +18,26 @@ interface ActiveLoop {
   intervalMs: number;
   project: Project;
   channelId: string;
+  threadId: string | null;           // the single thread all iterations run in
   startedBy: string;
   startedAt: number;
   timer: ReturnType<typeof setTimeout> | null;
   iteration: number;
   stopped: boolean;
+  nextIterationAt: number | null;
 }
 
 const activeLoops = new Map<string, ActiveLoop>();
+
+// Reverse map: threadId → channelId (so /stop-loop works from the thread)
+const loopThreads = new Map<string, string>();
 
 const MIN_INTERVAL_MS = 60_000;       // 1 minute minimum
 const MAX_INTERVAL_MS = 24 * 60 * 60_000; // 24 hours maximum
 const DEFAULT_INTERVAL_MS = 10 * 60_000;  // 10 minutes default
 
-/**
- * Parse a duration string like "5m", "1h", "30s", "2h30m" into milliseconds.
- */
+// ── Helpers ────────────────────────────────────────────────────────────
+
 export function parseDuration(input: string): number | null {
   const pattern = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/;
   const match = input.match(pattern);
@@ -37,10 +51,7 @@ export function parseDuration(input: string): number | null {
   return ms > 0 ? ms : null;
 }
 
-/**
- * Format milliseconds into a human-readable duration.
- */
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -54,18 +65,35 @@ function formatDuration(ms: number): string {
   return parts.join('') || '0s';
 }
 
-/**
- * Parse a /loop command message.
- * Formats:
- *   /loop 5m do something         — run "do something" every 5 minutes
- *   /loop do something            — run "do something" every 10 minutes (default)
- */
+function discordTimestamp(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  return `<t:${seconds}:R>`;
+}
+
+function makeStopButton(channelId: string): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`loop_stop_${channelId}`)
+      .setLabel('Stop Loop')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('⏹️')
+  );
+}
+
+function threadLabel(prompt: string): string {
+  return prompt.slice(0, 80);
+}
+
+async function setThreadName(thread: AnyThreadChannel, name: string): Promise<void> {
+  try { await thread.setName(name.slice(0, 100)); } catch {}
+}
+
+// ── parseLoopCommand ───────────────────────────────────────────────────
+
 export function parseLoopCommand(content: string): { intervalMs: number; prompt: string } | null {
-  // Remove the "/loop" prefix
   const rest = content.replace(/^\/loop\s*/, '').trim();
   if (!rest) return null;
 
-  // Try to parse first token as a duration
   const tokens = rest.split(/\s+/);
   const maybeDuration = parseDuration(tokens[0]);
 
@@ -75,13 +103,11 @@ export function parseLoopCommand(content: string): { intervalMs: number; prompt:
     return { intervalMs: maybeDuration, prompt };
   }
 
-  // No duration — use default interval, entire rest is the prompt
   return { intervalMs: DEFAULT_INTERVAL_MS, prompt: rest };
 }
 
-/**
- * Start a loop that runs a prompt on a recurring interval.
- */
+// ── startLoop ──────────────────────────────────────────────────────────
+
 export async function startLoop(
   intervalMs: number,
   prompt: string,
@@ -100,36 +126,47 @@ export async function startLoop(
     return;
   }
 
-  // Check for existing loop on this channel
+  // Check for existing loop
   if (activeLoops.has(channelId)) {
+    const existing = activeLoops.get(channelId)!;
+    const nextStr = existing.nextIterationAt
+      ? `Next iteration ${discordTimestamp(existing.nextIterationAt)}.`
+      : 'Currently running an iteration.';
     await message.reply(
-      'A loop is already running in this channel. Use `/stop-loop` to stop it first.'
+      `A loop is already running in this channel (iteration #${existing.iteration}, every ${formatDuration(existing.intervalMs)}). ` +
+      `${nextStr}\nUse \`/stop-loop\` or click the **Stop Loop** button to stop it first.`
     );
     return;
   }
 
-  const loopId = `loop-${channelId}-${Date.now()}`;
-
-  // Send confirmation embed
-  const embed = new EmbedBuilder()
-    .setColor(0x3498db)
-    .setTitle('🔁 Loop started')
-    .addFields(
-      { name: 'Prompt', value: prompt.slice(0, 1024) },
-      { name: 'Interval', value: formatDuration(intervalMs), inline: true },
-      { name: 'Loop ID', value: `\`${loopId.slice(0, 20)}\``, inline: true }
-    )
-    .setFooter({ text: 'Use /stop-loop to cancel' })
-    .setTimestamp();
-
-  await message.reply({ embeds: [embed] });
-
-  // Verify channel type supports sending messages
+  // Verify channel type
   const channel = message.channel;
   if (channel.type !== ChannelType.GuildText) {
     await message.reply('Loops can only be started in text channels.');
     return;
   }
+
+  const loopId = `loop-${channelId}-${Date.now()}`;
+
+  // Create a single thread for the entire loop
+  const thread = await message.startThread({
+    name: `🔁⏳ Loop: ${threadLabel(prompt)}`,
+    autoArchiveDuration: 60,
+  });
+
+  // Send start embed inside the thread
+  const startEmbed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle('🔁 Loop started')
+    .addFields(
+      { name: 'Prompt', value: prompt.slice(0, 1024) },
+      { name: 'Interval', value: formatDuration(intervalMs), inline: true },
+      { name: 'Status', value: 'Running first iteration...', inline: true }
+    )
+    .setFooter({ text: 'Use /stop-loop or click Stop Loop to cancel' })
+    .setTimestamp();
+
+  await thread.send({ embeds: [startEmbed], components: [makeStopButton(channelId)] });
 
   const loop: ActiveLoop = {
     id: loopId,
@@ -137,30 +174,69 @@ export async function startLoop(
     intervalMs,
     project,
     channelId,
+    threadId: thread.id,
     startedBy: message.author.id,
     startedAt: Date.now(),
     timer: null,
     iteration: 0,
     stopped: false,
+    nextIterationAt: null,
   };
 
   activeLoops.set(channelId, loop);
+  loopThreads.set(thread.id, channelId);
 
   // Use setTimeout chaining to prevent overlapping iterations
   const runIteration = async () => {
     if (loop.stopped || !activeLoops.has(channelId)) return;
 
     loop.iteration++;
+    loop.nextIterationAt = null;
+
+    // Update thread name to show working
+    await setThreadName(thread, `🔁⏳ Loop: ${threadLabel(prompt)}`);
 
     try {
-      const iterMsg = await channel.send(`🔁 **Loop iteration #${loop.iteration}**`);
-      await runClaude(prompt, project.workingDirectory, project.name, iterMsg, project.sessionId);
+      // Send iteration header
+      const iterEmbed = new EmbedBuilder()
+        .setColor(0x3498db)
+        .setTitle(`🔁 Iteration #${loop.iteration}`)
+        .setTimestamp();
+
+      await thread.send({ embeds: [iterEmbed] });
+
+      // Run Claude in the same thread
+      await runClaudeInThread(
+        prompt,
+        project.workingDirectory,
+        project.name,
+        thread,
+        project.sessionId
+      );
     } catch (err) {
       console.error(`[loop] Iteration ${loop.iteration} failed:`, err);
     }
 
-    // Schedule next iteration only after current one completes
+    // Schedule next iteration (only after current one finishes)
     if (!loop.stopped && activeLoops.has(channelId)) {
+      loop.nextIterationAt = Date.now() + intervalMs;
+
+      // Update thread name to show idle + next time
+      await setThreadName(thread, `🔁✅ Loop: ${threadLabel(prompt)}`);
+
+      // Send "waiting" embed with stop button
+      const waitEmbed = new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle(`🔁✅ Iteration #${loop.iteration} complete`)
+        .addFields(
+          { name: 'Next iteration', value: discordTimestamp(loop.nextIterationAt), inline: true },
+          { name: 'Interval', value: formatDuration(intervalMs), inline: true }
+        )
+        .setFooter({ text: 'Use /stop-loop or click Stop Loop to cancel' })
+        .setTimestamp();
+
+      await thread.send({ embeds: [waitEmbed], components: [makeStopButton(channelId)] }).catch(() => {});
+
       loop.timer = setTimeout(runIteration, intervalMs);
     }
   };
@@ -169,9 +245,8 @@ export async function startLoop(
   await runIteration();
 }
 
-/**
- * Stop a loop running in a channel.
- */
+// ── stopLoop (from message) ────────────────────────────────────────────
+
 export async function stopLoop(channelId: string, message: Message): Promise<void> {
   const loop = activeLoops.get(channelId);
   if (!loop) {
@@ -179,37 +254,107 @@ export async function stopLoop(channelId: string, message: Message): Promise<voi
     return;
   }
 
+  await doStopLoop(loop, channelId);
+
+  const embed = makeStoppedEmbed(loop);
+  await message.reply({ embeds: [embed] });
+}
+
+// ── stopLoopFromButton ─────────────────────────────────────────────────
+
+export async function stopLoopFromButton(channelId: string, interaction: ButtonInteraction): Promise<void> {
+  const loop = activeLoops.get(channelId);
+  if (!loop) {
+    await interaction.reply({ content: 'No loop is running in this channel.', ephemeral: true });
+    return;
+  }
+
+  await doStopLoop(loop, channelId);
+
+  const embed = makeStoppedEmbed(loop)
+    .addFields({ name: 'Stopped by', value: `<@${interaction.user.id}>`, inline: true });
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+// ── cancelLoop (silent, from /cancel) ──────────────────────────────────
+
+export function cancelLoop(channelId: string): number | null {
+  const loop = activeLoops.get(channelId);
+  if (!loop) return null;
+
+  doStopLoop(loop, channelId);
+  return loop.iteration;
+}
+
+// ── Shared stop logic ──────────────────────────────────────────────────
+
+async function doStopLoop(loop: ActiveLoop, channelId: string): Promise<void> {
   loop.stopped = true;
   if (loop.timer) clearTimeout(loop.timer);
+
+  if (loop.threadId) {
+    loopThreads.delete(loop.threadId);
+  }
+
   activeLoops.delete(channelId);
 
-  const embed = new EmbedBuilder()
+  // Rename the loop thread to show it's stopped
+  if (loop.threadId) {
+    // We need to fetch the thread to rename it
+    try {
+      // Can't rename without the thread object — but we stored the ID
+      // The caller should handle the thread rename if they have access
+    } catch {}
+  }
+}
+
+function makeStoppedEmbed(loop: ActiveLoop): EmbedBuilder {
+  return new EmbedBuilder()
     .setColor(0xe74c3c)
     .setTitle('⏹️ Loop stopped')
     .addFields(
       { name: 'Prompt', value: loop.prompt.slice(0, 1024) },
-      { name: 'Iterations', value: String(loop.iteration), inline: true },
+      { name: 'Iterations completed', value: String(loop.iteration), inline: true },
       { name: 'Ran for', value: formatDuration(Date.now() - loop.startedAt), inline: true }
     )
     .setTimestamp();
-
-  await message.reply({ embeds: [embed] });
 }
 
-/**
- * Get info about a loop running in a channel.
- */
+// ── Query helpers ──────────────────────────────────────────────────────
+
 export function getLoop(channelId: string): ActiveLoop | undefined {
   return activeLoops.get(channelId);
 }
 
 /**
- * Stop all loops (for shutdown).
+ * Look up which channel a loop thread belongs to (for /stop-loop in thread).
  */
+export function getLoopChannelForThread(threadId: string): string | undefined {
+  return loopThreads.get(threadId);
+}
+
+export function getLoopStatus(channelId: string): string | null {
+  const loop = activeLoops.get(channelId);
+  if (!loop) return null;
+
+  const nextStr = loop.nextIterationAt
+    ? `Next iteration ${discordTimestamp(loop.nextIterationAt)}`
+    : 'Currently running an iteration';
+
+  return (
+    `🔁 **Loop active** — every ${formatDuration(loop.intervalMs)}\n` +
+    `**Prompt:** ${loop.prompt.slice(0, 200)}\n` +
+    `**Iteration:** #${loop.iteration} | **Running since:** ${discordTimestamp(loop.startedAt)}\n` +
+    `**Status:** ${nextStr}`
+  );
+}
+
 export function stopAllLoops(): void {
   for (const loop of activeLoops.values()) {
     loop.stopped = true;
     if (loop.timer) clearTimeout(loop.timer);
   }
   activeLoops.clear();
+  loopThreads.clear();
 }

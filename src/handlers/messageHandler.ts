@@ -1,7 +1,7 @@
 import { Message, ChannelType } from 'discord.js';
 import { getProjectByChannel } from '../services/projectStore.js';
 import { runClaude, continueInThread } from '../services/claudeRunner.js';
-import { parseLoopCommand, startLoop, stopLoop } from '../services/loopRunner.js';
+import { parseLoopCommand, startLoop, stopLoop, getLoopStatus, getLoopChannelForThread } from '../services/loopRunner.js';
 import { isAuthorized } from '../utils/permissions.js';
 
 export async function handleMessage(message: Message): Promise<void> {
@@ -11,7 +11,7 @@ export async function handleMessage(message: Message): Promise<void> {
   const prompt = message.content.trim();
   if (!prompt) return;
 
-  // Check if this is a message in a thread (follow-up)
+  // Check if this is a message in a thread (follow-up or loop thread)
   if (message.channel.isThread()) {
     const parentId = message.channel.parentId;
     if (!parentId) return;
@@ -21,6 +21,30 @@ export async function handleMessage(message: Message): Promise<void> {
 
     const member = await message.guild.members.fetch(message.author.id).catch(() => null);
     if (!isAuthorized(member)) return;
+
+    // Handle /stop-loop inside a loop thread
+    const lower = prompt.toLowerCase();
+    if (lower.startsWith('/stop-loop') || lower.startsWith('/stoploop') || lower.startsWith('/stop loop')) {
+      const loopChannelId = getLoopChannelForThread(message.channel.id);
+      if (loopChannelId) {
+        await stopLoop(loopChannelId, message);
+        return;
+      }
+      await message.reply('No loop is associated with this thread.');
+      return;
+    }
+
+    // Handle /status inside a loop thread
+    if (lower === '/status') {
+      const loopChannelId = getLoopChannelForThread(message.channel.id);
+      if (loopChannelId) {
+        const status = getLoopStatus(loopChannelId);
+        if (status) {
+          await message.reply(status);
+          return;
+        }
+      }
+    }
 
     await continueInThread(prompt, project.workingDirectory, project.name, message);
     return;
@@ -43,6 +67,7 @@ export async function handleMessage(message: Message): Promise<void> {
     if (handled) return;
   }
 
+  // Start a new Claude session in a new thread (concurrent sessions allowed)
   await runClaude(prompt, project.workingDirectory, project.name, message, project.sessionId);
 }
 
@@ -78,6 +103,17 @@ async function handleBotCommand(
   // /stop-loop
   if (lower.startsWith('/stop-loop') || lower.startsWith('/stoploop') || lower.startsWith('/stop loop')) {
     await stopLoop(project.claudeChannelId, message);
+    return true;
+  }
+
+  // /status — show loop status
+  if (lower === '/status') {
+    const status = getLoopStatus(project.claudeChannelId);
+    if (status) {
+      await message.reply(status);
+    } else {
+      await message.reply('No loop running. Send a message to start a Claude session, or use `/loop` to start a recurring task.');
+    }
     return true;
   }
 

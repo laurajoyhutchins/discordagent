@@ -199,7 +199,17 @@ export async function startRoborevWatcher(): Promise<void> {
     console.error('[roborev stderr]', data.toString());
   });
 
+  // Reset backoff and failure count if the process stays alive for 5 seconds.
+  // Store the timer so we can cancel it if the process exits early.
+  const stabilityTimer = setTimeout(() => {
+    if (roborevProcess) {
+      backoffMs = 1000;
+      consecutiveFailures = 0;
+    }
+  }, 5000);
+
   roborevProcess.on('close', (code) => {
+    clearTimeout(stabilityTimer);
     roborevProcess = null;
     consecutiveFailures++;
 
@@ -212,11 +222,14 @@ export async function startRoborevWatcher(): Promise<void> {
 
     setTimeout(() => {
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
-      startRoborevWatcher();
+      startRoborevWatcher().catch(err => {
+        console.error('[roborev] Retry failed:', err);
+      });
     }, backoffMs);
   });
 
   roborevProcess.on('error', (err) => {
+    clearTimeout(stabilityTimer);
     console.error('[roborev] Failed to spawn:', err.message);
     roborevProcess = null;
     consecutiveFailures++;
@@ -228,17 +241,11 @@ export async function startRoborevWatcher(): Promise<void> {
 
     setTimeout(() => {
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
-      startRoborevWatcher();
+      startRoborevWatcher().catch(err2 => {
+        console.error('[roborev] Retry failed:', err2);
+      });
     }, backoffMs);
   });
-
-  // Reset backoff and failure count if the process stays alive for 5 seconds
-  setTimeout(() => {
-    if (roborevProcess) {
-      backoffMs = 1000;
-      consecutiveFailures = 0;
-    }
-  }, 5000);
 }
 
 export function stopRoborevWatcher(): void {

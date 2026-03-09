@@ -1,7 +1,7 @@
 {
   "name": "discord-claude",
   "version": "1.0.0",
-  "description": "Discord bot for orchestrating Claude Code on a remote Mac mini",
+  "description": "Discord bot for controlling Claude Code remotely from any device",
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",

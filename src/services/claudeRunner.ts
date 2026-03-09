@@ -3,6 +3,7 @@ import { Message, AnyThreadChannel } from 'discord.js';
 import { config } from '../config.js';
 import { DiscordStreamer } from './discordStreamer.js';
 import { updateProjectSession } from './projectStore.js';
+import { captureRateLimitEvent, captureSessionResult } from './usageTracker.js';
 import type { ActiveSession } from '../types.js';
 
 // Sessions keyed by THREAD ID — allows multiple concurrent threads per channel
@@ -101,6 +102,12 @@ async function processQuery(
       }
     }
 
+    // Capture rate limit events for usage tracking
+    if (message.type === 'rate_limit_event') {
+      const info = (message as any).rate_limit_info;
+      if (info) captureRateLimitEvent(info);
+    }
+
     if (message.type === 'result') {
       const r = message as any;
       resultData = {
@@ -113,6 +120,11 @@ async function processQuery(
         session.sessionId = r.session_id;
         updateProjectSession(projectName, r.session_id);
       }
+
+      // Capture full result for usage tracking
+      await captureSessionResult(projectName, r).catch(err => {
+        console.error('[usage] Failed to capture session result:', err);
+      });
     }
   }
 

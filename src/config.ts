@@ -45,4 +45,5 @@ export const config = {
   projectsBaseDir: process.env.PROJECTS_BASE_DIR ?? '',
   allowNonGit: process.env.ALLOW_NON_GIT === 'true',
   mcpServers: loadUserMcpServers(),
+  usageChannelId: process.env.USAGE_CHANNEL_ID ?? '',
 } as const;

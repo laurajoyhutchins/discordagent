@@ -42,4 +42,8 @@ export const commands = [
   new SlashCommandBuilder()
     .setName('stop-loop')
     .setDescription('Stop the running loop in this channel'),
+
+  new SlashCommandBuilder()
+    .setName('usage')
+    .setDescription('Show Claude Code rate limit usage and session stats'),
 ];

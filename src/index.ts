@@ -5,6 +5,7 @@ import { handleMessage } from './handlers/messageHandler.js';
 import { handleThreadDelete } from './handlers/threadDeleteHandler.js';
 import { startRoborevWatcher, stopRoborevWatcher } from './services/roborevWatcher.js';
 import { stopAllLoops } from './services/loopRunner.js';
+import { initUsageTracker } from './services/usageTracker.js';
 import { commands } from './commands/definitions.js';
 
 const client = new Client({
@@ -19,6 +20,9 @@ const client = new Client({
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user!.tag}`);
+
+  // Initialize usage tracker with client reference
+  initUsageTracker(client);
 
   // Register slash commands on startup
   try {

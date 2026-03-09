@@ -49,13 +49,14 @@ Discord slash cmd → interactionHandler.ts → command handler (addProject, can
 | `src/index.ts` | Entry point — Discord client, event wiring, shutdown |
 | `src/config.ts` | Loads env vars, validates required ones |
 | `src/types.ts` | `Project`, `ProjectStore`, `ActiveSession` interfaces |
-| `src/commands/definitions.ts` | SlashCommandBuilder definitions for all 6 commands |
+| `src/commands/definitions.ts` | SlashCommandBuilder definitions for all 7 commands |
 | `src/commands/addProject.ts` | Registers project, creates channels, optional roborev setup |
 | `src/commands/removeProject.ts` | Removes project, cancels session, deletes channels |
 | `src/commands/listProjects.ts` | Lists projects with status in ephemeral embed |
 | `src/commands/cancel.ts` | Cancels active Claude session via AbortController |
 | `src/commands/loop.ts` | Starts recurring prompt with interval validation |
 | `src/commands/stopLoop.ts` | Stops running loop |
+| `src/commands/usage.ts` | Shows rate limit utilization and session stats |
 | `src/commands/register.ts` | Standalone script to register slash commands |
 | `src/handlers/interactionHandler.ts` | Routes slash commands, centralized auth check |
 | `src/handlers/messageHandler.ts` | Handles messages in `#claude` channels and threads |
@@ -65,6 +66,7 @@ Discord slash cmd → interactionHandler.ts → command handler (addProject, can
 | `src/services/projectStore.ts` | CRUD for projects.json with in-memory cache |
 | `src/services/channelManager.ts` | Creates/deletes Discord categories, channels, webhooks |
 | `src/services/loopRunner.ts` | Recurring prompt execution with setTimeout chaining |
+| `src/services/usageTracker.ts` | Captures rate limit events and session stats, posts to usage channel |
 | `src/services/roborevWatcher.ts` | Spawns `roborev stream`, routes reviews to webhooks |
 | `src/utils/permissions.ts` | `isAuthorized()` — role-based auth check |
 | `src/utils/chunker.ts` | Splits text into Discord-safe 1800-char chunks |
@@ -90,6 +92,7 @@ All other tools (`Bash`, `Edit`, `Write`, `Agent`, etc.) require Allow/Deny butt
 | `ROBOREV_CLI_PATH` | No | `roborev` | Path to roborev binary |
 | `PROJECTS_BASE_DIR` | No | `""` | Restrict allowed project paths |
 | `ALLOW_NON_GIT` | No | `false` | Allow registering non-git directories |
+| `USAGE_CHANNEL_ID` | No | `""` | Channel ID for automatic usage stats posts |
 
 ## Claude Code Configuration
 

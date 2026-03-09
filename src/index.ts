@@ -4,6 +4,7 @@ import { handleInteraction } from './handlers/interactionHandler.js';
 import { handleMessage } from './handlers/messageHandler.js';
 import { handleThreadDelete } from './handlers/threadDeleteHandler.js';
 import { startRoborevWatcher, stopRoborevWatcher } from './services/roborevWatcher.js';
+import { stopAllLoops } from './services/loopRunner.js';
 import { commands } from './commands/definitions.js';
 
 const client = new Client({
@@ -49,6 +50,7 @@ client.on('error', (err) => {
 
 function shutdown() {
   console.log('Shutting down...');
+  stopAllLoops();
   stopRoborevWatcher();
   client.destroy();
   process.exit(0);

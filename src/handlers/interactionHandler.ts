@@ -4,6 +4,8 @@ import { handleAddProject } from '../commands/addProject.js';
 import { handleListProjects } from '../commands/listProjects.js';
 import { handleRemoveProject } from '../commands/removeProject.js';
 import { handleCancel } from '../commands/cancel.js';
+import { handleLoop } from '../commands/loop.js';
+import { handleStopLoop } from '../commands/stopLoop.js';
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   if (!interaction.isChatInputCommand()) return;
@@ -28,6 +30,12 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
         break;
       case 'cancel':
         await handleCancel(interaction);
+        break;
+      case 'loop':
+        await handleLoop(interaction);
+        break;
+      case 'stop-loop':
+        await handleStopLoop(interaction);
         break;
       default:
         await interaction.reply({ content: 'Unknown command.', ephemeral: true });

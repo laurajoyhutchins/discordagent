@@ -25,4 +25,18 @@ export const commands = [
   new SlashCommandBuilder()
     .setName('cancel')
     .setDescription('Cancel the active Claude session in this channel'),
+
+  new SlashCommandBuilder()
+    .setName('loop')
+    .setDescription('Run a prompt on a recurring interval')
+    .addStringOption(opt =>
+      opt.setName('prompt').setDescription('The prompt to run repeatedly').setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('interval').setDescription('Interval between runs (e.g. 5m, 1h, 30s). Default: 10m').setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('stop-loop')
+    .setDescription('Stop the running loop in this channel'),
 ];

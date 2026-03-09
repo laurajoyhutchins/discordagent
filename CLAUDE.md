@@ -33,11 +33,14 @@ Discord slash cmd → interactionHandler.ts → command handler (addProject, can
 
 ### Key Design Decisions
 
-- **Sessions map by channel ID** — each `#claude` channel has at most one active session. Threads are used for individual prompts, but the session persists across threads via `sessionId`.
+- **Sessions map by thread ID** — `activeSessions` is keyed by thread ID, allowing multiple concurrent threads per `#claude` channel. Each thread has its own independent session with its own `sessionId` and `AbortController`.
 - **Tool approval is collect-then-verify** — `awaitMessageComponent` filters must be synchronous, so we accept any button click, then verify auth with an async `members.fetch()` after. Unauthorized clicks get an ephemeral rejection and the bot waits for the next click.
-- **setTimeout chaining for loops** — `setInterval` could cause overlapping iterations if Claude runs longer than the interval. We use `setTimeout` after each iteration completes.
+- **setTimeout chaining for loops** — `setInterval` could cause overlapping iterations if Claude runs longer than the interval. We use `setTimeout` after each iteration completes. Loop embeds include a "Stop Loop" button handled via button interaction in `interactionHandler.ts`.
+- **`/cancel` is context-aware** — In a thread, cancels that thread's session. In the main channel, cancels all active sessions and any running loop.
 - **In-memory project cache** — `projectStore.ts` loads from disk once on startup, then serves from cache. Writes are async and serialized via a promise queue to prevent race conditions.
-- **Settings restricted to `['user']`** — Claude Code's `settingSources` is set to `['user']` only (not `['user', 'project', 'local']`) to prevent malicious project-level `.claude/` configs from altering behavior.
+- **Settings restricted to `['user']`** — Claude Code's `settingSources` is set to `['user']` only (not `['user', 'project', 'local']`) to prevent malicious project-level `.claude/` configs from altering behavior. Users' `~/.claude/settings.json` is respected.
+- **Roborev is optional** — Not set up by default. Auto-detected if the `roborev` CLI is available AND the project has roborev config. Can be explicitly enabled/disabled via the `roborev` option on `/add-project`.
+- **Non-git directories** — Blocked by default. Set `ALLOW_NON_GIT=true` to allow registering non-git directories. This is a safety trade-off documented in the README.
 
 ## File Guide
 
@@ -47,7 +50,7 @@ Discord slash cmd → interactionHandler.ts → command handler (addProject, can
 | `src/config.ts` | Loads env vars, validates required ones |
 | `src/types.ts` | `Project`, `ProjectStore`, `ActiveSession` interfaces |
 | `src/commands/definitions.ts` | SlashCommandBuilder definitions for all 6 commands |
-| `src/commands/addProject.ts` | Registers project, creates channels, sends webhook URL via DM |
+| `src/commands/addProject.ts` | Registers project, creates channels, optional roborev setup |
 | `src/commands/removeProject.ts` | Removes project, cancels session, deletes channels |
 | `src/commands/listProjects.ts` | Lists projects with status in ephemeral embed |
 | `src/commands/cancel.ts` | Cancels active Claude session via AbortController |
@@ -86,6 +89,18 @@ All other tools (`Bash`, `Edit`, `Write`, `Agent`, etc.) require Allow/Deny butt
 | `CLAUDE_TIMEOUT_MS` | No | `900000` | Session auto-cancel timeout (15 min) |
 | `ROBOREV_CLI_PATH` | No | `roborev` | Path to roborev binary |
 | `PROJECTS_BASE_DIR` | No | `""` | Restrict allowed project paths |
+| `ALLOW_NON_GIT` | No | `false` | Allow registering non-git directories |
+
+## Claude Code Configuration
+
+The bot uses `settingSources: ['user']` in `claudeRunner.ts`, which means:
+
+- **Loaded:** `~/.claude/settings.json` (user-level settings)
+- **Ignored:** `.claude/settings.json` (project-level), `.claude/settings.local.json` (local)
+
+This is intentional for security — project-level configs could auto-approve dangerous tools. Users' pre-approved tools (e.g., `Bash(npm test)`) in their user settings carry over to the bot.
+
+To change this behavior (e.g., to also load project settings), modify the `settingSources` array in `claudeRunner.ts`. Be aware this weakens security if the bot manages untrusted repositories.
 
 ## Security Model
 
@@ -93,6 +108,7 @@ All other tools (`Bash`, `Edit`, `Write`, `Agent`, etc.) require Allow/Deny butt
 2. **Tool approval** — The `canUseTool` callback in `claudeRunner.ts` gates destructive tools behind Discord button approval. Auth is verified on the button clicker.
 3. **Path traversal** — `addProject.ts` resolves symlinks with `realpathSync()` and validates against `PROJECTS_BASE_DIR` if configured.
 4. **No shell injection** — `roborevWatcher.ts` uses `execFile` (not `exec`/`execSync`) and `spawn` with `shell: false`.
+5. **Settings isolation** — Only user-level Claude Code settings are loaded. Project/local settings ignored to prevent trust escalation.
 
 ## Common Tasks
 
@@ -111,3 +127,20 @@ All other tools (`Bash`, `Edit`, `Write`, `Agent`, etc.) require Allow/Deny butt
 ### Adding a new auto-approved tool
 
 Add the tool name to `AUTO_APPROVED_TOOLS` in `src/services/claudeRunner.ts`. Only add read-only tools with no side effects.
+
+### Enabling project-level Claude Code settings
+
+If you trust all registered projects, you can change `settingSources` in `src/services/claudeRunner.ts`:
+
+```typescript
+// Current (secure default):
+settingSources: ['user'],
+
+// To also load project settings:
+settingSources: ['user', 'project'],
+
+// To load everything (including local overrides):
+settingSources: ['user', 'project', 'local'],
+```
+
+> **Warning:** This allows `.claude/settings.json` in any registered project to auto-approve tools, which could be exploited by malicious repos.

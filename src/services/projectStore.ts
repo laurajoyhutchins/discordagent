@@ -42,7 +42,7 @@ export function getProject(name: string): Project | undefined {
 
 export function getProjectByChannel(channelId: string): Project | undefined {
   return loadSync().projects.find(
-    p => p.claudeChannelId === channelId || p.roborevChannelId === channelId
+    p => p.claudeChannelId === channelId || (p.roborevChannelId && p.roborevChannelId === channelId)
   );
 }
 

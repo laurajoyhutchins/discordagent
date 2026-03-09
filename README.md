@@ -1,6 +1,6 @@
 # DiscordClaude
 
-A Discord bot that lets you control [Claude Code](https://docs.anthropic.com/en/docs/claude-code) remotely from any device. Each project gets its own Discord category with a `#claude` channel for prompts and a `#roborev` channel for automated code reviews.
+A Discord bot that lets you control [Claude Code](https://docs.anthropic.com/en/docs/claude-code) remotely from any device. Each project gets its own Discord category with a `#claude` channel for prompts, and optionally a `#roborev` channel for automated code reviews.
 
 ## Features
 
@@ -12,7 +12,9 @@ A Discord bot that lets you control [Claude Code](https://docs.anthropic.com/en/
 - **AskUserQuestion** — Claude can ask clarifying questions via Discord buttons or free-text
 - **Loops** — Run prompts on a recurring interval (`/loop 5m run the tests`)
 - **Multi-project** — Each project gets its own channel category, concurrent sessions supported
-- **Roborev integration** — Automated code reviews posted to `#roborev` channels
+- **Roborev integration** — Optional automated code reviews posted to `#roborev` channels
+- **Non-git support** — Optionally register directories that aren't git repos
+- **Uses your Claude Code config** — Respects your existing `~/.claude/` settings
 - **Ping on completion** — Get notified when Claude finishes a task
 - **Uses your subscription** — Runs via the Agent SDK on your Pro/Max plan, no API key needed
 
@@ -82,6 +84,7 @@ NOTIFY_USER_ID=your-discord-user-id    # Get pinged when sessions complete
 CLAUDE_TIMEOUT_MS=900000                # Session timeout in ms (default: 15 min)
 PROJECTS_BASE_DIR=                      # Restrict project paths to this directory
 ROBOREV_CLI_PATH=roborev               # Path to roborev binary (if installed)
+ALLOW_NON_GIT=false                    # Allow registering non-git directories (see below)
 ```
 
 Start the bot:
@@ -105,7 +108,9 @@ In any Discord channel, run:
 /add-project name:myapp path:/path/to/your/repo
 ```
 
-The bot will create a category with `#claude` and `#roborev` channels. Type a prompt in `#claude` to start using Claude Code remotely.
+The bot will create a category with a `#claude` channel. If [Roborev](https://roborev.dev) is detected for the project, a `#roborev` channel is also created automatically.
+
+Type a prompt in `#claude` to start using Claude Code remotely.
 
 ## Usage
 
@@ -113,7 +118,7 @@ The bot will create a category with `#claude` and `#roborev` channels. Type a pr
 
 | Command | Description |
 |---------|-------------|
-| `/add-project <name> <path>` | Register a project — creates `#claude` and `#roborev` channels |
+| `/add-project <name> <path> [roborev]` | Register a project — creates `#claude` (and optionally `#roborev`) channels |
 | `/list-projects` | Show all registered projects and their status |
 | `/remove-project <name>` | Remove a project and clean up its channels |
 | `/cancel` | Cancel the active Claude session |
@@ -139,15 +144,115 @@ You can also type these directly in `#claude` channels:
 6. **Start a new task:** Send another message in `#claude` for a fresh thread
 7. **Run recurring tasks:** `/loop 5m run the linter` to run every 5 minutes
 
-### Roborev Integration
+## Roborev Integration (Optional)
 
-If you have [Roborev](https://roborev.dev) installed, the bot automatically listens for review events and posts them to the `#roborev` channel with color-coded verdict embeds.
+[Roborev](https://roborev.dev) provides automated code reviews. Integration is **optional** and **not enabled by default**.
+
+### How it works
+
+When you register a project, the bot checks:
+1. Is the `roborev` CLI installed and accessible?
+2. Does the project directory have a roborev config (`.roborev`, `.roborev.json`, or a `post-commit` hook)?
+
+If **both** are true, the bot auto-creates a `#roborev` channel. Otherwise, only `#claude` is created.
+
+### Explicitly enabling or disabling
+
+```
+# Force enable roborev (even if not auto-detected)
+/add-project name:myapp path:/path/to/repo roborev:true
+
+# Force disable roborev (skip even if detected)
+/add-project name:myapp path:/path/to/repo roborev:false
+```
+
+### Setting up roborev for a project
 
 ```bash
 # Install the roborev git hook in each project
 cd /path/to/project
 roborev install-hook
 ```
+
+Then re-add the project (or add with `roborev:true`) to get the `#roborev` channel.
+
+## Non-Git Directories
+
+By default, the bot requires projects to be git repositories. This is a safety measure — git provides version control protection against destructive changes Claude might make.
+
+### Enabling non-git support
+
+Set `ALLOW_NON_GIT=true` in your `.env` file:
+
+```env
+ALLOW_NON_GIT=true
+```
+
+Then you can register any directory:
+
+```
+/add-project name:notes path:/Users/me/notes
+```
+
+### Risks of non-git directories
+
+> **Warning:** Without git, there is no undo. If Claude deletes or overwrites files, you cannot recover them. You also lose:
+> - `git diff` — no way to see what changed
+> - `git stash` / `git checkout` — no way to revert changes
+> - `git log` — no history of what happened
+>
+> **Recommendation:** Even for non-code projects, initialize git first: `git init && git add -A && git commit -m "initial"`. This gives you a safety net at zero cost.
+
+## Claude Code Configuration
+
+The bot runs Claude Code via the [Agent SDK](https://docs.anthropic.com/en/docs/claude-code/sdk), which respects your existing Claude Code configuration.
+
+### What configuration is used
+
+The bot uses `settingSources: ['user']`, which means it reads your **user-level** Claude Code settings from `~/.claude/settings.json`. This includes:
+
+- **Allowed/denied tools** — If you've pre-approved tools (e.g., `Bash(npm test)`) in your Claude Code settings, those approvals carry over
+- **Custom instructions** — Any user-level custom instructions are applied
+- **Model preferences** — Your configured model is used
+
+### What configuration is NOT used
+
+For security, **project-level** and **local** settings are intentionally ignored:
+
+- `.claude/settings.json` (project-level) — Not loaded
+- `.claude/settings.local.json` (local) — Not loaded
+- `.claude/commands/` (custom slash commands) — Not loaded
+
+This prevents a malicious repository from injecting tool auto-approvals or instructions that could compromise the bot's security model.
+
+### Customizing your Claude Code behavior
+
+To configure how Claude behaves when run through the bot:
+
+```bash
+# Open your user-level settings
+claude config
+
+# Or edit directly
+# macOS/Linux: ~/.claude/settings.json
+```
+
+Common settings you might want to configure:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test)",
+      "Bash(npm run lint)",
+      "Bash(git status)",
+      "Bash(git diff)"
+    ]
+  }
+}
+```
+
+> **Note:** Be thoughtful about what you pre-approve in user settings — those approvals apply to all projects the bot manages, not just one.
 
 ## Running in the Background
 
@@ -186,6 +291,7 @@ The bot runs as a headless Node.js process on the same machine as your code. No 
 - **Role-based access** — Only users with the authorized role can interact with the bot
 - **Tool approval** — Destructive tools (Bash, Edit, Write) require explicit Allow/Deny
 - **Path restrictions** — Set `PROJECTS_BASE_DIR` to limit which directories can be registered
+- **Settings isolation** — Only user-level Claude Code settings are loaded (project/local configs ignored)
 - **Session timeout** — Sessions auto-cancel after the configured timeout (default: 15 min)
 - **Private webhooks** — Webhook URLs are sent via DM, never posted in channels
 - **No secrets in code** — All credentials loaded from environment variables
@@ -212,6 +318,11 @@ The bot runs as a headless Node.js process on the same machine as your code. No 
 
 **Bot can't create channels:**
 - Make sure the bot has Administrator permission, or at minimum: Manage Channels, Manage Webhooks
+
+**Roborev not detected:**
+- Make sure `roborev` is in your PATH, or set `ROBOREV_CLI_PATH` in `.env`
+- Run `roborev install-hook` in the project directory
+- Or explicitly enable: `/add-project name:myapp path:/path roborev:true`
 
 ## Project Structure
 

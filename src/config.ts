@@ -17,4 +17,5 @@ export const config = {
   claudeTimeoutMs: parseInt(process.env.CLAUDE_TIMEOUT_MS ?? '900000', 10),
   roborevCliPath: process.env.ROBOREV_CLI_PATH ?? 'roborev',
   projectsBaseDir: process.env.PROJECTS_BASE_DIR ?? '',
+  allowNonGit: process.env.ALLOW_NON_GIT === 'true',
 } as const;

@@ -23,7 +23,7 @@ export async function handleRemoveProject(interaction: ChatInputCommandInteracti
       interaction.guild!,
       project.categoryId,
       project.claudeChannelId,
-      project.roborevChannelId
+      project.roborevChannelId // may be undefined — channelManager handles it
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

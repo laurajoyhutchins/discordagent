@@ -24,7 +24,8 @@ interface StreamEvent {
   verdict?: string;
 }
 
-function getWebhookClient(project: Project): WebhookClient {
+function getWebhookClient(project: Project): WebhookClient | null {
+  if (!project.roborevWebhookId || !project.roborevWebhookToken) return null;
   const key = project.roborevWebhookId;
   if (!webhookClients.has(key)) {
     webhookClients.set(
@@ -37,7 +38,8 @@ function getWebhookClient(project: Project): WebhookClient {
 
 function matchProject(repoPath: string): Project | undefined {
   const projects = getAllProjects();
-  return projects.find(p => repoPath.startsWith(p.workingDirectory));
+  // Only match projects that have roborev enabled
+  return projects.find(p => p.roborevWebhookId && repoPath.startsWith(p.workingDirectory));
 }
 
 async function getReviewBody(jobId: number): Promise<string> {
@@ -67,6 +69,7 @@ async function handleEvent(event: StreamEvent): Promise<void> {
     if (!project) return;
 
     const webhook = getWebhookClient(project);
+    if (!webhook) return;
     const embed = new EmbedBuilder()
       .setColor(0x95a5a6)
       .setTitle(`🔍 Reviewing ${event.sha.slice(0, 8)}`)
@@ -86,6 +89,7 @@ async function handleEvent(event: StreamEvent): Promise<void> {
     if (!project) return;
 
     const webhook = getWebhookClient(project);
+    if (!webhook) return;
     const verdictInfo = VERDICT_CONFIG[event.verdict ?? ''] ?? { color: 0x95a5a6, label: 'Unknown', emoji: '❓' };
 
     // Fetch full review body
@@ -121,7 +125,20 @@ async function handleEvent(event: StreamEvent): Promise<void> {
   console.log(`[roborev] Unhandled event type: ${event.type}`);
 }
 
+/**
+ * Check if any registered projects have roborev enabled
+ */
+export function anyProjectHasRoborev(): boolean {
+  return getAllProjects().some(p => !!p.roborevWebhookId);
+}
+
 export function startRoborevWatcher(): void {
+  // Only start if at least one project has roborev enabled
+  if (!anyProjectHasRoborev()) {
+    console.log('[roborev] No projects with roborev enabled, skipping watcher.');
+    return;
+  }
+
   if (roborevProcess) {
     roborevProcess.removeAllListeners('close');
     roborevProcess.kill('SIGTERM');

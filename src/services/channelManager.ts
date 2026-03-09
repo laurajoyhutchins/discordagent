@@ -8,14 +8,15 @@ import {
 interface ChannelSetup {
   categoryId: string;
   claudeChannelId: string;
-  roborevChannelId: string;
-  roborevWebhookId: string;
-  roborevWebhookToken: string;
+  roborevChannelId?: string;
+  roborevWebhookId?: string;
+  roborevWebhookToken?: string;
 }
 
 export async function createProjectChannels(
   guild: Guild,
-  projectName: string
+  projectName: string,
+  includeRoborev: boolean = false
 ): Promise<ChannelSetup> {
   const botMember = guild.members.me!;
 
@@ -50,32 +51,37 @@ export async function createProjectChannels(
     topic: `Claude Code prompts for ${projectName}`,
   });
 
-  const roborevChannel = await guild.channels.create({
-    name: 'roborev',
-    type: ChannelType.GuildText,
-    parent: category.id,
-    topic: `Roborev code reviews for ${projectName}`,
-  });
-
-  const webhook = await roborevChannel.createWebhook({
-    name: `roborev-${projectName}`,
-    reason: `Roborev webhook for project ${projectName}`,
-  });
-
-  return {
+  const result: ChannelSetup = {
     categoryId: category.id,
     claudeChannelId: claudeChannel.id,
-    roborevChannelId: roborevChannel.id,
-    roborevWebhookId: webhook.id,
-    roborevWebhookToken: webhook.token!,
   };
+
+  if (includeRoborev) {
+    const roborevChannel = await guild.channels.create({
+      name: 'roborev',
+      type: ChannelType.GuildText,
+      parent: category.id,
+      topic: `Roborev code reviews for ${projectName}`,
+    });
+
+    const webhook = await roborevChannel.createWebhook({
+      name: `roborev-${projectName}`,
+      reason: `Roborev webhook for project ${projectName}`,
+    });
+
+    result.roborevChannelId = roborevChannel.id;
+    result.roborevWebhookId = webhook.id;
+    result.roborevWebhookToken = webhook.token!;
+  }
+
+  return result;
 }
 
 export async function deleteProjectChannels(
   guild: Guild,
   categoryId: string,
   claudeChannelId: string,
-  roborevChannelId: string
+  roborevChannelId?: string
 ): Promise<void> {
   const deleteChannel = async (id: string) => {
     try {
@@ -87,6 +93,8 @@ export async function deleteProjectChannels(
   };
 
   await deleteChannel(claudeChannelId);
-  await deleteChannel(roborevChannelId);
+  if (roborevChannelId) {
+    await deleteChannel(roborevChannelId);
+  }
   await deleteChannel(categoryId);
 }

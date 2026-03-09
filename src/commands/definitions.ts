@@ -9,6 +9,9 @@ export const commands = [
     )
     .addStringOption(opt =>
       opt.setName('path').setDescription('Absolute path to the project directory').setRequired(true)
+    )
+    .addBooleanOption(opt =>
+      opt.setName('roborev').setDescription('Enable Roborev code review integration (auto-detected if omitted)').setRequired(false)
     ),
 
   new SlashCommandBuilder()

@@ -1,13 +1,41 @@
 import { ChatInputCommandInteraction } from 'discord.js';
 import { existsSync, statSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { addProject, getProject } from '../services/projectStore.js';
 import { createProjectChannels } from '../services/channelManager.js';
 import { config } from '../config.js';
 
+/**
+ * Check if roborev is installed and available on this machine
+ */
+function isRoborevAvailable(): boolean {
+  try {
+    execFileSync(config.roborevCliPath, ['--version'], {
+      timeout: 5000,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if a project directory has roborev set up (has a .roborev config or git hook)
+ */
+function hasRoborevSetup(projectPath: string): boolean {
+  return (
+    existsSync(join(projectPath, '.roborev')) ||
+    existsSync(join(projectPath, '.roborev.json')) ||
+    existsSync(join(projectPath, '.git', 'hooks', 'post-commit'))
+  );
+}
+
 export async function handleAddProject(interaction: ChatInputCommandInteraction): Promise<void> {
   const name = interaction.options.getString('name', true).toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const path = interaction.options.getString('path', true);
+  const roborevOption = interaction.options.getBoolean('roborev'); // null if not provided
 
   // Validate path exists and is a directory
   if (!existsSync(path) || !statSync(path).isDirectory()) {
@@ -40,9 +68,13 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     }
   }
 
-  // Check if it's a git repo
-  if (!existsSync(join(resolvedPath, '.git'))) {
-    await interaction.reply({ content: `Path \`${path}\` is not a git repository (no .git directory).`, ephemeral: true });
+  // Check if it's a git repo (unless non-git is allowed)
+  const isGitRepo = existsSync(join(resolvedPath, '.git'));
+  if (!isGitRepo && !config.allowNonGit) {
+    await interaction.reply({
+      content: `Path is not a git repository (no .git directory).\n\nTo allow non-git directories, set \`ALLOW_NON_GIT=true\` in your \`.env\` file. See the README for details on the risks.`,
+      ephemeral: true,
+    });
     return;
   }
 
@@ -54,9 +86,20 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
 
   await interaction.deferReply();
 
+  // Determine whether to set up roborev:
+  // - Explicit roborev:true → enable
+  // - Explicit roborev:false → skip
+  // - Not provided → auto-detect (roborev CLI available AND project has roborev config)
+  let includeRoborev: boolean;
+  if (roborevOption !== null) {
+    includeRoborev = roborevOption;
+  } else {
+    includeRoborev = isGitRepo && isRoborevAvailable() && hasRoborevSetup(resolvedPath);
+  }
+
   try {
     const guild = interaction.guild!;
-    const channels = await createProjectChannels(guild, name);
+    const channels = await createProjectChannels(guild, name, includeRoborev);
 
     addProject({
       name,
@@ -64,30 +107,41 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
       ...channels,
     });
 
-    await interaction.editReply(
-      `Project **${name}** created!\n` +
-      `- <#${channels.claudeChannelId}> — send Claude prompts here\n` +
-      `- <#${channels.roborevChannelId}> — code reviews appear here`
-    );
+    let replyMsg = `Project **${name}** created!\n` +
+      `- <#${channels.claudeChannelId}> — send Claude prompts here`;
 
-    // Send webhook URL privately via DM to avoid leaking the token in a channel
-    const webhookUrl = `https://discord.com/api/webhooks/${channels.roborevWebhookId}/${channels.roborevWebhookToken}`;
-    try {
-      const dm = await interaction.user.createDM();
-      await dm.send(
-        `**Roborev webhook URL for ${name}:**\n\`\`\`\n${webhookUrl}\n\`\`\`\n` +
-        `Add this to your roborev config to route reviews to Discord.`
-      );
-      await interaction.followUp({ content: 'Webhook URL sent to your DMs.', ephemeral: true });
-    } catch {
-      // If DMs are disabled, fall back to ephemeral follow-up
+    if (!isGitRepo) {
+      replyMsg += `\n\n⚠️ **Warning:** This is not a git repository. Claude Code will work, but you won't have version control protection against destructive changes. Consider initializing git: \`git init\``;
+    }
+
+    if (channels.roborevChannelId) {
+      replyMsg += `\n- <#${channels.roborevChannelId}> — code reviews appear here`;
+    } else {
+      replyMsg += `\n\n💡 Roborev not enabled. To add it later, remove this project and re-add with \`/add-project name:${name} path:${resolvedPath} roborev:true\``;
+    }
+
+    await interaction.editReply(replyMsg);
+
+    // Send webhook URL privately via DM (only if roborev was set up)
+    if (channels.roborevWebhookId && channels.roborevWebhookToken) {
+      const webhookUrl = `https://discord.com/api/webhooks/${channels.roborevWebhookId}/${channels.roborevWebhookToken}`;
       try {
-        await interaction.followUp({
-          content: `**Roborev webhook URL:**\n\`\`\`\n${webhookUrl}\n\`\`\`\nAdd this to your roborev config to route reviews to Discord.`,
-          ephemeral: true,
-        });
-      } catch (followUpErr) {
-        console.error(`[addProject] Failed to send webhook URL to user ${interaction.user.id}:`, followUpErr);
+        const dm = await interaction.user.createDM();
+        await dm.send(
+          `**Roborev webhook URL for ${name}:**\n\`\`\`\n${webhookUrl}\n\`\`\`\n` +
+          `Add this to your roborev config to route reviews to Discord.`
+        );
+        await interaction.followUp({ content: 'Webhook URL sent to your DMs.', ephemeral: true });
+      } catch {
+        // If DMs are disabled, fall back to ephemeral follow-up
+        try {
+          await interaction.followUp({
+            content: `**Roborev webhook URL:**\n\`\`\`\n${webhookUrl}\n\`\`\`\nAdd this to your roborev config to route reviews to Discord.`,
+            ephemeral: true,
+          });
+        } catch (followUpErr) {
+          console.error(`[addProject] Failed to send webhook URL to user ${interaction.user.id}:`, followUpErr);
+        }
       }
     }
   } catch (err) {

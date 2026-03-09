@@ -3,9 +3,9 @@ export interface Project {
   workingDirectory: string;
   categoryId: string;
   claudeChannelId: string;
-  roborevChannelId: string;
-  roborevWebhookId: string;
-  roborevWebhookToken: string;
+  roborevChannelId?: string;
+  roborevWebhookId?: string;
+  roborevWebhookToken?: string;
   sessionId?: string; // Persisted session ID for resume
 }
 

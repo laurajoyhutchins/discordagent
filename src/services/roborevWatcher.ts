@@ -9,7 +9,9 @@ import type { Project } from '../types.js';
 
 let roborevProcess: ChildProcess | null = null;
 let backoffMs = 1000;
+let consecutiveFailures = 0;
 const MAX_BACKOFF = 60000;
+const MAX_FAILURES = 10; // Stop retrying after this many consecutive failures
 
 const webhookClients = new Map<string, WebhookClient>();
 
@@ -38,7 +40,6 @@ function getWebhookClient(project: Project): WebhookClient | null {
 
 function matchProject(repoPath: string): Project | undefined {
   const projects = getAllProjects();
-  // Only match projects that have roborev enabled
   return projects.find(p => p.roborevWebhookId && repoPath.startsWith(p.workingDirectory));
 }
 
@@ -52,6 +53,21 @@ async function getReviewBody(jobId: number): Promise<string> {
     return stdout.trim();
   } catch {
     return '';
+  }
+}
+
+/**
+ * Check if the roborev CLI is actually available on the system.
+ */
+async function isRoborevCliAvailable(): Promise<boolean> {
+  try {
+    await execFileAsync(config.roborevCliPath, ['--version'], {
+      timeout: 5000,
+      encoding: 'utf-8',
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -92,7 +108,6 @@ async function handleEvent(event: StreamEvent): Promise<void> {
     if (!webhook) return;
     const verdictInfo = VERDICT_CONFIG[event.verdict ?? ''] ?? { color: 0x95a5a6, label: 'Unknown', emoji: '❓' };
 
-    // Fetch full review body
     const reviewBody = await getReviewBody(event.job_id);
 
     const embed = new EmbedBuilder()
@@ -101,7 +116,6 @@ async function handleEvent(event: StreamEvent): Promise<void> {
       .setTimestamp(new Date(event.ts));
 
     if (reviewBody) {
-      // Truncate to Discord embed limit (4096 chars)
       const body = reviewBody.length > 4000 ? reviewBody.slice(0, 4000) + '\n...(truncated)' : reviewBody;
       embed.setDescription(body);
     } else {
@@ -126,16 +140,23 @@ async function handleEvent(event: StreamEvent): Promise<void> {
 }
 
 /**
- * Check if any registered projects have roborev enabled
+ * Check if any registered projects have roborev enabled.
  */
 export function anyProjectHasRoborev(): boolean {
   return getAllProjects().some(p => !!p.roborevWebhookId);
 }
 
-export function startRoborevWatcher(): void {
+export async function startRoborevWatcher(): Promise<void> {
   // Only start if at least one project has roborev enabled
   if (!anyProjectHasRoborev()) {
     console.log('[roborev] No projects with roborev enabled, skipping watcher.');
+    return;
+  }
+
+  // Check if the CLI is actually available before spawning
+  const cliAvailable = await isRoborevCliAvailable();
+  if (!cliAvailable) {
+    console.warn(`[roborev] CLI not found at "${config.roborevCliPath}". Watcher disabled. Install roborev or set ROBOREV_CLI_PATH.`);
     return;
   }
 
@@ -179,8 +200,15 @@ export function startRoborevWatcher(): void {
   });
 
   roborevProcess.on('close', (code) => {
-    console.log(`[roborev] Process exited with code ${code}. Restarting in ${backoffMs}ms...`);
     roborevProcess = null;
+    consecutiveFailures++;
+
+    if (consecutiveFailures >= MAX_FAILURES) {
+      console.error(`[roborev] Process failed ${consecutiveFailures} times. Giving up. Restart the bot to retry.`);
+      return;
+    }
+
+    console.log(`[roborev] Process exited with code ${code}. Restarting in ${backoffMs}ms... (attempt ${consecutiveFailures}/${MAX_FAILURES})`);
 
     setTimeout(() => {
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
@@ -191,6 +219,12 @@ export function startRoborevWatcher(): void {
   roborevProcess.on('error', (err) => {
     console.error('[roborev] Failed to spawn:', err.message);
     roborevProcess = null;
+    consecutiveFailures++;
+
+    if (consecutiveFailures >= MAX_FAILURES) {
+      console.error(`[roborev] Spawn failed ${consecutiveFailures} times. Giving up. Restart the bot to retry.`);
+      return;
+    }
 
     setTimeout(() => {
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
@@ -198,8 +232,12 @@ export function startRoborevWatcher(): void {
     }, backoffMs);
   });
 
+  // Reset backoff and failure count if the process stays alive for 5 seconds
   setTimeout(() => {
-    if (roborevProcess) backoffMs = 1000;
+    if (roborevProcess) {
+      backoffMs = 1000;
+      consecutiveFailures = 0;
+    }
   }, 5000);
 }
 

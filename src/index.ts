@@ -32,12 +32,10 @@ client.once('ready', async () => {
     console.error('Failed to register slash commands:', err);
   }
 
-  // Start roborev watcher
-  try {
-    startRoborevWatcher();
-  } catch (err) {
+  // Start roborev watcher (async — checks CLI availability first)
+  startRoborevWatcher().catch(err => {
     console.error('Failed to start roborev watcher:', err);
-  }
+  });
 });
 
 client.on('interactionCreate', handleInteraction);

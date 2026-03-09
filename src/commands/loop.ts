@@ -6,7 +6,8 @@ import { isAuthorized } from '../utils/permissions.js';
 const DEFAULT_INTERVAL_MS = 10 * 60_000;
 
 export async function handleLoop(interaction: ChatInputCommandInteraction): Promise<void> {
-  const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
+  const member = await interaction.guild?.members.fetch(interaction.user.id)
+    .catch((e) => { console.warn('[loop] member fetch failed:', e); return null; }) ?? null;
   if (!isAuthorized(member)) {
     await interaction.reply({ content: 'You are not authorized.', ephemeral: true });
     return;

@@ -4,7 +4,8 @@ import { stopLoop } from '../services/loopRunner.js';
 import { isAuthorized } from '../utils/permissions.js';
 
 export async function handleStopLoop(interaction: ChatInputCommandInteraction): Promise<void> {
-  const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
+  const member = await interaction.guild?.members.fetch(interaction.user.id)
+    .catch((e) => { console.warn('[stop-loop] member fetch failed:', e); return null; }) ?? null;
   if (!isAuthorized(member)) {
     await interaction.reply({ content: 'You are not authorized.', ephemeral: true });
     return;

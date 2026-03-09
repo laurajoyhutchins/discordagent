@@ -61,7 +61,7 @@ async function getReviewBody(jobId: number): Promise<string> {
  */
 async function isRoborevCliAvailable(): Promise<boolean> {
   try {
-    await execFileAsync(config.roborevCliPath, ['--version'], {
+    await execFileAsync(config.roborevCliPath, ['version'], {
       timeout: 5000,
       encoding: 'utf-8',
     });

@@ -9,10 +9,24 @@ import type { ActiveSession } from '../types.js';
 // Sessions keyed by THREAD ID — allows multiple concurrent threads per channel
 const activeSessions = new Map<string, ActiveSession>();
 
+// Build a clean env object once at startup: exclude CLAUDECODE and any values
+// with unpaired Unicode surrogates (which break JSON serialization).
+const HAS_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const cleanEnv: Record<string, string> = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([k, v]) => k !== 'CLAUDECODE' && v != null && !HAS_LONE_SURROGATE.test(v)
+  ) as [string, string][]
+);
+
 // Tools that are auto-approved (read-only, no side effects)
 const AUTO_APPROVED_TOOLS = [
   'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
   'TodoRead', 'TodoWrite',
+];
+
+// Tool name prefixes that are auto-approved (e.g. MCP server tools)
+const AUTO_APPROVED_PREFIXES = [
+  'mcp__playwright__',
 ];
 
 // ── Thread naming helpers ──────────────────────────────────────────────
@@ -58,7 +72,7 @@ function makeCanUseTool(streamer: DiscordStreamer) {
       };
     }
 
-    if (AUTO_APPROVED_TOOLS.includes(toolName)) {
+    if (AUTO_APPROVED_TOOLS.includes(toolName) || AUTO_APPROVED_PREFIXES.some(p => toolName.startsWith(p))) {
       await streamer.sendToolUseEmbed(toolName, input);
       return { behavior: 'allow' as const, updatedInput: input };
     }
@@ -105,11 +119,14 @@ async function processQuery(
     // Capture rate limit events for usage tracking
     if (message.type === 'rate_limit_event') {
       const info = (message as any).rate_limit_info;
+      console.log('[usage] rate_limit_event received:', JSON.stringify(info));
       if (info) captureRateLimitEvent(info);
     }
 
     if (message.type === 'result') {
       const r = message as any;
+      console.log('[usage] result keys:', Object.keys(r).join(', '));
+      if (r.rate_limit_info) console.log('[usage] result rate_limit_info:', JSON.stringify(r.rate_limit_info));
       resultData = {
         exitType: r.subtype ?? 'unknown',
         cost: r.total_cost_usd,
@@ -187,7 +204,7 @@ export async function runClaude(
         permissionMode: 'default',
         settingSources: ['user'],
         ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
-        env: { ...process.env, CLAUDECODE: undefined },
+        env: cleanEnv,
         ...(resumeId ? { resume: resumeId } : {}),
         canUseTool: makeCanUseTool(streamer),
       },
@@ -267,7 +284,7 @@ export async function runClaudeInThread(
         permissionMode: 'default',
         settingSources: ['user'],
         ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
-        env: { ...process.env, CLAUDECODE: undefined },
+        env: cleanEnv,
         ...(resumeId ? { resume: resumeId } : {}),
         canUseTool: makeCanUseTool(streamer),
       },
@@ -352,7 +369,7 @@ export async function continueInThread(
         permissionMode: 'default',
         settingSources: ['user'],
         ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
-        env: { ...process.env, CLAUDECODE: undefined },
+        env: cleanEnv,
         resume: resumeId,
         canUseTool: makeCanUseTool(streamer),
       },

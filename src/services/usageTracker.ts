@@ -131,28 +131,34 @@ export function buildUsageEmbed(): EmbedBuilder {
   }
 
   for (const [type, snap] of rateLimits) {
-    const pct = snap.utilization != null ? (snap.utilization * 100).toFixed(1) : '?';
-    const bar = snap.utilization != null ? progressBar(snap.utilization) : '░░░░░░░░░░';
     const statusIcon = snap.status === 'rejected' ? '🛑'
       : snap.status === 'allowed_warning' ? '⚠️'
       : '✅';
+    const statusText = snap.status === 'rejected' ? 'Rate Limited'
+      : snap.status === 'allowed_warning' ? 'Approaching Limit'
+      : 'OK';
 
-    let resetStr = '';
+    const lines: string[] = [`**Status:** ${statusText}`];
+
+    if (snap.utilization != null) {
+      const pct = (snap.utilization * 100).toFixed(1);
+      const bar = progressBar(snap.utilization);
+      lines.push(`${bar} **${pct}%**`);
+    }
+
     if (snap.resetsAt) {
-      const resetDate = new Date(snap.resetsAt * 1000);
-      const now = Date.now();
-      const diffMs = resetDate.getTime() - now;
+      const diffMs = snap.resetsAt * 1000 - Date.now();
       if (diffMs > 0) {
-        resetStr = `\nResets in ${formatDuration(diffMs)}`;
+        lines.push(`**Resets in:** ${formatDuration(diffMs)}`);
       } else {
-        resetStr = '\nReset time has passed';
+        lines.push('**Reset:** now');
       }
     }
 
     const label = formatLimitType(type);
     embed.addFields({
       name: `${statusIcon} ${label}`,
-      value: `${bar} **${pct}%**${resetStr}`,
+      value: lines.join('\n'),
       inline: true,
     });
   }
@@ -229,19 +235,22 @@ async function postUsageUpdate(session: SessionUsage): Promise<void> {
 
   // Include latest rate limit info if available
   for (const [type, snap] of rateLimits) {
+    const statusIcon = snap.status === 'rejected' ? '🛑'
+      : snap.status === 'allowed_warning' ? '⚠️'
+      : '✅';
+    const statusText = snap.status === 'rejected' ? 'Limited'
+      : snap.status === 'allowed_warning' ? 'Warning'
+      : 'OK';
+    const label = formatLimitType(type);
+    let value = `${statusIcon} ${statusText}`;
     if (snap.utilization != null) {
-      const pct = (snap.utilization * 100).toFixed(1);
-      const bar = progressBar(snap.utilization);
-      const statusIcon = snap.status === 'rejected' ? '🛑'
-        : snap.status === 'allowed_warning' ? '⚠️'
-        : '✅';
-      const label = formatLimitType(type);
-      embed.addFields({
-        name: `${statusIcon} ${label}`,
-        value: `${bar} **${pct}%**`,
-        inline: true,
-      });
+      value += ` (${(snap.utilization * 100).toFixed(1)}%)`;
     }
+    if (snap.resetsAt) {
+      const diffMs = snap.resetsAt * 1000 - Date.now();
+      if (diffMs > 0) value += ` · resets ${formatDuration(diffMs)}`;
+    }
+    embed.addFields({ name: label, value, inline: true });
   }
 
   await textChannel.send({ embeds: [embed] });

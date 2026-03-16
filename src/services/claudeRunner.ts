@@ -9,12 +9,22 @@ import type { ActiveSession } from '../types.js';
 // Sessions keyed by THREAD ID — allows multiple concurrent threads per channel
 const activeSessions = new Map<string, ActiveSession>();
 
+// Regex matching lone (unpaired) Unicode surrogates — these break JSON serialization.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/**
+ * Strip lone surrogates from a string to prevent JSON serialization errors.
+ * Discord messages and file contents can contain broken Unicode that the API rejects.
+ */
+function sanitize(text: string): string {
+  return text.replace(LONE_SURROGATE, '\uFFFD');
+}
+
 // Build a clean env object once at startup: exclude CLAUDECODE and any values
-// with unpaired Unicode surrogates (which break JSON serialization).
-const HAS_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+// with unpaired Unicode surrogates.
 const cleanEnv: Record<string, string> = Object.fromEntries(
   Object.entries(process.env).filter(
-    ([k, v]) => k !== 'CLAUDECODE' && v != null && !HAS_LONE_SURROGATE.test(v)
+    ([k, v]) => k !== 'CLAUDECODE' && v != null && !LONE_SURROGATE.test(v)
   ) as [string, string][]
 );
 
@@ -90,6 +100,12 @@ function makeCanUseTool(streamer: DiscordStreamer) {
 
 // ── Core query processor (shared) ──────────────────────────────────────
 
+/** Check if an error is a JSON/surrogate encoding issue from corrupted session history. */
+function isJsonEncodingError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('not valid JSON') || msg.includes('surrogate') || msg.includes('exit');
+}
+
 async function processQuery(
   q: AsyncIterable<any>,
   streamer: DiscordStreamer,
@@ -119,14 +135,11 @@ async function processQuery(
     // Capture rate limit events for usage tracking
     if (message.type === 'rate_limit_event') {
       const info = (message as any).rate_limit_info;
-      console.log('[usage] rate_limit_event received:', JSON.stringify(info));
       if (info) captureRateLimitEvent(info);
     }
 
     if (message.type === 'result') {
       const r = message as any;
-      console.log('[usage] result keys:', Object.keys(r).join(', '));
-      if (r.rate_limit_info) console.log('[usage] result rate_limit_info:', JSON.stringify(r.rate_limit_info));
       resultData = {
         exitType: r.subtype ?? 'unknown',
         cost: r.total_cost_usd,
@@ -195,9 +208,11 @@ export async function runClaude(
     if (session.busy) abortController.abort();
   }, config.claudeTimeoutMs);
 
+  const safePrompt = sanitize(prompt);
+
   try {
     const q = query({
-      prompt,
+      prompt: safePrompt,
       options: {
         cwd: projectDir,
         abortController,
@@ -211,11 +226,14 @@ export async function runClaude(
     });
 
     const result = await processQuery(q, streamer, session, projectName, originalMessage);
-    await setThreadName(thread, `✅ ${threadLabel(prompt)}`);
 
-    if (result?.exitType !== 'success') {
-      await setThreadName(thread, `❌ ${threadLabel(prompt)}`);
+    // If session ended with an error and we were resuming, it might be corrupted — clear the session
+    if (result && result.exitType !== 'success' && result.exitType !== 'cancelled' && resumeId) {
+      console.warn(`[claudeRunner] Session ended with ${result.exitType} while resuming ${resumeId}, clearing stored session`);
+      updateProjectSession(projectName, '');
     }
+
+    await setThreadName(thread, result?.exitType === 'success' ? `✅ ${threadLabel(prompt)}` : `❌ ${threadLabel(prompt)}`);
   } catch (err) {
     session.busy = false;
 
@@ -224,6 +242,39 @@ export async function runClaude(
       await streamer.finish({ exitType: 'cancelled' });
       await setThreadName(thread, `🛑 ${threadLabel(prompt)}`);
       try { await originalMessage.react('🛑'); } catch {}
+    } else if (resumeId && isJsonEncodingError(err)) {
+      // Corrupted session history — clear it and retry without resume
+      console.warn(`[claudeRunner] Session ${resumeId} has encoding errors, clearing and retrying fresh`);
+      session.sessionId = null;
+      updateProjectSession(projectName, '');
+      streamer.append('\n⚠️ Session history corrupted — starting fresh session\n');
+
+      try {
+        const freshAbort = new AbortController();
+        session.abortController = freshAbort;
+        session.busy = true;
+        const freshQ = query({
+          prompt: safePrompt,
+          options: {
+            cwd: projectDir,
+            abortController: freshAbort,
+            permissionMode: 'default',
+            settingSources: ['user'],
+            ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
+            env: cleanEnv,
+            canUseTool: makeCanUseTool(streamer),
+          },
+        });
+        const freshResult = await processQuery(freshQ, streamer, session, projectName, originalMessage);
+        await setThreadName(thread, freshResult?.exitType === 'success' ? `✅ ${threadLabel(prompt)}` : `❌ ${threadLabel(prompt)}`);
+      } catch (retryErr) {
+        session.busy = false;
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        streamer.append(`\n[error] Retry also failed: ${retryMsg}\n`);
+        await streamer.finish({ exitType: 'error' });
+        await setThreadName(thread, `❌ ${threadLabel(prompt)}`);
+        try { await originalMessage.react('❌'); } catch {}
+      }
     } else {
       streamer.append(`\n[error] ${msg}\n`);
       await streamer.finish({ exitType: 'error' });
@@ -275,9 +326,11 @@ export async function runClaudeInThread(
     if (session.busy) abortController.abort();
   }, config.claudeTimeoutMs);
 
+  const safePrompt = sanitize(prompt);
+
   try {
     const q = query({
-      prompt,
+      prompt: safePrompt,
       options: {
         cwd: projectDir,
         abortController,
@@ -360,9 +413,11 @@ export async function continueInThread(
     if (activeSession.busy) abortController.abort();
   }, config.claudeTimeoutMs);
 
+  const safePrompt = sanitize(prompt);
+
   try {
     const q = query({
-      prompt,
+      prompt: safePrompt,
       options: {
         cwd: projectDir,
         abortController,

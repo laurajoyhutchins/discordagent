@@ -67,8 +67,9 @@ export async function handleMessage(message: Message): Promise<void> {
     if (handled) return;
   }
 
-  // Start a new Claude session in a new thread (concurrent sessions allowed)
-  await runClaude(prompt, project.workingDirectory, project.name, message, project.sessionId);
+  // Start a fresh Claude session in a new thread — no session resume.
+  // Only thread follow-ups (continueInThread) resume existing sessions.
+  await runClaude(prompt, project.workingDirectory, project.name, message);
 }
 
 /**

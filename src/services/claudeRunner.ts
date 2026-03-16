@@ -11,6 +11,8 @@ const activeSessions = new Map<string, ActiveSession>();
 
 // Regex matching lone (unpaired) Unicode surrogates — these break JSON serialization.
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+// Non-global version for .test() calls (global regexes have stale lastIndex issues)
+const HAS_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 /**
  * Strip lone surrogates from a string to prevent JSON serialization errors.
@@ -24,7 +26,7 @@ function sanitize(text: string): string {
 // with unpaired Unicode surrogates.
 const cleanEnv: Record<string, string> = Object.fromEntries(
   Object.entries(process.env).filter(
-    ([k, v]) => k !== 'CLAUDECODE' && v != null && !LONE_SURROGATE.test(v)
+    ([k, v]) => k !== 'CLAUDECODE' && v != null && !HAS_LONE_SURROGATE.test(v)
   ) as [string, string][]
 );
 
@@ -34,7 +36,9 @@ const AUTO_APPROVED_TOOLS = [
   'TodoRead', 'TodoWrite',
 ];
 
-// Tool name prefixes that are auto-approved (e.g. MCP server tools)
+// Tool name prefixes that are auto-approved.
+// Note: Playwright tools are NOT read-only (they click, navigate, fill forms, etc.)
+// but are intentionally auto-approved to allow the bot to browse autonomously.
 const AUTO_APPROVED_PREFIXES = [
   'mcp__playwright__',
 ];
@@ -103,7 +107,7 @@ function makeCanUseTool(streamer: DiscordStreamer) {
 /** Check if an error is a JSON/surrogate encoding issue from corrupted session history. */
 function isJsonEncodingError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('not valid JSON') || msg.includes('surrogate') || msg.includes('exit');
+  return msg.includes('not valid JSON') || msg.includes('lone surrogate') || msg.includes('unpaired surrogate');
 }
 
 async function processQuery(
@@ -249,8 +253,14 @@ export async function runClaude(
       updateProjectSession(projectName, '');
       streamer.append('\n⚠️ Session history corrupted — starting fresh session\n');
 
+      // Clear the original timeout and set a new one for the retry
+      clearTimeout(timeout);
+      const freshAbort = new AbortController();
+      const freshTimeout = setTimeout(() => {
+        if (session.busy) freshAbort.abort();
+      }, config.claudeTimeoutMs);
+
       try {
-        const freshAbort = new AbortController();
         session.abortController = freshAbort;
         session.busy = true;
         const freshQ = query({
@@ -274,6 +284,8 @@ export async function runClaude(
         await streamer.finish({ exitType: 'error' });
         await setThreadName(thread, `❌ ${threadLabel(prompt)}`);
         try { await originalMessage.react('❌'); } catch {}
+      } finally {
+        clearTimeout(freshTimeout);
       }
     } else {
       streamer.append(`\n[error] ${msg}\n`);

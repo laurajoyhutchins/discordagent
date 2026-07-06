@@ -11,12 +11,15 @@ A Discord bot that lets you control [Claude Code](https://docs.anthropic.com/en/
 - **Tool approval** — Allow/Deny buttons for destructive tools (Bash, Edit, Write)
 - **AskUserQuestion** — Claude can ask clarifying questions via Discord buttons or free-text
 - **Loops** — Run prompts on a recurring interval (`/loop 5m run the tests`)
+- **Model picker** — Choose Sonnet/Opus/Haiku per project with `/model`, or per prompt with a `/model <name>` prefix
+- **Usage tracking** — `/usage` shows rate-limit utilization; per-session stats can post to a `#usage` channel
 - **Multi-project** — Each project gets its own channel category, concurrent sessions supported
 - **Roborev integration** — Optional automated code reviews posted to `#roborev` channels
 - **Non-git support** — Optionally register directories that aren't git repos
 - **Uses your Claude Code config** — Respects your existing `~/.claude/` settings
 - **Ping on completion** — Get notified when Claude finishes a task
 - **Uses your subscription** — Runs via the Agent SDK on your Pro/Max plan, no API key needed
+- **Self-healing connection** — Single-instance lock, gateway health monitoring, and automatic reconnect
 
 ## Prerequisites
 
@@ -85,6 +88,9 @@ CLAUDE_TIMEOUT_MS=900000                # Session timeout in ms (default: 15 min
 PROJECTS_BASE_DIR=                      # Restrict project paths to this directory
 ROBOREV_CLI_PATH=roborev               # Path to roborev binary (if installed)
 ALLOW_NON_GIT=false                    # Allow registering non-git directories (see below)
+USAGE_CHANNEL_ID=                      # Channel for per-session usage stats
+CLAUDE_MODEL=                          # Default model (sonnet/opus/haiku or exact ID)
+INSTANCE_LOCK_PORT=47831               # Localhost port used as single-instance lock
 ```
 
 Start the bot:
@@ -124,6 +130,8 @@ Type a prompt in `#claude` to start using Claude Code remotely.
 | `/cancel` | Cancel the active Claude session |
 | `/loop <prompt> [interval]` | Run a prompt on a recurring interval (default: 10m) |
 | `/stop-loop` | Stop the running loop in the current channel |
+| `/usage` | Show Claude Code rate-limit utilization and session stats |
+| `/model [model] [custom]` | Pick the Claude model for this project (interactive dropdown if no option given) |
 
 ### Text Commands
 
@@ -133,6 +141,9 @@ You can also type these directly in `#claude` channels:
 |---------|---------|
 | `/loop [interval] <prompt>` | `/loop 5m check for failing tests` |
 | `/stop-loop` | `/stop-loop` |
+| `/status` | Show the running loop's status |
+| `/model <name>` | `/model opus` — set the project's default model |
+| `/model <name> <prompt>` | `/model haiku summarize the readme` — one-shot model override |
 
 ### Workflow
 
@@ -303,6 +314,13 @@ The bot runs as a headless Node.js process on the same machine as your code. No 
 - Make sure your user has the authorized role assigned
 - Verify you're typing in the `#claude` channel (not `#roborev`)
 
+**Bot responds slowly, twice, or misses messages:**
+- Make sure only ONE bot process is running — multiple instances sharing a token
+  cause duplicate replies and failed button interactions. The bot holds a localhost
+  port (`INSTANCE_LOCK_PORT`) as a lock, so extra instances exit on startup.
+- Check the logs for `[shard 0] Reconnecting...` loops or `SLOW PICKUP` warnings —
+  each received message is logged with its gateway lag to help diagnose delays.
+
 **Slash commands don't appear:**
 - Restart the bot — commands are registered on startup
 - It can take a few minutes for Discord to propagate new commands
@@ -340,12 +358,15 @@ src/
     cancel.ts                 # /cancel handler
     loop.ts                   # /loop handler
     stopLoop.ts               # /stop-loop handler
+    usage.ts                  # /usage handler
+    model.ts                  # /model handler (per-project model picker)
   services/
     projectStore.ts           # In-memory cache + async JSON persistence
     channelManager.ts         # Create/delete categories, channels, webhooks
     claudeRunner.ts           # Agent SDK query management, session resume
-    discordStreamer.ts         # Throttled message streaming, tool embeds, approval buttons
+    discordStreamer.ts        # Throttled message streaming, tool embeds, approval buttons
     loopRunner.ts             # Recurring prompt execution with setTimeout chaining
+    usageTracker.ts           # Rate-limit + session stats, posts to #usage channel
     roborevWatcher.ts         # Roborev JSONL stream parser, webhook routing
   handlers/
     messageHandler.ts         # Messages in #claude channels + thread follow-ups

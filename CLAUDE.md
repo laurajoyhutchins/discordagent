@@ -33,6 +33,8 @@ Discord slash cmd → interactionHandler.ts → command handler (addProject, can
 
 ### Key Design Decisions
 
+- **Single-instance lock** — On startup the bot binds a localhost port (`INSTANCE_LOCK_PORT`, default 47831) before logging in. A second process gets `EADDRINUSE` and exits, preventing duplicate message handling from multiple instances sharing one token.
+- **Model resolution order** — Per-message `/model <name>` prefix > per-project model (set via `/model`, stored in projects.json) > `CLAUDE_MODEL` env var > SDK default.
 - **Sessions map by thread ID** — `activeSessions` is keyed by thread ID, allowing multiple concurrent threads per `#claude` channel. Each thread has its own independent session with its own `sessionId` and `AbortController`.
 - **Tool approval is collect-then-verify** — `awaitMessageComponent` filters must be synchronous, so we accept any button click, then verify auth with an async `members.fetch()` after. Unauthorized clicks get an ephemeral rejection and the bot waits for the next click.
 - **setTimeout chaining for loops** — `setInterval` could cause overlapping iterations if Claude runs longer than the interval. We use `setTimeout` after each iteration completes. Loop embeds include a "Stop Loop" button handled via button interaction in `interactionHandler.ts`.
@@ -49,7 +51,7 @@ Discord slash cmd → interactionHandler.ts → command handler (addProject, can
 | `src/index.ts` | Entry point — Discord client, event wiring, shutdown |
 | `src/config.ts` | Loads env vars, validates required ones |
 | `src/types.ts` | `Project`, `ProjectStore`, `ActiveSession` interfaces |
-| `src/commands/definitions.ts` | SlashCommandBuilder definitions for all 7 commands |
+| `src/commands/definitions.ts` | SlashCommandBuilder definitions for all slash commands |
 | `src/commands/addProject.ts` | Registers project, creates channels, optional roborev setup |
 | `src/commands/removeProject.ts` | Removes project, cancels session, deletes channels |
 | `src/commands/listProjects.ts` | Lists projects with status in ephemeral embed |
@@ -57,6 +59,7 @@ Discord slash cmd → interactionHandler.ts → command handler (addProject, can
 | `src/commands/loop.ts` | Starts recurring prompt with interval validation |
 | `src/commands/stopLoop.ts` | Stops running loop |
 | `src/commands/usage.ts` | Shows rate limit utilization and session stats |
+| `src/commands/model.ts` | Per-project model picker (dropdown or direct option) |
 | `src/commands/register.ts` | Standalone script to register slash commands |
 | `src/handlers/interactionHandler.ts` | Routes slash commands, centralized auth check |
 | `src/handlers/messageHandler.ts` | Handles messages in `#claude` channels and threads |
@@ -93,6 +96,8 @@ All other tools (`Bash`, `Edit`, `Write`, `Agent`, etc.) require Allow/Deny butt
 | `PROJECTS_BASE_DIR` | No | `""` | Restrict allowed project paths |
 | `ALLOW_NON_GIT` | No | `false` | Allow registering non-git directories |
 | `USAGE_CHANNEL_ID` | No | `""` | Channel ID for automatic usage stats posts |
+| `CLAUDE_MODEL` | No | `""` | Default model (alias like `sonnet` or exact ID); `/model` overrides per project |
+| `INSTANCE_LOCK_PORT` | No | `47831` | Localhost port held as a single-instance lock |
 
 ## Claude Code Configuration
 

@@ -2,3 +2,8 @@ node_modules/
 dist/
 .env
 src/data/projects.json
+
+# Local artifacts
+.playwright-mcp/
+.DS_Store
+*.log

@@ -20,6 +20,7 @@ export class DiscordStreamer {
   private editTimer: ReturnType<typeof setInterval> | null = null;
   private finalized = false;
   private dirty = false;
+  private flushing = false;
 
   constructor(thread: AnyThreadChannel) {
     this.thread = thread;
@@ -39,7 +40,10 @@ export class DiscordStreamer {
   }
 
   private async flush(): Promise<void> {
-    if (this.finalized || !this.dirty || this.buffer.length === 0) return;
+    // flushing guard: a slow Discord call must not overlap the next tick,
+    // or two flushes could both see currentMessage === null and double-post
+    if (this.flushing || this.finalized || !this.dirty || this.buffer.length === 0) return;
+    this.flushing = true;
     this.dirty = false;
 
     const display = this.buffer.slice(0, 1800);
@@ -52,6 +56,8 @@ export class DiscordStreamer {
       }
     } catch {
       // Rate limited or message deleted
+    } finally {
+      this.flushing = false;
     }
   }
 
@@ -303,6 +309,11 @@ export class DiscordStreamer {
     if (this.editTimer) {
       clearInterval(this.editTimer);
       this.editTimer = null;
+    }
+
+    // Let any in-flight flush settle before writing the final content
+    while (this.flushing) {
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
 
     // Flush remaining buffer

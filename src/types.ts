@@ -7,6 +7,7 @@ export interface Project {
   roborevWebhookId?: string;
   roborevWebhookToken?: string;
   sessionId?: string; // Persisted session ID for resume
+  model?: string; // Per-project model override (set via /model command)
 }
 
 export interface ProjectStore {

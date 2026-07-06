@@ -46,4 +46,22 @@ export const commands = [
   new SlashCommandBuilder()
     .setName('usage')
     .setDescription('Show Claude Code rate limit usage and session stats'),
+
+  new SlashCommandBuilder()
+    .setName('model')
+    .setDescription('Pick which Claude model to use for this project')
+    .addStringOption(opt =>
+      opt.setName('model')
+        .setDescription('Choose a model')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Claude Sonnet — balanced speed & capability (recommended)', value: 'sonnet' },
+          { name: 'Claude Opus — most powerful reasoning', value: 'opus' },
+          { name: 'Claude Haiku — fastest, lightweight tasks', value: 'haiku' },
+          { name: 'Default (env/SDK)', value: '__default__' },
+        )
+    )
+    .addStringOption(opt =>
+      opt.setName('custom').setDescription('Set a custom model name directly (alias or exact model ID)').setRequired(false)
+    ),
 ];

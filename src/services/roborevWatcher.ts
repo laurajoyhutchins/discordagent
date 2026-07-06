@@ -40,7 +40,13 @@ function getWebhookClient(project: Project): WebhookClient | null {
 
 function matchProject(repoPath: string): Project | undefined {
   const projects = getAllProjects();
-  return projects.find(p => p.roborevWebhookId && repoPath.startsWith(p.workingDirectory));
+  const repo = repoPath.toLowerCase().replace(/\/+$/, '');
+  return projects.find(p => {
+    if (!p.roborevWebhookId) return false;
+    // Boundary-safe prefix match so /Users/a/proj doesn't match /Users/a/proj2
+    const dir = p.workingDirectory.toLowerCase().replace(/\/+$/, '');
+    return repo === dir || repo.startsWith(dir + '/');
+  });
 }
 
 async function getReviewBody(jobId: number): Promise<string> {

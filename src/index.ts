@@ -1,3 +1,4 @@
+import { createServer } from 'node:net';
 import { Client, GatewayIntentBits, Partials, REST, Routes } from 'discord.js';
 import { config } from './config.js';
 import { handleInteraction } from './handlers/interactionHandler.js';
@@ -7,6 +8,28 @@ import { startRoborevWatcher, stopRoborevWatcher } from './services/roborevWatch
 import { stopAllLoops } from './services/loopRunner.js';
 import { initUsageTracker } from './services/usageTracker.js';
 import { commands } from './commands/definitions.js';
+
+// ── Single-instance lock ─────────────────────────────────────────────
+// Multiple bot processes sharing one token cause duplicate message
+// handling and interaction failures. Hold a localhost port as a mutex:
+// a second instance gets EADDRINUSE and exits instead of connecting.
+const LOCK_PORT = parseInt(process.env.INSTANCE_LOCK_PORT ?? '47831', 10);
+const lockServer = createServer();
+lockServer.unref();
+lockServer.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(
+      `Another DiscordClaude instance is already running (lock port ${LOCK_PORT} in use). Exiting.`
+    );
+  } else {
+    console.error('Instance lock error:', err);
+  }
+  process.exit(1);
+});
+lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
+  console.log(`Instance lock acquired on port ${LOCK_PORT}.`);
+  client.login(config.discordToken);
+});
 
 const client = new Client({
   intents: [
@@ -18,7 +41,7 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel],
 });
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user!.tag}`);
 
   // Initialize usage tracker with client reference
@@ -50,6 +73,67 @@ client.on('error', (err) => {
   console.error('Discord client error:', err);
 });
 
+// ── WebSocket health monitoring ──────────────────────────────────────
+// Discord.js can maintain "zombie" connections where the gateway appears
+// connected but messages aren't being delivered. These handlers detect
+// and log disconnects/reconnects so we can diagnose message pickup delays.
+
+client.on('shardDisconnect', (event, shardId) => {
+  console.warn(`[shard ${shardId}] Disconnected (code ${event.code}). Waiting for reconnect...`);
+});
+
+client.on('shardReconnecting', (shardId) => {
+  console.log(`[shard ${shardId}] Reconnecting...`);
+});
+
+client.on('shardResume', (shardId, replayedEvents) => {
+  console.log(`[shard ${shardId}] Resumed. Replayed ${replayedEvents} events.`);
+});
+
+client.on('shardReady', (shardId) => {
+  console.log(`[shard ${shardId}] Ready.`);
+});
+
+// Heartbeat watchdog: periodically check WebSocket ping to detect stale connections.
+// If ping goes to -1 or becomes very high, the connection is likely stale.
+const HEARTBEAT_CHECK_INTERVAL_MS = 30_000;  // Check every 30s
+let lastKnownPing = -1;
+let stalePingCount = 0;
+let reconnecting = false;
+
+setInterval(async () => {
+  if (reconnecting) return;
+
+  const ping = client.ws.ping;
+  if (ping === -1 && lastKnownPing !== -1 && client.isReady()) {
+    stalePingCount++;
+    console.warn(`[heartbeat] WebSocket ping is -1 (stale count: ${stalePingCount})`);
+    // After 3 consecutive stale checks (~90s), force reconnect
+    if (stalePingCount >= 3) {
+      console.warn('[heartbeat] Connection appears stale — destroying and reconnecting');
+      stalePingCount = 0;
+      lastKnownPing = -1;
+      reconnecting = true;
+      try {
+        await client.destroy();
+        await client.login(config.discordToken);
+        console.log('[heartbeat] Reconnected successfully');
+      } catch (err) {
+        console.error('[heartbeat] Reconnect failed, exiting so the process manager can restart us:', err);
+        process.exit(1);
+      } finally {
+        reconnecting = false;
+      }
+    }
+  } else {
+    if (stalePingCount > 0) {
+      console.log(`[heartbeat] Connection restored (ping: ${ping}ms)`);
+    }
+    stalePingCount = 0;
+    lastKnownPing = ping;
+  }
+}, HEARTBEAT_CHECK_INTERVAL_MS);
+
 function shutdown() {
   console.log('Shutting down...');
   stopAllLoops();
@@ -60,5 +144,5 @@ function shutdown() {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
-
-client.login(config.discordToken);
+// Login happens in the lockServer.listen callback above, once the
+// single-instance lock is held.

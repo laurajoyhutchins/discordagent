@@ -64,6 +64,15 @@ export function updateProjectSession(name: string, sessionId: string): void {
   }
 }
 
+export function updateProjectModel(name: string, model: string): void {
+  const store = loadSync();
+  const project = store.projects.find(p => p.name === name);
+  if (project) {
+    project.model = model || undefined;
+    enqueueWrite(store);
+  }
+}
+
 export function removeProject(name: string): Project | undefined {
   const store = loadSync();
   const idx = store.projects.findIndex(p => p.name === name);

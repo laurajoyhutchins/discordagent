@@ -2,7 +2,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { Message, AnyThreadChannel } from 'discord.js';
 import { config } from '../config.js';
 import { DiscordStreamer } from './discordStreamer.js';
-import { updateProjectSession } from './projectStore.js';
+import { updateProjectSession, getProject } from './projectStore.js';
 import { captureRateLimitEvent, captureSessionResult } from './usageTracker.js';
 import type { ActiveSession } from '../types.js';
 
@@ -53,6 +53,18 @@ function threadLabel(prompt: string): string {
 
 async function setThreadName(thread: AnyThreadChannel, name: string): Promise<void> {
   try { await thread.setName(name.slice(0, 100)); } catch {}
+}
+
+// ── Model resolution ──────────────────────────────────────────────────
+
+/** Resolve which model to use: per-request override > project model > env default > SDK default */
+function resolveModel(override?: string, projectName?: string): string | undefined {
+  if (override) return override;
+  if (projectName) {
+    const project = getProject(projectName);
+    if (project?.model) return project.model;
+  }
+  return config.defaultModel || undefined;
 }
 
 // ── Public API ─────────────────────────────────────────────────────────
@@ -181,7 +193,8 @@ export async function runClaude(
   projectDir: string,
   projectName: string,
   originalMessage: Message,
-  existingSessionId?: string
+  existingSessionId?: string,
+  model?: string
 ): Promise<void> {
   const channelId = originalMessage.channelId;
 
@@ -213,6 +226,7 @@ export async function runClaude(
   }, config.claudeTimeoutMs);
 
   const safePrompt = sanitize(prompt);
+  const resolvedModel = resolveModel(model, projectName);
 
   try {
     const q = query({
@@ -223,6 +237,7 @@ export async function runClaude(
         permissionMode: 'default',
         settingSources: ['user'],
         ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
+        ...(resolvedModel ? { model: resolvedModel } : {}),
         env: cleanEnv,
         ...(resumeId ? { resume: resumeId } : {}),
         canUseTool: makeCanUseTool(streamer),
@@ -271,6 +286,7 @@ export async function runClaude(
             permissionMode: 'default',
             settingSources: ['user'],
             ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
+            ...(resolvedModel ? { model: resolvedModel } : {}),
             env: cleanEnv,
             canUseTool: makeCanUseTool(streamer),
           },
@@ -305,7 +321,8 @@ export async function runClaudeInThread(
   projectDir: string,
   projectName: string,
   thread: AnyThreadChannel,
-  existingSessionId?: string
+  existingSessionId?: string,
+  model?: string
 ): Promise<{ exitType: string; cost?: number; duration?: number; sessionId?: string } | null> {
   const threadId = thread.id;
   const channelId = thread.parentId!;
@@ -339,6 +356,7 @@ export async function runClaudeInThread(
   }, config.claudeTimeoutMs);
 
   const safePrompt = sanitize(prompt);
+  const resolvedModel = resolveModel(model, projectName);
 
   try {
     const q = query({
@@ -349,6 +367,7 @@ export async function runClaudeInThread(
         permissionMode: 'default',
         settingSources: ['user'],
         ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
+        ...(resolvedModel ? { model: resolvedModel } : {}),
         env: cleanEnv,
         ...(resumeId ? { resume: resumeId } : {}),
         canUseTool: makeCanUseTool(streamer),
@@ -378,7 +397,8 @@ export async function continueInThread(
   prompt: string,
   projectDir: string,
   projectName: string,
-  message: Message
+  message: Message,
+  model?: string
 ): Promise<void> {
   const thread = message.channel as AnyThreadChannel;
   const threadId = thread.id;
@@ -426,6 +446,7 @@ export async function continueInThread(
   }, config.claudeTimeoutMs);
 
   const safePrompt = sanitize(prompt);
+  const resolvedModel = resolveModel(model, projectName);
 
   try {
     const q = query({
@@ -436,6 +457,7 @@ export async function continueInThread(
         permissionMode: 'default',
         settingSources: ['user'],
         ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
+        ...(resolvedModel ? { model: resolvedModel } : {}),
         env: cleanEnv,
         resume: resumeId,
         canUseTool: makeCanUseTool(streamer),
@@ -443,11 +465,7 @@ export async function continueInThread(
     });
 
     const result = await processQuery(q, streamer, activeSession, projectName, message);
-    await setThreadName(thread, `✅ ${currentName}`);
-
-    if (result?.exitType !== 'success') {
-      await setThreadName(thread, `❌ ${currentName}`);
-    }
+    await setThreadName(thread, result?.exitType === 'success' ? `✅ ${currentName}` : `❌ ${currentName}`);
   } catch (err) {
     activeSession.busy = false;
 

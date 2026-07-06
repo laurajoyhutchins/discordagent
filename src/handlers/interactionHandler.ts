@@ -7,6 +7,7 @@ import { handleCancel } from '../commands/cancel.js';
 import { handleLoop } from '../commands/loop.js';
 import { handleStopLoop } from '../commands/stopLoop.js';
 import { handleUsage } from '../commands/usage.js';
+import { handleModel } from '../commands/model.js';
 import { stopLoopFromButton } from '../services/loopRunner.js';
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
@@ -59,6 +60,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
         break;
       case 'usage':
         await handleUsage(interaction);
+        break;
+      case 'model':
+        await handleModel(interaction);
         break;
       default:
         await interaction.reply({ content: 'Unknown command.', ephemeral: true });

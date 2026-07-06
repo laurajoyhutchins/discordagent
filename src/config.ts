@@ -46,4 +46,5 @@ export const config = {
   allowNonGit: process.env.ALLOW_NON_GIT === 'true',
   mcpServers: loadUserMcpServers(),
   usageChannelId: process.env.USAGE_CHANNEL_ID ?? '',
+  defaultModel: process.env.CLAUDE_MODEL ?? '',
 } as const;

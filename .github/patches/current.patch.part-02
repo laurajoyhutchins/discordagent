@@ -1,0 +1,177 @@
+letedAt: 200,
++      summary: 'Implemented the registry',
++      usage: { inputTokens: 10, outputTokens: 4 },
++    };
++    expect(() => tasks.saveResult('result-task', result)).toThrow(/terminal/i);
++
++    tasks.transition('result-task', ['running'], 'completed');
++    expect(() => tasks.saveResult('result-task', { ...result, provider: 'codex' }))
++      .toThrow(/provider.*match/i);
++    tasks.saveResult('result-task', result);
++
++    expect(db.raw.prepare('SELECT outcome, summary, usage_json FROM task_results WHERE task_id = ?')
++      .get('result-task')).toEqual({
++      outcome: 'completed',
++      summary: 'Implemented the registry',
++      usage_json: JSON.stringify(result.usage),
++    });
++    expect(() => tasks.saveResult('result-task', result)).toThrow(/already.*result/i);
++  });
++});
++
++describe('EventRepository', () => {
++  it('appends normalized events and deduplicates provider event keys', () => {
++    const { tasks, events } = setup();
++    tasks.createWithWorktree(transaction('event-task'));
++    const text: AgentEvent = { type: 'text_delta', text: 'hello' };
++    const status: AgentEvent = { type: 'status', phase: 'working', detail: 'reading files' };
++
++    events.append('event-task', text);
++    events.append('event-task', status, 'provider-event-1');
++    events.append('event-task', status, 'provider-event-1');
++
++    const stored = events.list('event-task');
++    expect(stored).toHaveLength(2);
++    expect(stored.map(entry => entry.event)).toEqual([text, status]);
++    expect(stored[1].dedupeKey).toBe('provider-event-1');
++    expect(stored[0].createdAt).toEqual(expect.any(Number));
++  });
++});
++diff --git a/src/repositories/taskRepository.ts b/src/repositories/taskRepository.ts
++new file mode 100644
++index 0000000..6539706
++--- /dev/null
+++++ b/src/repositories/taskRepository.ts
++@@ -0,0 +1,274 @@
+++import { randomUUID } from 'node:crypto';
+++import type {
+++  AgentProviderId,
+++  ProviderSession,
+++  TaskResult,
+++  TaskStatus,
+++} from '../agents/contracts.js';
+++import type { DatabaseHandle } from '../db/database.js';
+++import type { TaskRecord, WorktreeRecord } from '../types.js';
+++
+++export interface CreateTaskWorktreeInput {
+++  id: string;
+++  repositoryPath: string;
+++  worktreePath: string;
+++  branchName: string;
+++  baseRef: string;
+++}
+++
+++export interface CreateTaskTransaction {
+++  taskId: string;
+++  projectName: string;
+++  provider: AgentProviderId;
+++  channelId: string;
+++  threadId: string;
+++  objective: string;
+++  worktree: CreateTaskWorktreeInput;
+++  createdAt?: number;
+++}
+++
+++export interface TaskRepository {
+++  createWithWorktree(input: CreateTaskTransaction): TaskRecord;
+++  attachProviderSession(taskId: string, session: ProviderSession): void;
+++  transition(taskId: string, expected: readonly TaskStatus[], next: TaskStatus): TaskRecord;
+++  findByThreadId(threadId: string): TaskRecord | undefined;
+++  listRecoverable(): TaskRecord[];
+++  saveResult(taskId: string, result: TaskResult): void;
+++}
+++
+++interface TaskRow {
+++  id: string;
+++  project_name: string;
+++  provider: AgentProviderId;
+++  status: TaskStatus;
+++  channel_id: string;
+++  thread_id: string;
+++  objective: string;
+++  created_at: number;
+++  updated_at: number;
+++  started_at: number | null;
+++  completed_at: number | null;
+++  provider_session_id: string | null;
+++}
+++
+++const TASK_SELECT = `
+++  SELECT
+++    t.id,
+++    p.name AS project_name,
+++    t.provider,
+++    t.status,
+++    t.channel_id,
+++    t.thread_id,
+++    t.objective,
+++    t.created_at,
+++    t.updated_at,
+++    t.started_at,
+++    t.completed_at,
+++    ps.session_id AS provider_session_id
+++  FROM tasks t
+++  JOIN projects p ON p.id = t.project_id
+++  LEFT JOIN provider_sessions ps ON ps.task_id = t.id
+++`;
+++
+++const TERMINAL_STATUSES = new Set<TaskStatus>([
+++  'completed',
+++  'failed',
+++  'cancelled',
+++  'interrupted',
+++]);
+++
+++const LEGAL_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
+++  created: ['starting', 'cancelled'],
+++  starting: ['running', 'failed', 'cancelled', 'interrupted'],
+++  running: ['waiting_for_user', 'completed', 'failed', 'cancelled', 'interrupted'],
+++  waiting_for_user: ['running', 'completed', 'failed', 'cancelled', 'interrupted'],
+++  completed: [],
+++  failed: [],
+++  cancelled: [],
+++  interrupted: ['starting', 'cancelled'],
+++};
+++
+++function toTaskRecord(row: TaskRow): TaskRecord {
+++  return {
+++    id: row.id,
+++    projectName: row.project_name,
+++    provider: row.provider,
+++    status: row.status,
+++    channelId: row.channel_id,
+++    threadId: row.thread_id,
+++    objective: row.objective,
+++    createdAt: row.created_at,
+++    updatedAt: row.updated_at,
+++    ...(row.started_at === null ? {} : { startedAt: row.started_at }),
+++    ...(row.completed_at === null ? {} : { completedAt: row.completed_at }),
+++    ...(row.provider_session_id === null ? {} : { providerSessionId: row.provider_session_id }),
+++  };
+++}
+++
+++export function createTaskRepository(db: DatabaseHandle): TaskRepository {
+++  const selectById = db.raw.prepare(`${TASK_SELECT} WHERE t.id = ?`);
+++  const selectByThread = db.raw.prepare(`${TASK_SELECT} WHERE t.thread_id = ?`);
+++
+++  function requireTask(taskId: string): TaskRecord {
+++    const row = selectById.get(taskId) as TaskRow | undefined;
+++    if (!row) throw new Error(`Task "${taskId}" not found`);
+++    return toTaskRecord(row);
+++  }
+++
+++  return {
+++    createWithWorktree(input: CreateTaskTransaction): TaskRecord {
+++      const create = db.raw.transaction(() => {
+++        const project = db.raw.prepare(`
+++          SELECT id FROM projects WHERE name = ? COLLATE NOCASE AND archived_at IS NULL
+++        `).get(input.projectName) as { id: string } | undefined;
+++        if (!project) throw new Error(`Project "${input.projectName}" not found`);
+++
+++        const now = input.createdAt ?? Date.now();
+++        db.raw.prepare(`
+++          INSERT INTO tasks (
+++            id, project_id, provider, status, channel_id, thread_id,
+++            objective, created_at, updated_at
+++          ) VALUES (?, ?, ?, 'created', ?, ?, ?, ?, ?)
+++  

@@ -197,4 +197,16 @@ export const SCHEMA_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 2,
+    name: 'track one-time legacy project imports',
+    statements: [
+      `CREATE TABLE legacy_imports (
+        source_path TEXT PRIMARY KEY,
+        imported_at INTEGER NOT NULL,
+        projects_imported INTEGER NOT NULL CHECK (projects_imported >= 0),
+        projects_skipped INTEGER NOT NULL CHECK (projects_skipped >= 0)
+      )`,
+    ],
+  },
 ] as const;

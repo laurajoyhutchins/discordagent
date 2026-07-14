@@ -1,0 +1,46 @@
+name: Apply local implementation patch
+
+on:
+  push:
+    branches:
+      - feat/provider-neutral-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/provider-neutral-foundation
+          fetch-depth: 0
+
+      - name: Apply staged patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_file=.github/patches/current.patch.gz.b64
+          if [[ ! -f "$patch_file" ]]; then
+            echo "No staged patch."
+            exit 0
+          fi
+          base64 --decode "$patch_file" | gzip --decompress > /tmp/current.patch
+          git apply --check /tmp/current.patch
+          git apply /tmp/current.patch
+          rm "$patch_file"
+
+      - name: Commit synchronized task
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet && [[ -z "$(git status --porcelain)" ]]; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: define provider-neutral agent contracts"
+          git push origin HEAD:feat/provider-neutral-foundation

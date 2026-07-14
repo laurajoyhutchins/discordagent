@@ -24,16 +24,22 @@ jobs:
           set -euo pipefail
           plain_patch=.github/patches/current.patch
           encoded_patch=.github/patches/current.patch.gz.b64
-          if [[ -f "$plain_patch" ]]; then
+          ready_file=.github/patches/current.patch.ready
+
+          if [[ -f "$ready_file" ]] && compgen -G '.github/patches/current.patch.part-*' > /dev/null; then
+            cat .github/patches/current.patch.part-* > /tmp/current.patch
+            rm .github/patches/current.patch.part-* "$ready_file"
+          elif [[ -f "$plain_patch" ]]; then
             cp "$plain_patch" /tmp/current.patch
             rm "$plain_patch"
           elif [[ -f "$encoded_patch" ]]; then
             base64 --decode "$encoded_patch" | gzip --decompress > /tmp/current.patch
             rm "$encoded_patch"
           else
-            echo "No staged patch."
+            echo "Patch is not ready."
             exit 0
           fi
+
           git apply --check /tmp/current.patch
           git apply /tmp/current.patch
 

@@ -91,6 +91,9 @@ export interface TaskResult {
   sessionId?: string;
   summary?: string;
   usage?: ProviderUsage;
+  costUsd?: number;
+  durationMs?: number;
+  numTurns?: number;
   error?: NormalizedAgentError;
 }
 

@@ -41,7 +41,7 @@ export async function handleMessage(message: Message): Promise<void> {
     if (!parentId) return;
 
     const project = getProjectByChannel(parentId);
-    if (!project || parentId !== project.claudeChannelId) return;
+    if (!project || parentId !== project.agentChannelId) return;
 
     logPickup(message, prompt, lagMs);
 
@@ -89,7 +89,7 @@ export async function handleMessage(message: Message): Promise<void> {
   // Main channel message — check if it's a project channel
   const project = getProjectByChannel(message.channelId);
   if (!project) return;
-  if (message.channelId !== project.claudeChannelId) return;
+  if (message.channelId !== project.agentChannelId) return;
 
   logPickup(message, prompt, lagMs);
 
@@ -130,7 +130,7 @@ async function handleBotCommand(
   if (lower === '/model' || /^\/model\s+\S+$/i.test(content)) {
     const arg = content.split(/\s+/)[1];
     if (!arg) {
-      const current = project.model || config.defaultModel || 'SDK default';
+      const current = project.models?.claude || config.defaultModel || 'SDK default';
       await message.reply(
         `Current model for **${project.name}**: \`${current}\`\n` +
         'Set it with `/model <name>` (e.g. `sonnet`, `opus`, `haiku`), or prefix a prompt with `/model <name>` for a one-shot override.'
@@ -162,13 +162,13 @@ async function handleBotCommand(
 
   // /stop-loop
   if (lower.startsWith('/stop-loop') || lower.startsWith('/stoploop') || lower.startsWith('/stop loop')) {
-    await stopLoop(project.claudeChannelId, message);
+    await stopLoop(project.agentChannelId, message);
     return true;
   }
 
   // /status — show loop status
   if (lower === '/status') {
-    const status = getLoopStatus(project.claudeChannelId);
+    const status = getLoopStatus(project.agentChannelId);
     if (status) {
       await message.reply(status);
     } else {

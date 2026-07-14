@@ -104,11 +104,12 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     addProject({
       name,
       workingDirectory: resolvedPath,
+      defaultProvider: 'claude',
       ...channels,
     });
 
     let replyMsg = `Project **${name}** created!\n` +
-      `- <#${channels.claudeChannelId}> — send Claude prompts here`;
+      `- <#${channels.agentChannelId}> — send Claude prompts here`;
 
     if (!isGitRepo) {
       replyMsg += `\n\n⚠️ **Warning:** This is not a git repository. Claude Code will work, but you won't have version control protection against destructive changes. Consider initializing git: \`git init\``;

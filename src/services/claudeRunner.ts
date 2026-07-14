@@ -62,7 +62,7 @@ function resolveModel(override?: string, projectName?: string): string | undefin
   if (override) return override;
   if (projectName) {
     const project = getProject(projectName);
-    if (project?.model) return project.model;
+    if (project?.models?.claude) return project.models.claude;
   }
   return config.defaultModel || undefined;
 }

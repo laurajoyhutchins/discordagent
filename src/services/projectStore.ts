@@ -2,7 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { Project, ProjectStore } from '../types.js';
+import { normalizeProject, type LegacyProjectStore, type Project, type ProjectStore } from '../types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_PATH = join(__dirname, '..', 'data', 'projects.json');
@@ -14,7 +14,8 @@ function loadSync(): ProjectStore {
   if (cachedStore) return cachedStore;
   try {
     const raw = readFileSync(DATA_PATH, 'utf-8');
-    cachedStore = JSON.parse(raw) as ProjectStore;
+    const parsed = JSON.parse(raw) as LegacyProjectStore;
+    cachedStore = { projects: parsed.projects.map(normalizeProject) };
     return cachedStore;
   } catch {
     cachedStore = { projects: [] };
@@ -42,7 +43,7 @@ export function getProject(name: string): Project | undefined {
 
 export function getProjectByChannel(channelId: string): Project | undefined {
   return loadSync().projects.find(
-    p => p.claudeChannelId === channelId || (p.roborevChannelId && p.roborevChannelId === channelId)
+    p => p.agentChannelId === channelId || (p.roborevChannelId && p.roborevChannelId === channelId)
   );
 }
 
@@ -59,7 +60,7 @@ export function updateProjectSession(name: string, sessionId: string): void {
   const store = loadSync();
   const project = store.projects.find(p => p.name === name);
   if (project) {
-    project.sessionId = sessionId;
+    project.legacySessionId = sessionId || undefined;
     enqueueWrite(store);
   }
 }
@@ -68,7 +69,12 @@ export function updateProjectModel(name: string, model: string): void {
   const store = loadSync();
   const project = store.projects.find(p => p.name === name);
   if (project) {
-    project.model = model || undefined;
+    const nextModels = { ...project.models, claude: model || undefined };
+    if (!nextModels.claude && !nextModels.codex) {
+      project.models = undefined;
+    } else {
+      project.models = nextModels;
+    }
     enqueueWrite(store);
   }
 }

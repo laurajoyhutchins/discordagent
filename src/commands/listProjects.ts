@@ -16,9 +16,9 @@ export async function handleListProjects(interaction: ChatInputCommandInteractio
     .setColor(0x5865f2);
 
   for (const p of projects) {
-    const sessions = getSessionsByChannel(p.claudeChannelId);
+    const sessions = getSessionsByChannel(p.agentChannelId);
     const activeSessions = sessions.filter(s => s.busy);
-    const loop = getLoop(p.claudeChannelId);
+    const loop = getLoop(p.agentChannelId);
 
     let status = '⚪ Idle';
     if (activeSessions.length > 0) {
@@ -28,7 +28,7 @@ export async function handleListProjects(interaction: ChatInputCommandInteractio
       status += ` | 🔁 Loop (every ${formatDuration(loop.intervalMs)}, #${loop.iteration})`;
     }
 
-    let value = `**Path:** \`${p.workingDirectory}\`\n**Status:** ${status}\n**Claude:** <#${p.claudeChannelId}>`;
+    let value = `**Path:** \`${p.workingDirectory}\`\n**Status:** ${status}\n**Claude:** <#${p.agentChannelId}>`;
     if (p.roborevChannelId) {
       value += ` | **Roborev:** <#${p.roborevChannelId}>`;
     }

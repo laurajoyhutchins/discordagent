@@ -114,7 +114,7 @@ export async function startLoop(
   project: Project,
   message: Message
 ): Promise<void> {
-  const channelId = project.claudeChannelId;
+  const channelId = project.agentChannelId;
 
   // Validate interval
   if (intervalMs < MIN_INTERVAL_MS) {
@@ -211,7 +211,7 @@ export async function startLoop(
         project.workingDirectory,
         project.name,
         thread,
-        project.sessionId
+        project.legacySessionId
       );
     } catch (err) {
       console.error(`[loop] Iteration ${loop.iteration} failed:`, err);

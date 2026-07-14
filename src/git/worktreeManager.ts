@@ -104,13 +104,30 @@ async function resolveBaseRef(
   configured?: string,
 ): Promise<string> {
   if (configured) {
-    await git.run(repositoryPath, ['rev-parse', '--verify', `refs/heads/${configured}`]);
+    await git.run(repositoryPath, ['rev-parse', '--verify', `${configured}^{commit}`]);
     return configured;
   }
 
-  const { stdout } = await git.run(repositoryPath, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
-  if (!stdout) throw new Error('Repository HEAD is detached; configure a base branch explicitly');
-  return stdout;
+  try {
+    const { stdout: remoteDefault } = await git.run(repositoryPath, [
+      'symbolic-ref',
+      '--quiet',
+      '--short',
+      'refs/remotes/origin/HEAD',
+    ]);
+    if (remoteDefault) return remoteDefault;
+  } catch {
+    // Local-only repositories are supported; fall back to the checked-out branch.
+  }
+
+  const { stdout: currentBranch } = await git.run(
+    repositoryPath,
+    ['symbolic-ref', '--quiet', '--short', 'HEAD'],
+  );
+  if (!currentBranch) {
+    throw new Error('Repository HEAD is detached; configure a base branch explicitly');
+  }
+  return currentBranch;
 }
 
 async function branchExists(git: GitClient, repositoryPath: string, branchName: string): Promise<boolean> {

@@ -76,6 +76,36 @@ describe('WorktreeManager', () => {
     expect(existsSync(second.worktreePath)).toBe(true);
   });
 
+  it('prefers the symbolic remote default branch over the current branch', async () => {
+    const { root, repo, worktrees } = createRepository();
+    git(repo, 'checkout', '-b', 'trunk');
+    writeFileSync(join(repo, 'trunk.txt'), 'trunk\n');
+    git(repo, 'add', 'trunk.txt');
+    git(repo, 'commit', '-m', 'trunk base');
+    const trunkCommit = git(repo, 'rev-parse', 'HEAD');
+    git(repo, 'checkout', 'main');
+
+    const remote = join(root, 'remote repository.git');
+    mkdirSync(remote, { recursive: true });
+    git(remote, 'init', '--bare');
+    git(repo, 'remote', 'add', 'origin', remote);
+    git(repo, 'push', '-u', 'origin', 'main', 'trunk');
+    git(repo, 'remote', 'set-head', 'origin', 'trunk');
+
+    const manager = createWorktreeManager({ baseDirectory: worktrees, git: createGitClient() });
+    const created = await manager.create({
+      repositoryPath: repo,
+      provider: 'claude',
+      taskId: 'task-remote-default',
+      threadId: '555555765432',
+      objective: 'Use remote default',
+    });
+
+    expect(created.baseRef).toBe('origin/trunk');
+    expect(git(created.worktreePath, 'rev-parse', 'HEAD')).toBe(trunkCommit);
+    expect(existsSync(join(created.worktreePath, 'trunk.txt'))).toBe(true);
+  });
+
   it('uses an explicitly configured local base branch', async () => {
     const { repo, worktrees } = createRepository();
     git(repo, 'checkout', '-b', 'release-base');

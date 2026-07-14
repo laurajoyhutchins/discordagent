@@ -5,11 +5,7 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    fileParallelism: false,
     restoreMocks: true,
     clearMocks: true,
   },

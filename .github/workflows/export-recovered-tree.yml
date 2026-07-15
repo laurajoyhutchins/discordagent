@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - tmp/recovered-phase1-tree
+  pull_request:
 
 permissions:
   contents: read

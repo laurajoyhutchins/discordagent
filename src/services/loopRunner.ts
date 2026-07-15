@@ -9,8 +9,10 @@ import {
   ButtonStyle,
   ButtonInteraction,
 } from 'discord.js';
-import { runClaudeInThread } from './claudeRunner.js';
+import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
+import { getTaskCoordinator } from './taskCoordinatorService.js';
 import type { Project } from '../types.js';
+import { redactErrorMessage } from '../utils/redaction.js';
 
 interface ActiveLoop {
   id: string;
@@ -25,6 +27,26 @@ interface ActiveLoop {
   iteration: number;
   stopped: boolean;
   nextIterationAt: number | null;
+  thread: AnyThreadChannel;
+  coordinator: Pick<TaskCoordinator, 'startInExistingThread' | 'continueInThread'>;
+  schedule: LoopScheduler;
+}
+
+export type LoopScheduler = (
+  callback: () => Promise<void>,
+  delayMs: number,
+) => ReturnType<typeof setTimeout>;
+
+export interface LoopRunnerDependencies {
+  coordinator: Pick<TaskCoordinator, 'startInExistingThread' | 'continueInThread'>;
+  schedule: LoopScheduler;
+}
+
+function defaultLoopDependencies(): LoopRunnerDependencies {
+  return {
+    coordinator: getTaskCoordinator(),
+    schedule: (callback, delayMs) => setTimeout(() => { void callback(); }, delayMs),
+  };
 }
 
 const activeLoops = new Map<string, ActiveLoop>();
@@ -112,9 +134,11 @@ export async function startLoop(
   intervalMs: number,
   prompt: string,
   project: Project,
-  message: Message
+  message: Message,
+  injected?: LoopRunnerDependencies,
 ): Promise<void> {
   const channelId = project.agentChannelId;
+  const dependencies = injected ?? defaultLoopDependencies();
 
   // Validate interval
   if (intervalMs < MIN_INTERVAL_MS) {
@@ -181,6 +205,9 @@ export async function startLoop(
     iteration: 0,
     stopped: false,
     nextIterationAt: null,
+    thread,
+    coordinator: dependencies.coordinator,
+    schedule: dependencies.schedule,
   };
 
   activeLoops.set(channelId, loop);
@@ -205,16 +232,21 @@ export async function startLoop(
 
       await thread.send({ embeds: [iterEmbed] });
 
-      // Run Claude in the same thread
-      await runClaudeInThread(
-        prompt,
-        project.workingDirectory,
-        project.name,
-        thread,
-        project.legacySessionId
-      );
+      if (loop.iteration === 1) {
+        await loop.coordinator.startInExistingThread({
+          projectName: project.name,
+          prompt,
+          thread,
+          provider: project.defaultProvider,
+          ...(project.models?.[project.defaultProvider]
+            ? { model: project.models[project.defaultProvider] }
+            : {}),
+        });
+      } else {
+        await loop.coordinator.continueInThread({ prompt, thread });
+      }
     } catch (err) {
-      console.error(`[loop] Iteration ${loop.iteration} failed:`, err);
+      console.error(`[loop] Iteration ${loop.iteration} failed:`, redactErrorMessage(err));
     }
 
     // Schedule next iteration (only after current one finishes)
@@ -237,7 +269,7 @@ export async function startLoop(
 
       await thread.send({ embeds: [waitEmbed], components: [makeStopButton(channelId)] }).catch(() => {});
 
-      loop.timer = setTimeout(runIteration, intervalMs);
+      loop.timer = loop.schedule(runIteration, intervalMs);
     }
   };
 

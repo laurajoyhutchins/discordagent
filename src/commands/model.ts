@@ -1,131 +1,147 @@
 import {
-  ChatInputCommandInteraction,
   ActionRowBuilder,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
   ComponentType,
   EmbedBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  type ChatInputCommandInteraction,
 } from 'discord.js';
-import { getProjectByChannel } from '../services/projectStore.js';
-import { updateProjectModel } from '../services/projectStore.js';
-import { config } from '../config.js';
+import type { AgentProviderId } from '../agents/contracts.js';
+import type { Project } from '../types.js';
+import {
+  getProjectByChannel,
+  updateProjectModel,
+} from '../services/projectStore.js';
 
-/**
- * Well-known model choices for the picker. The SDK aliases (sonnet/opus/haiku)
- * always resolve to the latest model of each tier, so they never go stale.
- * Exact model IDs can still be set via the `custom` option.
- */
-const MODEL_OPTIONS: Array<{ label: string; value: string; description: string; emoji?: string }> = [
-  { label: 'Claude Sonnet', value: 'sonnet', description: 'Balanced speed & capability (recommended)', emoji: '⚡' },
+interface ModelOption {
+  label: string;
+  value: string;
+  description: string;
+  emoji?: string;
+}
+
+const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
+  { label: 'Claude Sonnet', value: 'sonnet', description: 'Balanced speed and capability', emoji: '⚡' },
   { label: 'Claude Opus', value: 'opus', description: 'Most powerful reasoning', emoji: '🧠' },
-  { label: 'Claude Haiku', value: 'haiku', description: 'Fastest, lightweight tasks', emoji: '🪶' },
-  { label: 'Default (env/SDK)', value: '__default__', description: 'Use CLAUDE_MODEL env var or SDK default', emoji: '🔄' },
+  { label: 'Claude Haiku', value: 'haiku', description: 'Fastest lightweight tasks', emoji: '🪶' },
+  { label: 'Default', value: '__default__', description: 'Use CLAUDE_MODEL or the provider default', emoji: '🔄' },
 ];
 
-export async function handleModel(interaction: ChatInputCommandInteraction): Promise<void> {
-  const channelId = interaction.channelId;
-  const project = getProjectByChannel(channelId);
+export interface ModelCommandDependencies {
+  getProjectByChannel(channelId: string): Project | undefined;
+  updateProjectModel(name: string, model: string, provider?: AgentProviderId): void;
+  defaultClaudeModel: string;
+}
 
-  if (!project) {
+function defaultDependencies(): ModelCommandDependencies {
+  return {
+    getProjectByChannel,
+    updateProjectModel,
+    defaultClaudeModel: process.env.CLAUDE_MODEL ?? '',
+  };
+}
+
+export async function handleModel(
+  interaction: ChatInputCommandInteraction,
+  injected?: ModelCommandDependencies,
+): Promise<void> {
+  const dependencies = injected ?? defaultDependencies();
+  if (interaction.channel?.isThread()) {
     await interaction.reply({
-      content: 'This command can only be used in a project channel.',
+      content: 'A task thread keeps its current provider/model context. Change the project model from the main project channel.',
       ephemeral: true,
     });
     return;
   }
 
-  // Determine current model
-  const currentModel = project.models?.claude || config.defaultModel || 'SDK default';
-
-  const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle('🤖 Model Picker')
-    .setDescription(`**Current model:** \`${currentModel}\`\n\nSelect a model from the dropdown, or use \`/model\` with the \`custom\` option to set any model name.`)
-    .setTimestamp();
-
-  // Check both the inline choice picker and the custom text option
-  const pickedModel = interaction.options.getString('model');
-  const customValue = interaction.options.getString('custom');
-  const directValue = pickedModel || customValue;
-
-  if (directValue) {
-    // Direct set via /model model:<choice> or /model custom:<value>
-    const modelToSet = directValue === '__default__' ? '' : directValue;
-    updateProjectModel(project.name, modelToSet);
-
-    const displayModel = modelToSet || 'SDK default';
-    const selectedLabel = MODEL_OPTIONS.find(o => o.value === directValue)?.label ?? displayModel;
-    const confirmEmbed = new EmbedBuilder()
-      .setColor(0x2ecc71)
-      .setTitle('✅ Model Updated')
-      .setDescription(`Model for **${project.name}** set to **${selectedLabel}** (\`${displayModel}\`)`)
-      .setTimestamp();
-
-    await interaction.reply({ embeds: [confirmEmbed] });
+  const project = dependencies.getProjectByChannel(interaction.channelId);
+  if (!project || interaction.channelId !== project.agentChannelId) {
+    await interaction.reply({ content: 'This command can only be used in a project channel.', ephemeral: true });
     return;
   }
 
-  // Show interactive picker
+  const provider = project.defaultProvider;
+  const pickedModel = interaction.options.getString('model');
+  const customValue = interaction.options.getString('custom');
+  const directValue = pickedModel || customValue;
+  const currentModel = project.models?.[provider]
+    || (provider === 'claude' ? dependencies.defaultClaudeModel : '')
+    || 'provider default';
+
+  if (directValue) {
+    const modelToSet = directValue === '__default__' ? '' : directValue;
+    dependencies.updateProjectModel(project.name, modelToSet, provider);
+    const display = modelToSet || 'provider default';
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle('✅ Model Updated')
+        .setDescription(`${provider} model for **${project.name}** set to \`${display}\`.`)
+        .setTimestamp()],
+    });
+    return;
+  }
+
+  if (provider !== 'claude') {
+    await interaction.reply({
+      content: 'Interactive Codex model selection will be added with the Codex App Server adapter in Phase 2. Use the `custom` option only after that provider is installed.',
+      ephemeral: true,
+    });
+    return;
+  }
+
   const selectMenu = new StringSelectMenuBuilder()
-    .setCustomId('model_select')
-    .setPlaceholder('Choose a model...')
-    .addOptions(
-      MODEL_OPTIONS.map(opt => {
-        const builder = new StringSelectMenuOptionBuilder()
-          .setLabel(opt.label)
-          .setValue(opt.value)
-          .setDescription(opt.description);
-        if (opt.emoji) builder.setEmoji(opt.emoji);
-        // Mark current model as default
-        if (opt.value === project.models?.claude || (opt.value === '__default__' && !project.models?.claude)) {
-          builder.setDefault(true);
-        }
-        return builder;
-      })
-    );
-
+    .setCustomId(`model_select:${project.name}:${provider}`.slice(0, 100))
+    .setPlaceholder('Choose a Claude model...')
+    .addOptions(CLAUDE_MODEL_OPTIONS.map(option => {
+      const builder = new StringSelectMenuOptionBuilder()
+        .setLabel(option.label)
+        .setValue(option.value)
+        .setDescription(option.description);
+      if (option.emoji) builder.setEmoji(option.emoji);
+      if (option.value === project.models?.claude
+        || (option.value === '__default__' && !project.models?.claude)) {
+        builder.setDefault(true);
+      }
+      return builder;
+    }));
   const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
-
   const reply = await interaction.reply({
-    embeds: [embed],
+    embeds: [new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle('🤖 Claude Model Picker')
+      .setDescription(`Current model: \`${currentModel}\`.`)
+      .setTimestamp()],
     components: [row],
     fetchReply: true,
   });
 
-  // Wait for selection
   try {
-    const selectInteraction = await reply.awaitMessageComponent({
+    const selection = await reply.awaitMessageComponent({
       componentType: ComponentType.StringSelect,
       time: 60_000,
+      filter: candidate => candidate.user.id === interaction.user.id,
     });
-
-    const selected = selectInteraction.values[0];
+    const selected = selection.values[0];
     const modelToSet = selected === '__default__' ? '' : selected;
-    updateProjectModel(project.name, modelToSet);
-
-    const displayModel = modelToSet || 'SDK default';
-    const selectedLabel = MODEL_OPTIONS.find(o => o.value === selected)?.label ?? selected;
-
-    const confirmEmbed = new EmbedBuilder()
-      .setColor(0x2ecc71)
-      .setTitle('✅ Model Updated')
-      .setDescription(`Model for **${project.name}** set to **${selectedLabel}** (\`${displayModel}\`)`)
-      .setTimestamp();
-
-    // Disable the select menu
+    dependencies.updateProjectModel(project.name, modelToSet, provider);
     selectMenu.setDisabled(true);
-    const disabledRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
-
-    await selectInteraction.update({ embeds: [confirmEmbed], components: [disabledRow] });
+    await selection.update({
+      embeds: [new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle('✅ Model Updated')
+        .setDescription(`Claude model for **${project.name}** set to \`${modelToSet || 'provider default'}\`.`)
+        .setTimestamp()],
+      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu)],
+    });
   } catch {
-    // Timeout — disable menu
     selectMenu.setDisabled(true);
-    const disabledRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
-    const timeoutEmbed = new EmbedBuilder()
-      .setColor(0x95a5a6)
-      .setTitle('⏰ Model Selection Timed Out')
-      .setDescription(`No selection made. Current model remains \`${currentModel}\`.`);
-
-    await interaction.editReply({ embeds: [timeoutEmbed], components: [disabledRow] }).catch(() => {});
+    await interaction.editReply({
+      embeds: [new EmbedBuilder()
+        .setColor(0x95a5a6)
+        .setTitle('⏰ Model Selection Timed Out')
+        .setDescription(`No selection made. Current model remains \`${currentModel}\`.`)],
+      components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu)],
+    }).catch(() => undefined);
   }
 }

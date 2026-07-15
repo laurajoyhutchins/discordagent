@@ -1,182 +1,233 @@
-import { Message, ChannelType } from 'discord.js';
-import { getProjectByChannel, updateProjectModel } from '../services/projectStore.js';
-import { runClaude, continueInThread } from '../services/claudeRunner.js';
-import { parseLoopCommand, startLoop, stopLoop, getLoopStatus, getLoopChannelForThread } from '../services/loopRunner.js';
+import type { GuildMember, Message } from 'discord.js';
+import type { AgentProviderId } from '../agents/contracts.js';
+import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
+import type { Project } from '../types.js';
+import {
+  getProjectByChannel,
+  updateProjectModel,
+  updateProjectProvider,
+} from '../services/projectStore.js';
+import {
+  parseLoopCommand,
+  startLoop,
+  stopLoop,
+  getLoopStatus,
+  getLoopChannelForThread,
+} from '../services/loopRunner.js';
+import { getTaskCoordinator } from '../services/taskCoordinatorService.js';
 import { isAuthorized } from '../utils/permissions.js';
-import { config } from '../config.js';
+import { redactSensitiveText } from '../utils/redaction.js';
 
-/**
- * Parse a `/model <model-name>` prefix from a message.
- * Returns { model, rest } if found, or { model: undefined, rest: original } if not.
- * Example: "/model fable-5 fix the bug" → { model: "fable-5", rest: "fix the bug" }
- */
-function parseModelPrefix(text: string): { model: string | undefined; rest: string } {
-  const match = text.match(/^\/model\s+(\S+)\s+([\s\S]+)$/i);
-  if (match) {
-    return { model: match[1], rest: match[2].trim() };
-  }
-  return { model: undefined, rest: text };
+export interface MessageHandlerDependencies {
+  coordinator: Pick<TaskCoordinator, 'startFromMessage' | 'continueFromMessage'>;
+  getProjectByChannel(channelId: string): Project | undefined;
+  updateProjectModel(name: string, model: string, provider?: AgentProviderId): void;
+  updateProjectProvider(name: string, provider: AgentProviderId): void;
+  isAuthorized(member: GuildMember | null | undefined): boolean;
+  defaultClaudeModel: string;
+  startLoop: typeof startLoop;
+  stopLoop: typeof stopLoop;
+  getLoopStatus: typeof getLoopStatus;
+  getLoopChannelForThread: typeof getLoopChannelForThread;
 }
 
-/** Log message receipt with gateway lag — helps diagnose delayed pickups. */
+function defaultDependencies(): MessageHandlerDependencies {
+  return {
+    coordinator: getTaskCoordinator(),
+    getProjectByChannel,
+    updateProjectModel,
+    updateProjectProvider,
+    isAuthorized,
+    defaultClaudeModel: process.env.CLAUDE_MODEL ?? '',
+    startLoop,
+    stopLoop,
+    getLoopStatus,
+    getLoopChannelForThread,
+  };
+}
+
+/** Parse a one-shot `/model <model-name> <prompt>` prefix. */
+export function parseModelPrefix(text: string): { model: string | undefined; rest: string } {
+  const match = text.match(/^\/model\s+(\S+)\s+([\s\S]+)$/i);
+  return match
+    ? { model: match[1], rest: match[2].trim() }
+    : { model: undefined, rest: text };
+}
+
 function logPickup(message: Message, prompt: string, lagMs: number): void {
   const flag = lagMs > 2000 ? ' ⚠️ SLOW PICKUP' : '';
-  console.log(`[msg] "${prompt.slice(0, 50)}" from ${message.author.tag} | gateway lag ${lagMs}ms${flag}`);
+  console.log(`[msg] "${redactSensitiveText(prompt).slice(0, 50)}" from ${message.author.tag} | gateway lag ${lagMs}ms${flag}`);
 }
 
-export async function handleMessage(message: Message): Promise<void> {
-  if (message.author.bot) return;
-  if (!message.guild) return;
+function errorMessage(error: unknown): string {
+  return redactSensitiveText(error instanceof Error ? error.message : String(error));
+}
 
+export async function handleMessage(
+  message: Message,
+  injected?: MessageHandlerDependencies,
+): Promise<void> {
+  if (message.author.bot || !message.guild) return;
   const prompt = message.content.trim();
   if (!prompt) return;
 
-  // Pickup lag (Discord send → our receipt) for diagnosing delivery delays.
-  // Logged only for project channels below to keep logs quiet.
+  const dependencies = injected ?? defaultDependencies();
   const lagMs = Date.now() - message.createdTimestamp;
 
-  // Check if this is a message in a thread (follow-up or loop thread)
   if (message.channel.isThread()) {
     const parentId = message.channel.parentId;
     if (!parentId) return;
-
-    const project = getProjectByChannel(parentId);
+    const project = dependencies.getProjectByChannel(parentId);
     if (!project || parentId !== project.agentChannelId) return;
 
     logPickup(message, prompt, lagMs);
-
     const member = await message.guild.members.fetch(message.author.id).catch(() => null);
-    if (!isAuthorized(member)) return;
+    if (!dependencies.isAuthorized(member)) return;
 
-    // Handle /stop-loop inside a loop thread
     const lower = prompt.toLowerCase();
     if (lower.startsWith('/stop-loop') || lower.startsWith('/stoploop') || lower.startsWith('/stop loop')) {
-      const loopChannelId = getLoopChannelForThread(message.channel.id);
-      if (loopChannelId) {
-        await stopLoop(loopChannelId, message);
-        return;
-      }
-      await message.reply('No loop is associated with this thread.');
+      const loopChannelId = dependencies.getLoopChannelForThread(message.channel.id);
+      if (loopChannelId) await dependencies.stopLoop(loopChannelId, message);
+      else await message.reply('No loop is associated with this thread.');
       return;
     }
 
-    // Handle /status inside a loop thread
     if (lower === '/status') {
-      const loopChannelId = getLoopChannelForThread(message.channel.id);
-      if (loopChannelId) {
-        const status = getLoopStatus(loopChannelId);
-        if (status) {
-          await message.reply(status);
-          return;
-        }
-      }
+      const loopChannelId = dependencies.getLoopChannelForThread(message.channel.id);
+      const status = loopChannelId ? dependencies.getLoopStatus(loopChannelId) : null;
+      if (status) await message.reply(status);
+      else await message.reply('No loop is associated with this thread.');
+      return;
     }
 
-    // Bare /model with no prompt — nothing to run, show usage instead
+    if (lower.startsWith('/provider')) {
+      await message.reply('A task thread keeps the provider it started with. Change the project default in the main project channel.');
+      return;
+    }
+
     if (/^\/model(\s+\S+)?$/i.test(prompt)) {
       await message.reply(
-        'Usage in threads: `/model <name> <prompt>` for a one-shot model override.\n' +
-        'To change the project default, use `/model <name>` (or the `/model` slash command) in the main channel.'
+        'Usage in threads: `/model <name> <prompt>` for a one-shot model override. ' +
+        'Change the project default with `/model <name>` in the main project channel.',
       );
       return;
     }
 
-    const threadParsed = parseModelPrefix(prompt);
-    await continueInThread(threadParsed.rest, project.workingDirectory, project.name, message, threadParsed.model);
+    const parsed = parseModelPrefix(prompt);
+    try {
+      await dependencies.coordinator.continueFromMessage({
+        prompt: parsed.rest,
+        message,
+        ...(parsed.model ? { model: parsed.model } : {}),
+      });
+    } catch (error) {
+      await message.reply(`Unable to continue this task: ${errorMessage(error)}`);
+    }
     return;
   }
 
-  // Main channel message — check if it's a project channel
-  const project = getProjectByChannel(message.channelId);
-  if (!project) return;
-  if (message.channelId !== project.agentChannelId) return;
+  const project = dependencies.getProjectByChannel(message.channelId);
+  if (!project || message.channelId !== project.agentChannelId) return;
 
   logPickup(message, prompt, lagMs);
-
   const member = await message.guild.members.fetch(message.author.id).catch(() => null);
-  if (!isAuthorized(member)) {
+  if (!dependencies.isAuthorized(member)) {
     await message.reply('You are not authorized to use this bot.');
     return;
   }
 
-  // Parse /model prefix before checking for bot commands
-  const { model, rest: actualPrompt } = parseModelPrefix(prompt);
-
-  // Handle bot commands before sending to Claude
-  // Use original prompt for command detection (don't strip /model for other / commands)
-  if (!model && prompt.startsWith('/')) {
-    const handled = await handleBotCommand(prompt, project, message);
+  const { model: oneShotModel, rest: actualPrompt } = parseModelPrefix(prompt);
+  if (!oneShotModel && prompt.startsWith('/')) {
+    const handled = await handleBotCommand(prompt, project, message, dependencies);
     if (handled) return;
   }
 
-  // Start a fresh Claude session in a new thread — no session resume.
-  // Only thread follow-ups (continueInThread) resume existing sessions.
-  await runClaude(actualPrompt, project.workingDirectory, project.name, message, undefined, model);
+  const resolvedModel = oneShotModel
+    ?? project.models?.[project.defaultProvider]
+    ?? (project.defaultProvider === 'claude' ? dependencies.defaultClaudeModel : undefined);
+
+  try {
+    await dependencies.coordinator.startFromMessage({
+      projectName: project.name,
+      prompt: actualPrompt,
+      message,
+      provider: project.defaultProvider,
+      ...(resolvedModel ? { model: resolvedModel } : {}),
+    });
+  } catch (error) {
+    await message.reply(`Unable to start this task: ${errorMessage(error)}`);
+  }
 }
 
-/**
- * Handle bot-level commands (prefixed with /).
- * Returns true if the command was handled, false if it should be passed to Claude.
- */
 async function handleBotCommand(
   content: string,
-  project: import('../types.js').Project,
-  message: Message
+  project: Project,
+  message: Message,
+  dependencies: MessageHandlerDependencies,
 ): Promise<boolean> {
   const lower = content.toLowerCase();
 
-  // /model [name] — show or persistently set this project's default model.
-  // (`/model <name> <prompt>` is handled earlier as a one-shot override.)
-  if (lower === '/model' || /^\/model\s+\S+$/i.test(content)) {
-    const arg = content.split(/\s+/)[1];
-    if (!arg) {
-      const current = project.models?.claude || config.defaultModel || 'SDK default';
-      await message.reply(
-        `Current model for **${project.name}**: \`${current}\`\n` +
-        'Set it with `/model <name>` (e.g. `sonnet`, `opus`, `haiku`), or prefix a prompt with `/model <name>` for a one-shot override.'
-      );
+  if (lower === '/provider' || /^\/provider\s+\S+$/i.test(content)) {
+    const requested = content.split(/\s+/)[1]?.toLowerCase() as AgentProviderId | undefined;
+    if (!requested) {
+      await message.reply(`Default provider for **${project.name}**: \`${project.defaultProvider}\`.`);
       return true;
     }
-    updateProjectModel(project.name, arg);
-    await message.reply(`Model for **${project.name}** set to \`${arg}\`.`);
+    if (requested === 'codex') {
+      await message.reply('Codex App Server support arrives in Phase 2. The project provider was not changed.');
+      return true;
+    }
+    if (requested !== 'claude') {
+      await message.reply('Provider must be `claude` or `codex`.');
+      return true;
+    }
+    dependencies.updateProjectProvider(project.name, 'claude');
+    await message.reply(`Default provider for **${project.name}** set to **Claude**.`);
     return true;
   }
 
-  // /loop [interval] <prompt>
+  if (lower === '/model' || /^\/model\s+\S+$/i.test(content)) {
+    const arg = content.split(/\s+/)[1];
+    const provider = project.defaultProvider;
+    if (!arg) {
+      const current = project.models?.[provider]
+        || (provider === 'claude' ? dependencies.defaultClaudeModel : '')
+        || 'provider default';
+      await message.reply(
+        `Current ${provider} model for **${project.name}**: \`${current}\`.\n` +
+        'Set it with `/model <name>`, or prefix a prompt with `/model <name>` for a one-shot override.',
+      );
+      return true;
+    }
+    dependencies.updateProjectModel(project.name, arg, provider);
+    await message.reply(`${provider} model for **${project.name}** set to \`${arg}\`.`);
+    return true;
+  }
+
   if (lower.startsWith('/loop')) {
     const parsed = parseLoopCommand(content);
     if (!parsed) {
       await message.reply(
         '**Usage:** `/loop [interval] <prompt>`\n' +
-        'Examples:\n' +
-        '- `/loop 5m check for failing tests`\n' +
-        '- `/loop 1h summarize git log`\n' +
-        '- `/loop review open PRs` (defaults to 10m)'
+        'Examples:\n- `/loop 5m check for failing tests`\n- `/loop 1h summarize git log`\n' +
+        '- `/loop review open PRs` (defaults to 10m)',
       );
       return true;
     }
-
-    await startLoop(parsed.intervalMs, parsed.prompt, project, message);
+    await dependencies.startLoop(parsed.intervalMs, parsed.prompt, project, message);
     return true;
   }
 
-  // /stop-loop
   if (lower.startsWith('/stop-loop') || lower.startsWith('/stoploop') || lower.startsWith('/stop loop')) {
-    await stopLoop(project.agentChannelId, message);
+    await dependencies.stopLoop(project.agentChannelId, message);
     return true;
   }
 
-  // /status — show loop status
   if (lower === '/status') {
-    const status = getLoopStatus(project.agentChannelId);
-    if (status) {
-      await message.reply(status);
-    } else {
-      await message.reply('No loop running. Send a message to start a Claude session, or use `/loop` to start a recurring task.');
-    }
+    const status = dependencies.getLoopStatus(project.agentChannelId);
+    await message.reply(status ?? 'No loop running. Send a message to start an agent task, or use `/loop` for recurring work.');
     return true;
   }
 
-  // Unknown / command — pass through to Claude
   return false;
 }

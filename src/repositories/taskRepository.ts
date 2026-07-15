@@ -31,9 +31,26 @@ export interface TaskRepository {
   createWithWorktree(input: CreateTaskTransaction): TaskRecord;
   attachProviderSession(taskId: string, session: ProviderSession): void;
   transition(taskId: string, expected: readonly TaskStatus[], next: TaskStatus): TaskRecord;
+  findById(taskId: string): TaskRecord | undefined;
   findByThreadId(threadId: string): TaskRecord | undefined;
+  getWorktree(taskId: string): WorktreeRecord | undefined;
+  markWorktreeRemoved(taskId: string, removedAt?: number): void;
+  reopenForContinuation(taskId: string): TaskRecord;
   listRecoverable(): TaskRecord[];
   saveResult(taskId: string, result: TaskResult): void;
+}
+
+
+
+interface WorktreeRow {
+  id: string;
+  task_id: string;
+  repository_path: string;
+  worktree_path: string;
+  branch_name: string;
+  base_ref: string;
+  created_at: number;
+  removed_at: number | null;
 }
 
 interface TaskRow {
@@ -102,6 +119,21 @@ function toTaskRecord(row: TaskRow): TaskRecord {
     ...(row.started_at === null ? {} : { startedAt: row.started_at }),
     ...(row.completed_at === null ? {} : { completedAt: row.completed_at }),
     ...(row.provider_session_id === null ? {} : { providerSessionId: row.provider_session_id }),
+  };
+}
+
+
+
+function toWorktreeRecord(row: WorktreeRow): WorktreeRecord {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    repositoryPath: row.repository_path,
+    worktreePath: row.worktree_path,
+    branchName: row.branch_name,
+    baseRef: row.base_ref,
+    createdAt: row.created_at,
+    ...(row.removed_at === null ? {} : { removedAt: row.removed_at }),
   };
 }
 
@@ -225,9 +257,62 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
       return requireTask(taskId);
     },
 
+    findById(taskId: string): TaskRecord | undefined {
+      const row = selectById.get(taskId) as TaskRow | undefined;
+      return row ? toTaskRecord(row) : undefined;
+    },
+
     findByThreadId(threadId: string): TaskRecord | undefined {
       const row = selectByThread.get(threadId) as TaskRow | undefined;
       return row ? toTaskRecord(row) : undefined;
+    },
+
+    getWorktree(taskId: string): WorktreeRecord | undefined {
+      const row = db.raw.prepare(`
+        SELECT id, task_id, repository_path, worktree_path,
+               branch_name, base_ref, created_at, removed_at
+        FROM worktrees
+        WHERE task_id = ?
+      `).get(taskId) as WorktreeRow | undefined;
+      return row ? toWorktreeRecord(row) : undefined;
+    },
+
+    markWorktreeRemoved(taskId: string, removedAt = Date.now()): void {
+      const result = db.raw.prepare(`
+        UPDATE worktrees
+        SET removed_at = ?
+        WHERE task_id = ? AND removed_at IS NULL
+      `).run(removedAt, taskId);
+      if (result.changes !== 1) {
+        throw new Error(`Active worktree for task "${taskId}" not found`);
+      }
+    },
+
+    reopenForContinuation(taskId: string): TaskRecord {
+      const reopen = db.raw.transaction(() => {
+        const task = requireTask(taskId);
+        if (!TERMINAL_STATUSES.has(task.status)) {
+          throw new Error(`Task "${taskId}" must be terminal before continuation`);
+        }
+        if (!task.providerSessionId) {
+          throw new Error(`Task "${taskId}" has no provider session to continue`);
+        }
+        const worktree = db.raw.prepare(`
+          SELECT removed_at FROM worktrees WHERE task_id = ?
+        `).get(taskId) as { removed_at: number | null } | undefined;
+        if (!worktree || worktree.removed_at !== null) {
+          throw new Error(`Task "${taskId}" has no active worktree to continue`);
+        }
+
+        db.raw.prepare('DELETE FROM task_results WHERE task_id = ?').run(taskId);
+        db.raw.prepare(`
+          UPDATE tasks
+          SET status = 'starting', completed_at = NULL, updated_at = ?
+          WHERE id = ?
+        `).run(Date.now(), taskId);
+      });
+      reopen();
+      return requireTask(taskId);
     },
 
     listRecoverable(): TaskRecord[] {
@@ -259,11 +344,13 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
         INSERT INTO task_results (
           task_id, outcome, summary, verification_json,
           unresolved_json, usage_json, completed_at
-        ) VALUES (?, ?, ?, '[]', '[]', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run(
         taskId,
         result.outcome,
         summary,
+        JSON.stringify(result.verification ?? []),
+        JSON.stringify(result.unresolved ?? []),
         result.usage ? JSON.stringify(result.usage) : null,
         result.completedAt,
       );

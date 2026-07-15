@@ -28,7 +28,7 @@ function tempPaths() {
 }
 
 describe('projectStore compatibility facade', () => {
-  it('keeps live sessions and Roborev credentials ephemeral', () => {
+  it('keeps live sessions ephemeral and discards legacy Roborev credentials', () => {
     const paths = tempPaths();
     writeFileSync(paths.legacyPath, JSON.stringify({ projects: [{
       name: 'reading',
@@ -42,10 +42,8 @@ describe('projectStore compatibility facade', () => {
     }] }));
 
     initializeProjectStore(paths);
-    expect(getProject('reading')).toMatchObject({
-      roborevWebhookId: 'webhook-1',
-      roborevWebhookToken: 'token-1',
-    });
+    expect(getProject('reading')).not.toHaveProperty('roborevWebhookId');
+    expect(getProject('reading')).not.toHaveProperty('roborevWebhookToken');
     expect(getProject('reading')?.legacySessionId).toBeUndefined();
 
     updateProjectSession('reading', 'live-session');
@@ -56,7 +54,7 @@ describe('projectStore compatibility facade', () => {
     expect(getProject('reading')?.legacySessionId).toBeUndefined();
   });
 
-  it('persists project fields while keeping newly issued webhook credentials in memory', () => {
+  it('persists project fields without accepting new webhook credentials', () => {
     const paths = tempPaths();
     initializeProjectStore(paths);
 
@@ -67,14 +65,11 @@ describe('projectStore compatibility facade', () => {
       agentChannelId: 'agent-2',
       defaultProvider: 'claude',
       roborevChannelId: 'review-2',
-      roborevWebhookId: 'webhook-2',
-      roborevWebhookToken: 'token-2',
     });
 
-    expect(getProject('factory-floor')).toMatchObject({
-      roborevWebhookId: 'webhook-2',
-      roborevWebhookToken: 'token-2',
-    });
+    expect(getProject('factory-floor')).toMatchObject({ roborevChannelId: 'review-2' });
+    expect(getProject('factory-floor')).not.toHaveProperty('roborevWebhookId');
+    expect(getProject('factory-floor')).not.toHaveProperty('roborevWebhookToken');
     expect(removeProject('factory-floor')?.name).toBe('factory-floor');
     expect(getProject('factory-floor')).toBeUndefined();
   });

@@ -9,8 +9,6 @@ interface ChannelSetup {
   categoryId: string;
   agentChannelId: string;
   roborevChannelId?: string;
-  roborevWebhookId?: string;
-  roborevWebhookToken?: string;
 }
 
 export async function createProjectChannels(
@@ -31,7 +29,6 @@ export async function createProjectChannels(
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
         PermissionFlagsBits.ManageChannels,
-        PermissionFlagsBits.ManageWebhooks,
         PermissionFlagsBits.CreatePublicThreads,
         PermissionFlagsBits.SendMessagesInThreads,
       ],
@@ -44,16 +41,16 @@ export async function createProjectChannels(
     permissionOverwrites,
   });
 
-  const claudeChannel = await guild.channels.create({
-    name: 'claude',
+  const agentChannel = await guild.channels.create({
+    name: 'agent',
     type: ChannelType.GuildText,
     parent: category.id,
-    topic: `Claude Code prompts for ${projectName}`,
+    topic: `Agent tasks for ${projectName}`,
   });
 
   const result: ChannelSetup = {
     categoryId: category.id,
-    agentChannelId: claudeChannel.id,
+    agentChannelId: agentChannel.id,
   };
 
   if (includeRoborev) {
@@ -64,14 +61,7 @@ export async function createProjectChannels(
       topic: `Roborev code reviews for ${projectName}`,
     });
 
-    const webhook = await roborevChannel.createWebhook({
-      name: `roborev-${projectName}`,
-      reason: `Roborev webhook for project ${projectName}`,
-    });
-
     result.roborevChannelId = roborevChannel.id;
-    result.roborevWebhookId = webhook.id;
-    result.roborevWebhookToken = webhook.token!;
   }
 
   return result;

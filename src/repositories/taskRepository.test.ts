@@ -170,6 +170,8 @@ describe('TaskRepository', () => {
       startedAt: 100,
       completedAt: 200,
       summary: 'Implemented the registry',
+      verification: ['npm test: passed'],
+      unresolved: ['Choose persistence backend'],
       usage: { inputTokens: 10, outputTokens: 4 },
     };
     expect(() => tasks.saveResult('result-task', result)).toThrow(/terminal/i);
@@ -179,14 +181,48 @@ describe('TaskRepository', () => {
       .toThrow(/provider.*match/i);
     tasks.saveResult('result-task', result);
 
-    expect(db.raw.prepare('SELECT outcome, summary, usage_json FROM task_results WHERE task_id = ?')
+    expect(db.raw.prepare('SELECT outcome, summary, verification_json, unresolved_json, usage_json FROM task_results WHERE task_id = ?')
       .get('result-task')).toEqual({
       outcome: 'completed',
       summary: 'Implemented the registry',
+      verification_json: JSON.stringify(result.verification),
+      unresolved_json: JSON.stringify(result.unresolved),
       usage_json: JSON.stringify(result.usage),
     });
     expect(() => tasks.saveResult('result-task', result)).toThrow(/already.*result/i);
   });
+
+  it('retrieves worktree state, marks clean removal, and reopens a terminal task for continuation', () => {
+    const { db, tasks } = setup();
+    tasks.createWithWorktree(transaction('continuation'));
+    tasks.attachProviderSession('continuation', {
+      provider: 'claude', sessionId: 'session-continuation', createdAt: 10,
+    });
+    tasks.transition('continuation', ['created'], 'starting');
+    tasks.transition('continuation', ['starting'], 'running');
+    tasks.transition('continuation', ['running'], 'completed');
+    tasks.saveResult('continuation', {
+      provider: 'claude', outcome: 'completed', exitType: 'success', startedAt: 10, completedAt: 20,
+    });
+
+    expect(tasks.findById('continuation')).toMatchObject({ status: 'completed' });
+    expect(tasks.getWorktree('continuation')).toMatchObject({
+      taskId: 'continuation',
+      branchName: 'agent/claude/continuation',
+      worktreePath: '/worktrees/continuation',
+    });
+
+    expect(tasks.reopenForContinuation('continuation')).toMatchObject({
+      status: 'starting',
+      providerSessionId: 'session-continuation',
+    });
+    expect(db.raw.prepare('SELECT 1 FROM task_results WHERE task_id = ?').get('continuation'))
+      .toBeUndefined();
+
+    tasks.markWorktreeRemoved('continuation', 1234);
+    expect(tasks.getWorktree('continuation')).toMatchObject({ removedAt: 1234 });
+  });
+
 });
 
 describe('EventRepository', () => {

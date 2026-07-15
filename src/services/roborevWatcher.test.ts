@@ -1,0 +1,78 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { Client, TextChannel } from 'discord.js';
+import type { Project } from '../types.js';
+
+process.env.DISCORD_TOKEN = 'test';
+process.env.DISCORD_CLIENT_ID = 'test';
+process.env.DISCORD_GUILD_ID = 'test';
+process.env.AUTHORIZED_ROLE_IDS = 'role';
+
+const {
+  anyProjectHasRoborev,
+  handleRoborevEvent,
+} = await import('./roborevWatcher.js');
+
+const project: Project = {
+  name: 'factory-floor',
+  workingDirectory: '/repos/factory-floor',
+  categoryId: 'category-1',
+  agentChannelId: 'agent-1',
+  defaultProvider: 'claude',
+  roborevChannelId: 'review-1',
+};
+
+function client(send = vi.fn(async () => undefined)) {
+  return {
+    channels: {
+      fetch: vi.fn(async () => ({ send }) as unknown as TextChannel),
+    },
+  } as unknown as Client;
+}
+
+describe('Roborev bot-channel routing', () => {
+  it('recognizes channel-based Roborev configuration without webhook credentials', () => {
+    expect(anyProjectHasRoborev(() => [project])).toBe(true);
+  });
+
+  it('posts review events through the bot-authenticated channel', async () => {
+    const send = vi.fn(async () => undefined);
+    const discordClient = client(send);
+
+    await handleRoborevEvent({
+      type: 'review.started',
+      ts: new Date().toISOString(),
+      job_id: 12,
+      repo: '/repos/factory-floor',
+      repo_name: 'factory-floor',
+      sha: '1234567890abcdef',
+      agent: 'reviewer',
+    }, {
+      client: discordClient,
+      getProjects: () => [project],
+      getReviewBody: vi.fn(async () => ''),
+    });
+
+    expect(discordClient.channels.fetch).toHaveBeenCalledWith('review-1');
+    expect(send).toHaveBeenCalledWith({ embeds: [expect.anything()] });
+  });
+
+  it('does not route a similarly prefixed repository to the wrong project', async () => {
+    const send = vi.fn(async () => undefined);
+
+    await handleRoborevEvent({
+      type: 'review.started',
+      ts: new Date().toISOString(),
+      job_id: 13,
+      repo: '/repos/factory-floor-copy',
+      repo_name: 'factory-floor-copy',
+      sha: '1234567890abcdef',
+      agent: 'reviewer',
+    }, {
+      client: client(send),
+      getProjects: () => [project],
+      getReviewBody: vi.fn(async () => ''),
+    });
+
+    expect(send).not.toHaveBeenCalled();
+  });
+});

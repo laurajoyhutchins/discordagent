@@ -1,154 +1,222 @@
-# CLAUDE.md
+# Discord Agent Development Guide
 
-## Project Overview
+## Project overview
 
-DiscordClaude is a Discord bot that orchestrates Claude Code remotely via the Anthropic Agent SDK. Users send prompts in Discord `#claude` channels, and the bot runs Claude Code locally, streaming responses back as threaded messages with rich embeds for tool usage.
+Discord Agent is a provider-neutral Discord orchestration runtime derived from DiscordClaude. Phase 1 executes Claude Code through `ClaudeProvider`; later phases add Codex App Server and a persistent PM-style primary agent.
 
-## Tech Stack
+The generic runtime must not depend directly on the Anthropic SDK. Provider-specific behavior belongs under `src/agents/<provider>/` and emits normalized `AgentEvent` values.
 
-- **Runtime:** Node.js v22+, TypeScript (ES2022 modules)
-- **Discord:** discord.js v14
-- **AI:** @anthropic-ai/claude-agent-sdk (Agent SDK, uses Pro/Max subscription — no API key)
-- **Build:** tsx (dev), tsc (production)
+## Tech stack
 
-## Quick Reference
+- Node.js 22+
+- TypeScript ES2022 modules
+- discord.js 14
+- SQLite through `better-sqlite3`
+- Anthropic Claude Agent SDK in `src/agents/claude/`
+- Vitest
+- Git CLI through `execFile` with `shell: false`
+
+## Commands
 
 ```bash
-npm run dev        # Run in development mode (tsx)
-npm run build      # Compile TypeScript to dist/
-npm start          # Run compiled output (node dist/index.js)
-npm run register   # Force re-register slash commands with Discord
+npm ci
+npm run dev
+npm run register
+npm test
+npm run build
+npm run check
 ```
 
 ## Architecture
 
-```
-Discord message → messageHandler.ts → claudeRunner.ts → Agent SDK query()
-                                                       ↓
-Discord slash cmd → interactionHandler.ts → command handler (addProject, cancel, loop, etc.)
-                                                       ↓
-                  discordStreamer.ts ← streams response ← Agent SDK
-                  (throttled edits, tool embeds, approval buttons)
-```
-
-### Key Design Decisions
-
-- **Single-instance lock** — On startup the bot binds a localhost port (`INSTANCE_LOCK_PORT`, default 47831) before logging in. A second process gets `EADDRINUSE` and exits, preventing duplicate message handling from multiple instances sharing one token.
-- **Model resolution order** — Per-message `/model <name>` prefix > per-project model (set via `/model`, stored in projects.json) > `CLAUDE_MODEL` env var > SDK default.
-- **Sessions map by thread ID** — `activeSessions` is keyed by thread ID, allowing multiple concurrent threads per `#claude` channel. Each thread has its own independent session with its own `sessionId` and `AbortController`.
-- **Tool approval is collect-then-verify** — `awaitMessageComponent` filters must be synchronous, so we accept any button click, then verify auth with an async `members.fetch()` after. Unauthorized clicks get an ephemeral rejection and the bot waits for the next click.
-- **setTimeout chaining for loops** — `setInterval` could cause overlapping iterations if Claude runs longer than the interval. We use `setTimeout` after each iteration completes. Loop embeds include a "Stop Loop" button handled via button interaction in `interactionHandler.ts`.
-- **`/cancel` is context-aware** — In a thread, cancels that thread's session. In the main channel, cancels all active sessions and any running loop.
-- **In-memory project cache** — `projectStore.ts` loads from disk once on startup, then serves from cache. Writes are async and serialized via a promise queue to prevent race conditions.
-- **Settings restricted to `['user']`** — Claude Code's `settingSources` is set to `['user']` only (not `['user', 'project', 'local']`) to prevent malicious project-level `.claude/` configs from altering behavior. Users' `~/.claude/settings.json` is respected.
-- **Roborev is optional** — Not set up by default. Auto-detected if the `roborev` CLI is available AND the project has roborev config. Can be explicitly enabled/disabled via the `roborev` option on `/add-project`.
-- **Non-git directories** — Blocked by default. Set `ALLOW_NON_GIT=true` to allow registering non-git directories. This is a safety trade-off documented in the README.
-
-## File Guide
-
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Entry point — Discord client, event wiring, shutdown |
-| `src/config.ts` | Loads env vars, validates required ones |
-| `src/types.ts` | `Project`, `ProjectStore`, `ActiveSession` interfaces |
-| `src/commands/definitions.ts` | SlashCommandBuilder definitions for all slash commands |
-| `src/commands/addProject.ts` | Registers project, creates channels, optional roborev setup |
-| `src/commands/removeProject.ts` | Removes project, cancels session, deletes channels |
-| `src/commands/listProjects.ts` | Lists projects with status in ephemeral embed |
-| `src/commands/cancel.ts` | Cancels active Claude session via AbortController |
-| `src/commands/loop.ts` | Starts recurring prompt with interval validation |
-| `src/commands/stopLoop.ts` | Stops running loop |
-| `src/commands/usage.ts` | Shows rate limit utilization and session stats |
-| `src/commands/model.ts` | Per-project model picker (dropdown or direct option) |
-| `src/commands/register.ts` | Standalone script to register slash commands |
-| `src/handlers/interactionHandler.ts` | Routes slash commands, centralized auth check |
-| `src/handlers/messageHandler.ts` | Handles messages in `#claude` channels and threads |
-| `src/handlers/threadDeleteHandler.ts` | Cleans up sessions when threads are deleted |
-| `src/services/claudeRunner.ts` | Core — manages Agent SDK sessions, tool approval, timeouts |
-| `src/services/discordStreamer.ts` | Streams Claude output to Discord with throttled edits |
-| `src/services/projectStore.ts` | CRUD for projects.json with in-memory cache |
-| `src/services/channelManager.ts` | Creates/deletes Discord categories, channels, webhooks |
-| `src/services/loopRunner.ts` | Recurring prompt execution with setTimeout chaining |
-| `src/services/usageTracker.ts` | Captures rate limit events and session stats, posts to usage channel |
-| `src/services/roborevWatcher.ts` | Spawns `roborev stream`, routes reviews to webhooks |
-| `src/utils/permissions.ts` | `isAuthorized()` — role-based auth check |
-| `src/utils/chunker.ts` | Splits text into Discord-safe 1800-char chunks |
-
-## Auto-Approved Tools
-
-These tools run without requiring user approval (read-only, no side effects):
-
-- `Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`, `TodoRead`, `TodoWrite`
-
-All other tools (`Bash`, `Edit`, `Write`, `Agent`, etc.) require Allow/Deny button approval.
-
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DISCORD_TOKEN` | Yes | — | Bot token from Developer Portal |
-| `DISCORD_CLIENT_ID` | Yes | — | Application ID |
-| `DISCORD_GUILD_ID` | Yes | — | Server ID |
-| `AUTHORIZED_ROLE_IDS` | Yes | — | Comma-separated role IDs |
-| `NOTIFY_USER_ID` | No | `""` | User ID to ping on session completion |
-| `CLAUDE_TIMEOUT_MS` | No | `900000` | Session auto-cancel timeout (15 min) |
-| `ROBOREV_CLI_PATH` | No | `roborev` | Path to roborev binary |
-| `PROJECTS_BASE_DIR` | No | `""` | Restrict allowed project paths |
-| `ALLOW_NON_GIT` | No | `false` | Allow registering non-git directories |
-| `USAGE_CHANNEL_ID` | No | `""` | Channel ID for automatic usage stats posts |
-| `CLAUDE_MODEL` | No | `""` | Default model (alias like `sonnet` or exact ID); `/model` overrides per project |
-| `INSTANCE_LOCK_PORT` | No | `47831` | Localhost port held as a single-instance lock |
-
-## Claude Code Configuration
-
-The bot uses `settingSources: ['user']` in `claudeRunner.ts`, which means:
-
-- **Loaded:** `~/.claude/settings.json` (user-level settings)
-- **Ignored:** `.claude/settings.json` (project-level), `.claude/settings.local.json` (local)
-
-This is intentional for security — project-level configs could auto-approve dangerous tools. Users' pre-approved tools (e.g., `Bash(npm test)`) in their user settings carry over to the bot.
-
-To change this behavior (e.g., to also load project settings), modify the `settingSources` array in `claudeRunner.ts`. Be aware this weakens security if the bot manages untrusted repositories.
-
-## Security Model
-
-1. **Authorization** — All slash commands go through `interactionHandler.ts` which calls `isAuthorized()` before dispatching. Message-based commands check auth in `messageHandler.ts`. Individual handlers also have their own auth checks (defense-in-depth).
-2. **Tool approval** — The `canUseTool` callback in `claudeRunner.ts` gates destructive tools behind Discord button approval. Auth is verified on the button clicker.
-3. **Path traversal** — `addProject.ts` resolves symlinks with `realpathSync()` and validates against `PROJECTS_BASE_DIR` if configured.
-4. **No shell injection** — `roborevWatcher.ts` uses `execFile` (not `exec`/`execSync`) and `spawn` with `shell: false`.
-5. **Settings isolation** — Only user-level Claude Code settings are loaded. Project/local settings ignored to prevent trust escalation.
-
-## Common Tasks
-
-### Adding a new slash command
-
-1. Add the `SlashCommandBuilder` to `src/commands/definitions.ts`
-2. Create the handler in `src/commands/yourCommand.ts`
-3. Add the case to the switch in `src/handlers/interactionHandler.ts`
-4. Restart the bot (commands are registered on startup)
-
-### Adding a new text command
-
-1. Add parsing logic to `handleBotCommand()` in `src/handlers/messageHandler.ts`
-2. Text commands are prefixed with `/` and intercepted before being sent to Claude
-
-### Adding a new auto-approved tool
-
-Add the tool name to `AUTO_APPROVED_TOOLS` in `src/services/claudeRunner.ts`. Only add read-only tools with no side effects.
-
-### Enabling project-level Claude Code settings
-
-If you trust all registered projects, you can change `settingSources` in `src/services/claudeRunner.ts`:
-
-```typescript
-// Current (secure default):
-settingSources: ['user'],
-
-// To also load project settings:
-settingSources: ['user', 'project'],
-
-// To load everything (including local overrides):
-settingSources: ['user', 'project', 'local'],
+```text
+Discord messages / commands
+            │
+            ▼
+      TaskCoordinator
+       │     │      │
+       │     │      └── DiscordTaskRenderer + DiscordInteractionBroker
+       │     └───────── Task/Event/Project repositories → SQLite
+       └─────────────── WorktreeManager → isolated Git worktree
+            │
+            ▼
+      ProviderRegistry
+            │
+            └── ClaudeProvider → Claude Agent SDK
 ```
 
-> **Warning:** This allows `.claude/settings.json` in any registered project to auto-approve tools, which could be exploited by malicious repos.
+`TaskCoordinator` owns lifecycle ordering. Handlers must not call provider SDKs directly.
+
+## Required task-start ordering
+
+1. resolve the registered project and provider;
+2. verify provider availability;
+3. create or receive the Discord thread;
+4. create the Git branch and worktree;
+5. persist task and worktree identity transactionally;
+6. transition the task to `starting`;
+7. call the provider;
+8. persist the provider session immediately, before awaiting the completion promise;
+9. transition to `running`;
+10. persist normalized events and render them to Discord;
+11. persist the result and terminal status.
+
+If startup fails before task persistence, clean only the unpersisted clean worktree. Once a task record exists, preserve its worktree for inspection and recovery.
+
+## Core boundaries
+
+### Domain contracts
+
+`src/agents/contracts.ts` defines:
+
+- `AgentProviderId`
+- `AgentProvider`
+- `ProviderSession`
+- `ProviderRun`
+- `AgentEvent`
+- `TaskResult`
+- approval and user-question contracts
+
+Do not import Discord or provider SDK types into these contracts.
+
+### Providers
+
+`ProviderRegistry` resolves provider implementations. Phase 1 registers only `ClaudeProvider`.
+
+`ClaudeProvider` owns:
+
+- SDK query construction;
+- model resolution;
+- user-only settings isolation;
+- session start/resume;
+- cancellation;
+- Claude event normalization;
+- usage and rate-limit callbacks.
+
+Provider sessions are scoped by provider and immutable for a durable task. A continuation returning a different session identity is a failure.
+
+### Coordinator
+
+`TaskCoordinator` owns task creation, continuation, approval waiting states, cancellation, terminal results, safe closure, and restart recovery.
+
+A successful turn may be continued later. Continuation reopens the same task transactionally while retaining its provider, session, branch, worktree, and event history.
+
+### Discord
+
+`DiscordTaskRenderer` renders normalized events. `DiscordInteractionBroker` collects approvals and questions using task/request-scoped component IDs.
+
+Operational rules:
+
+- verify the clicking member after collecting an interaction;
+- consequential approval timeouts deny;
+- question timeouts return an explicit skipped answer;
+- never silently choose the first option;
+- ordinary completion messages emphasize outcome, branch, verification, and unresolved decisions—not token telemetry.
+
+### Persistence
+
+`src/db/` owns migrations and database setup. Repository modules under `src/repositories/` own SQL access.
+
+SQLite is authoritative for projects, tasks, worktrees, provider sessions, events, and results. `projectStore.ts` is a reduced compatibility facade for existing command modules; it delegates to `ProjectRepository` and does not maintain an independent JSON cache.
+
+Important invariants:
+
+- one task per Discord thread;
+- one immutable provider per task;
+- one worktree per Git-backed task;
+- provider/session composite uniqueness;
+- provider session stored before awaiting completion;
+- idempotent event writes when a dedupe key is supplied;
+- no credentials in SQLite.
+
+### Git worktrees
+
+`WorktreeManager` creates branches using:
+
+```text
+agent/<provider>/<slug>-<thread-suffix>
+```
+
+Base selection is explicit project base, then symbolic remote default, then current branch. Never add force flags to worktree removal, branch deletion, reset, or checkout. Dirty worktrees must be preserved.
+
+### Recovery
+
+At startup, nonterminal tasks become `interrupted`. `taskRecovery.ts` inspects the worktree and writes a checkpoint. `runtime.ts` attempts to post that checkpoint in the original thread. No provider turn is replayed automatically.
+
+### Roborev
+
+Roborev events are sent through the authenticated Discord bot client to `roborevChannelId`. Do not reintroduce webhook creation, tokens, DMs, or persisted webhook credentials.
+
+## Security rules
+
+- Keep global role authorization and path validation in front of task creation.
+- Use `execFile`/`spawn` with `shell: false` for external commands.
+- Treat repository content and provider output as untrusted.
+- Claude must keep `settingSources: ['user']`; project/local settings remain ignored.
+- Never log or persist Discord tokens, provider credentials, API keys, device codes, or webhook tokens.
+- Keep the provider-neutral redaction boundary in `src/utils/redaction.ts`; sanitize normalized events before SQLite, Discord, and logs.
+- Never auto-replay a partially executed provider turn.
+- Never silently switch provider, model, scope, or reasoning quality.
+- Never remove a dirty task worktree.
+
+## File guide
+
+| Area | Responsibility |
+|---|---|
+| `src/index.ts` | Discord client, lock/watchdog, runtime startup and shutdown. |
+| `src/services/runtime.ts` | DB/migration/repository/provider/coordinator assembly and recovery notification. |
+| `src/agents/contracts.ts` | Provider-neutral domain contracts. |
+| `src/agents/providerRegistry.ts` | Provider registration and lookup. |
+| `src/agents/claude/` | Claude SDK adapter and event normalization. |
+| `src/coordinator/` | Durable task lifecycle and restart recovery. |
+| `src/db/` | SQLite handle, schema, and migrations. |
+| `src/repositories/` | Project, task, event, and legacy-import persistence. |
+| `src/git/` | Safe Git process wrapper and worktree manager. |
+| `src/discord/` | Provider-neutral rendering and interaction collection. |
+| `src/handlers/` | Discord event routing into commands/coordinator. |
+| `src/commands/` | Administrative slash commands. |
+| `src/services/projectStore.ts` | Temporary reduced facade over `ProjectRepository`. |
+| `src/services/loopRunner.ts` | Non-overlapping recurring turns in one durable task. |
+| `src/services/roborevWatcher.ts` | Roborev CLI stream and bot-authenticated channel delivery. |
+| `src/services/usageTracker.ts` | Claude usage detail for `/usage`. |
+
+## Adding a provider
+
+1. Implement `AgentProvider` under `src/agents/<provider>/`.
+2. Normalize all provider output into `AgentEvent`.
+3. Resolve `ProviderRun.session` as soon as the provider session exists.
+4. Put authentication/account handling behind a provider-specific service.
+5. Add contract fixtures and failure/recovery tests.
+6. Register the provider in `runtime.ts` only after its complete lifecycle is available.
+7. Update `/provider` so selection succeeds only when the runtime can execute it safely.
+
+Do not add provider conditionals throughout handlers or the coordinator.
+
+## Adding a command
+
+1. Add the definition in `src/commands/definitions.ts`.
+2. Add a focused handler and tests in `src/commands/`.
+3. Route it from `src/handlers/interactionHandler.ts`.
+4. Keep authorization centralized and add defense-in-depth where the command causes consequential changes.
+
+## Testing expectations
+
+New behavior follows red-green-refactor. Use:
+
+- temporary SQLite files for repository tests;
+- real temporary Git repositories for worktree tests;
+- fake providers for coordinator lifecycle tests;
+- lightweight Discord thread/message fakes for rendering and handler tests;
+- provider message fixtures for adapter contract tests.
+
+Before a checkpoint:
+
+```bash
+npm test
+npm run build
+git diff --check
+```
+
+## Phase 1 limitations
+
+Codex is a recognized provider ID but is not executable. The primary-agent workspace, durable conversational memory, sibling provider handoffs, native polls, and usage-aware task admission are later phases. Do not simulate those capabilities in Phase 1 or silently fall back to Claude.

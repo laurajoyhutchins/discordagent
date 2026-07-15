@@ -1,8 +1,13 @@
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+
+const defaultDatabasePath = join(dirname(fileURLToPath(import.meta.url)), 'data', 'discordagent.sqlite');
+const databasePath = process.env.DATABASE_PATH ?? defaultDatabasePath;
+const defaultWorktreesBaseDir = join(dirname(databasePath), 'discordagent-worktrees');
 
 function required(key: string): string {
   const value = process.env[key];
@@ -47,4 +52,6 @@ export const config = {
   mcpServers: loadUserMcpServers(),
   usageChannelId: process.env.USAGE_CHANNEL_ID ?? '',
   defaultModel: process.env.CLAUDE_MODEL ?? '',
+  databasePath,
+  worktreesBaseDir: process.env.WORKTREES_BASE_DIR ?? defaultWorktreesBaseDir,
 } as const;

@@ -1,51 +1,37 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import { Message, AnyThreadChannel } from 'discord.js';
+import type { AnyThreadChannel, Message } from 'discord.js';
+import type {
+  AgentEvent,
+  AgentRunHost,
+  ApprovalRequest,
+  ProviderSession,
+  TaskResult,
+  UserAnswer,
+  UserQuestion,
+} from '../agents/contracts.js';
+import { ClaudeProvider } from '../agents/claude/claudeProvider.js';
 import { config } from '../config.js';
-import { DiscordStreamer } from './discordStreamer.js';
-import { updateProjectSession, getProject } from './projectStore.js';
-import { captureRateLimitEvent, captureSessionResult } from './usageTracker.js';
 import type { ActiveSession } from '../types.js';
+import { DiscordStreamer } from './discordStreamer.js';
+import { getProject, updateProjectSession } from './projectStore.js';
+import { captureRateLimitEvent, captureSessionResult } from './usageTracker.js';
 
-// Sessions keyed by THREAD ID — allows multiple concurrent threads per channel
-const activeSessions = new Map<string, ActiveSession>();
-
-// Regex matching lone (unpaired) Unicode surrogates — these break JSON serialization.
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-// Non-global version for .test() calls (global regexes have stale lastIndex issues)
-const HAS_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-
-/**
- * Strip lone surrogates from a string to prevent JSON serialization errors.
- * Discord messages and file contents can contain broken Unicode that the API rejects.
- */
-function sanitize(text: string): string {
-  return text.replace(LONE_SURROGATE, '\uFFFD');
+interface LegacyResult {
+  exitType: string;
+  cost?: number;
+  duration?: number;
+  sessionId?: string;
 }
 
-// Build a clean env object once at startup: exclude CLAUDECODE and any values
-// with unpaired Unicode surrogates.
-const cleanEnv: Record<string, string> = Object.fromEntries(
-  Object.entries(process.env).filter(
-    ([k, v]) => k !== 'CLAUDECODE' && v != null && !HAS_LONE_SURROGATE.test(v)
-  ) as [string, string][]
-);
+const activeSessions = new Map<string, ActiveSession>();
 
-// Tools that are auto-approved (read-only, no side effects)
-const AUTO_APPROVED_TOOLS = [
-  'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
-  'TodoRead', 'TodoWrite',
-];
-
-// Tool name prefixes that are auto-approved.
-// Note: Playwright tools are NOT read-only (they click, navigate, fill forms, etc.)
-// but are intentionally auto-approved to allow the bot to browse autonomously.
-const AUTO_APPROVED_PREFIXES = [
-  'mcp__playwright__',
-];
-
-// ── Thread naming helpers ──────────────────────────────────────────────
-// Discord rate-limits thread renames to ~2 per 10 min. We rename on
-// create and on finish only — never mid-stream.
+const claudeProvider = new ClaudeProvider({
+  timeoutMs: config.claudeTimeoutMs,
+  mcpServers: config.mcpServers,
+  defaultModel: config.defaultModel,
+  resolveProjectModel: projectName => getProject(projectName)?.models?.claude,
+  onRateLimit: captureRateLimitEvent,
+  onSessionResult: captureSessionResult,
+});
 
 function threadLabel(prompt: string): string {
   return prompt.slice(0, 85);
@@ -55,19 +41,194 @@ async function setThreadName(thread: AnyThreadChannel, name: string): Promise<vo
   try { await thread.setName(name.slice(0, 100)); } catch {}
 }
 
-// ── Model resolution ──────────────────────────────────────────────────
-
-/** Resolve which model to use: per-request override > project model > env default > SDK default */
-function resolveModel(override?: string, projectName?: string): string | undefined {
-  if (override) return override;
-  if (projectName) {
-    const project = getProject(projectName);
-    if (project?.model) return project.model;
+function parseInput(details: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(details) as unknown;
+    return typeof parsed === 'object' && parsed !== null
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
   }
-  return config.defaultModel || undefined;
 }
 
-// ── Public API ─────────────────────────────────────────────────────────
+function toolNameForFileEvent(event: Extract<AgentEvent, { type: 'file_change' }>): string {
+  const input = event.summary ? parseInput(event.summary) : {};
+  return input.old_string !== undefined || input.new_string !== undefined ? 'Edit' : 'Write';
+}
+
+function createHost(streamer: DiscordStreamer): AgentRunHost {
+  return {
+    async emit(event: AgentEvent): Promise<void> {
+      switch (event.type) {
+        case 'text_delta':
+          streamer.append(event.text);
+          break;
+        case 'command':
+          await streamer.sendToolUseEmbed('Bash', { command: event.command });
+          break;
+        case 'file_change': {
+          const input = event.summary ? parseInput(event.summary) : {};
+          await streamer.sendToolUseEmbed(toolNameForFileEvent(event), {
+            ...input,
+            file_path: input.file_path ?? input.path ?? event.paths[0],
+          });
+          break;
+        }
+        case 'status':
+          if (event.phase.startsWith('tool:')) {
+            await streamer.sendToolUseEmbed(
+              event.phase.slice('tool:'.length),
+              event.detail ? parseInput(event.detail) : {},
+            );
+          }
+          break;
+        case 'session_started':
+        case 'plan':
+        case 'approval_request':
+        case 'user_question':
+        case 'usage':
+        case 'completed':
+        case 'failed':
+          break;
+      }
+    },
+
+    async requestApproval(request: ApprovalRequest) {
+      const decision = await streamer.promptToolApproval(request.title, parseInput(request.details));
+      return decision;
+    },
+
+    async requestUserInput(question: UserQuestion): Promise<UserAnswer> {
+      const answers = await streamer.promptAskUserQuestion([{
+        question: question.prompt,
+        ...(question.options && question.options.length > 0
+          ? {
+            options: question.options.map(option => ({
+              label: option.value,
+              description: option.description ?? option.label,
+            })),
+          }
+          : {}),
+      }]);
+      const value = answers[question.prompt] ?? 'skip';
+      return { skipped: value === 'skip', values: value === 'skip' ? [] : [value] };
+    },
+  };
+}
+
+function legacyResult(result: TaskResult): LegacyResult {
+  return {
+    exitType: result.exitType,
+    ...(result.costUsd === undefined ? {} : { cost: result.costUsd }),
+    ...(result.durationMs === undefined ? {} : { duration: result.durationMs }),
+    ...(result.sessionId ? { sessionId: result.sessionId } : {}),
+  };
+}
+
+function failedResult(error: unknown, startedAt: number, sessionId?: string): TaskResult {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    provider: 'claude',
+    outcome: message.toLowerCase().includes('abort') ? 'cancelled' : 'failed',
+    exitType: message.toLowerCase().includes('abort') ? 'cancelled' : 'error',
+    startedAt,
+    completedAt: Date.now(),
+    ...(sessionId ? { sessionId } : {}),
+    summary: message,
+    ...(message.toLowerCase().includes('abort')
+      ? {}
+      : { error: { code: 'claude_provider_error', message, retryable: false } }),
+  };
+}
+
+async function executeInThread(input: {
+  prompt: string;
+  projectDir: string;
+  projectName: string;
+  thread: AnyThreadChannel;
+  streamer: DiscordStreamer;
+  reactMessage: Message | null;
+  existingSessionId?: string;
+  model?: string;
+}): Promise<TaskResult> {
+  const { thread } = input;
+  const startedAt = Date.now();
+  const activeSession: ActiveSession = {
+    abortController: new AbortController(),
+    channelId: thread.parentId!,
+    threadId: thread.id,
+    projectName: input.projectName,
+    sessionId: input.existingSessionId ?? null,
+    startedAt,
+    busy: true,
+  };
+  activeSessions.set(thread.id, activeSession);
+
+  const host = createHost(input.streamer);
+  const taskInput = {
+    taskId: thread.id,
+    projectName: input.projectName,
+    workingDirectory: input.projectDir,
+    channelId: thread.parentId!,
+    threadId: thread.id,
+    prompt: input.prompt,
+    ...(input.model ? { model: input.model } : {}),
+  };
+
+  async function runOnce(session?: ProviderSession): Promise<TaskResult> {
+    const run = session
+      ? await claudeProvider.continueTask({ ...taskInput, session }, host)
+      : await claudeProvider.startTask(taskInput, host);
+    activeSession.sessionId = run.session.sessionId;
+    updateProjectSession(input.projectName, run.session.sessionId);
+    return run.completion;
+  }
+
+  try {
+    const resumeSession = input.existingSessionId
+      ? {
+        provider: 'claude' as const,
+        sessionId: input.existingSessionId,
+        createdAt: activeSession.startedAt,
+      }
+      : undefined;
+    let result = await runOnce(resumeSession);
+
+    if (resumeSession && result.error?.code === 'session_encoding_error') {
+      console.warn(
+        `[claudeRunner] Session ${resumeSession.sessionId} has encoding errors, clearing and retrying fresh`,
+      );
+      updateProjectSession(input.projectName, '');
+      activeSession.sessionId = null;
+      input.streamer.append('\n⚠️ Session history corrupted — starting fresh session\n');
+      result = await runOnce();
+    }
+
+    activeSession.busy = false;
+    await input.streamer.finish(legacyResult(result));
+    if (input.reactMessage) {
+      try {
+        const emoji = result.outcome === 'completed'
+          ? '✅'
+          : result.outcome === 'cancelled'
+            ? '🛑'
+            : '❌';
+        await input.reactMessage.react(emoji);
+      } catch {}
+    }
+    return result;
+  } catch (error) {
+    activeSession.busy = false;
+    const result = failedResult(error, startedAt, activeSession.sessionId ?? undefined);
+    if (result.outcome !== 'cancelled') input.streamer.append(`\n[error] ${result.summary}\n`);
+    await input.streamer.finish(legacyResult(result));
+    if (input.reactMessage) {
+      try { await input.reactMessage.react(result.outcome === 'cancelled' ? '🛑' : '❌'); } catch {}
+    }
+    return result;
+  }
+}
 
 export function getSession(threadId: string): ActiveSession | undefined {
   return activeSessions.get(threadId);
@@ -78,115 +239,12 @@ export function hasSession(threadId: string): boolean {
 }
 
 export function getSessionsByChannel(channelId: string): ActiveSession[] {
-  return [...activeSessions.values()].filter(s => s.channelId === channelId);
+  return [...activeSessions.values()].filter(session => session.channelId === channelId);
 }
 
 export function hasActiveSessions(channelId: string): boolean {
-  return getSessionsByChannel(channelId).some(s => s.busy);
+  return getSessionsByChannel(channelId).some(session => session.busy);
 }
-
-// ── Tool approval wiring ───────────────────────────────────────────────
-
-function makeCanUseTool(streamer: DiscordStreamer) {
-  return async (toolName: string, input: Record<string, unknown>) => {
-    if (toolName === 'AskUserQuestion') {
-      const questions = (input as any).questions ?? [];
-      const answers = await streamer.promptAskUserQuestion(questions);
-      return {
-        behavior: 'allow' as const,
-        updatedInput: { questions: (input as any).questions, answers },
-      };
-    }
-
-    if (AUTO_APPROVED_TOOLS.includes(toolName) || AUTO_APPROVED_PREFIXES.some(p => toolName.startsWith(p))) {
-      await streamer.sendToolUseEmbed(toolName, input);
-      return { behavior: 'allow' as const, updatedInput: input };
-    }
-
-    await streamer.sendToolUseEmbed(toolName, input);
-    const decision = await streamer.promptToolApproval(toolName, input);
-
-    if (decision === 'allow') {
-      return { behavior: 'allow' as const, updatedInput: input };
-    } else {
-      return { behavior: 'deny' as const, message: 'User denied this tool use.' };
-    }
-  };
-}
-
-// ── Core query processor (shared) ──────────────────────────────────────
-
-/** Check if an error is a JSON/surrogate encoding issue from corrupted session history. */
-function isJsonEncodingError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('not valid JSON') || msg.includes('lone surrogate') || msg.includes('unpaired surrogate');
-}
-
-async function processQuery(
-  q: AsyncIterable<any>,
-  streamer: DiscordStreamer,
-  session: ActiveSession,
-  projectName: string,
-  reactMessage: Message | null
-): Promise<{ exitType: string; cost?: number; duration?: number; sessionId?: string } | null> {
-  let resultData: { exitType: string; cost?: number; duration?: number; sessionId?: string } | null = null;
-
-  for await (const message of q) {
-    if (message.type === 'system' && (message as any).subtype === 'init') {
-      const sid = (message as any).session_id ?? null;
-      if (sid) {
-        session.sessionId = sid;
-        updateProjectSession(projectName, sid);
-      }
-    }
-
-    if (message.type === 'assistant' && (message as any).message?.content) {
-      for (const block of (message as any).message.content) {
-        if ('text' in block && block.text) {
-          streamer.append(block.text);
-        }
-      }
-    }
-
-    // Capture rate limit events for usage tracking
-    if (message.type === 'rate_limit_event') {
-      const info = (message as any).rate_limit_info;
-      if (info) captureRateLimitEvent(info);
-    }
-
-    if (message.type === 'result') {
-      const r = message as any;
-      resultData = {
-        exitType: r.subtype ?? 'unknown',
-        cost: r.total_cost_usd,
-        duration: r.duration_ms,
-        sessionId: r.session_id ?? session.sessionId ?? undefined,
-      };
-      if (r.session_id) {
-        session.sessionId = r.session_id;
-        updateProjectSession(projectName, r.session_id);
-      }
-
-      // Capture full result for usage tracking
-      await captureSessionResult(projectName, r).catch(err => {
-        console.error('[usage] Failed to capture session result:', err);
-      });
-    }
-  }
-
-  session.busy = false;
-  await streamer.finish(resultData);
-
-  if (reactMessage) {
-    try {
-      await reactMessage.react(resultData?.exitType === 'success' ? '✅' : '❌');
-    } catch {}
-  }
-
-  return resultData;
-}
-
-// ── runClaude: creates a new thread from a main-channel message ────────
 
 export async function runClaude(
   prompt: string,
@@ -194,127 +252,27 @@ export async function runClaude(
   projectName: string,
   originalMessage: Message,
   existingSessionId?: string,
-  model?: string
+  model?: string,
 ): Promise<void> {
-  const channelId = originalMessage.channelId;
-
   const thread = await originalMessage.startThread({
     name: `⏳ ${threadLabel(prompt)}`,
     autoArchiveDuration: 60,
   });
-
   const streamer = new DiscordStreamer(thread);
   streamer.start();
-
-  const abortController = new AbortController();
-  const resumeId = existingSessionId ?? undefined;
-
-  const session: ActiveSession = {
-    abortController,
-    channelId,
-    threadId: thread.id,
+  const result = await executeInThread({
+    prompt,
+    projectDir,
     projectName,
-    sessionId: resumeId ?? null,
-    startedAt: Date.now(),
-    busy: true,
-  };
-
-  activeSessions.set(thread.id, session);
-
-  const timeout = setTimeout(() => {
-    if (session.busy) abortController.abort();
-  }, config.claudeTimeoutMs);
-
-  const safePrompt = sanitize(prompt);
-  const resolvedModel = resolveModel(model, projectName);
-
-  try {
-    const q = query({
-      prompt: safePrompt,
-      options: {
-        cwd: projectDir,
-        abortController,
-        permissionMode: 'default',
-        settingSources: ['user'],
-        ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
-        ...(resolvedModel ? { model: resolvedModel } : {}),
-        env: cleanEnv,
-        ...(resumeId ? { resume: resumeId } : {}),
-        canUseTool: makeCanUseTool(streamer),
-      },
-    });
-
-    const result = await processQuery(q, streamer, session, projectName, originalMessage);
-
-    // If session ended with an error and we were resuming, it might be corrupted — clear the session
-    if (result && result.exitType !== 'success' && result.exitType !== 'cancelled' && resumeId) {
-      console.warn(`[claudeRunner] Session ended with ${result.exitType} while resuming ${resumeId}, clearing stored session`);
-      updateProjectSession(projectName, '');
-    }
-
-    await setThreadName(thread, result?.exitType === 'success' ? `✅ ${threadLabel(prompt)}` : `❌ ${threadLabel(prompt)}`);
-  } catch (err) {
-    session.busy = false;
-
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('aborted') || msg.includes('abort')) {
-      await streamer.finish({ exitType: 'cancelled' });
-      await setThreadName(thread, `🛑 ${threadLabel(prompt)}`);
-      try { await originalMessage.react('🛑'); } catch {}
-    } else if (resumeId && isJsonEncodingError(err)) {
-      // Corrupted session history — clear it and retry without resume
-      console.warn(`[claudeRunner] Session ${resumeId} has encoding errors, clearing and retrying fresh`);
-      session.sessionId = null;
-      updateProjectSession(projectName, '');
-      streamer.append('\n⚠️ Session history corrupted — starting fresh session\n');
-
-      // Clear the original timeout and set a new one for the retry
-      clearTimeout(timeout);
-      const freshAbort = new AbortController();
-      const freshTimeout = setTimeout(() => {
-        if (session.busy) freshAbort.abort();
-      }, config.claudeTimeoutMs);
-
-      try {
-        session.abortController = freshAbort;
-        session.busy = true;
-        const freshQ = query({
-          prompt: safePrompt,
-          options: {
-            cwd: projectDir,
-            abortController: freshAbort,
-            permissionMode: 'default',
-            settingSources: ['user'],
-            ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
-            ...(resolvedModel ? { model: resolvedModel } : {}),
-            env: cleanEnv,
-            canUseTool: makeCanUseTool(streamer),
-          },
-        });
-        const freshResult = await processQuery(freshQ, streamer, session, projectName, originalMessage);
-        await setThreadName(thread, freshResult?.exitType === 'success' ? `✅ ${threadLabel(prompt)}` : `❌ ${threadLabel(prompt)}`);
-      } catch (retryErr) {
-        session.busy = false;
-        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-        streamer.append(`\n[error] Retry also failed: ${retryMsg}\n`);
-        await streamer.finish({ exitType: 'error' });
-        await setThreadName(thread, `❌ ${threadLabel(prompt)}`);
-        try { await originalMessage.react('❌'); } catch {}
-      } finally {
-        clearTimeout(freshTimeout);
-      }
-    } else {
-      streamer.append(`\n[error] ${msg}\n`);
-      await streamer.finish({ exitType: 'error' });
-      await setThreadName(thread, `❌ ${threadLabel(prompt)}`);
-      try { await originalMessage.react('❌'); } catch {}
-    }
-  } finally {
-    clearTimeout(timeout);
-  }
+    thread,
+    streamer,
+    reactMessage: originalMessage,
+    existingSessionId,
+    model,
+  });
+  const prefix = result.outcome === 'completed' ? '✅' : result.outcome === 'cancelled' ? '🛑' : '❌';
+  await setThreadName(thread, `${prefix} ${threadLabel(prompt)}`);
 }
-
-// ── runClaudeInThread: run in an EXISTING thread (used by loops) ───────
 
 export async function runClaudeInThread(
   prompt: string,
@@ -322,12 +280,9 @@ export async function runClaudeInThread(
   projectName: string,
   thread: AnyThreadChannel,
   existingSessionId?: string,
-  model?: string
-): Promise<{ exitType: string; cost?: number; duration?: number; sessionId?: string } | null> {
-  const threadId = thread.id;
-  const channelId = thread.parentId!;
-
-  const existing = activeSessions.get(threadId);
+  model?: string,
+): Promise<LegacyResult | null> {
+  const existing = activeSessions.get(thread.id);
   if (existing?.busy) {
     await thread.send('⚠️ Claude is still working on the previous query. Waiting...');
     return null;
@@ -335,175 +290,69 @@ export async function runClaudeInThread(
 
   const streamer = new DiscordStreamer(thread);
   streamer.start();
-
-  const abortController = new AbortController();
-  const resumeId = existing?.sessionId ?? existingSessionId ?? undefined;
-
-  const session: ActiveSession = {
-    abortController,
-    channelId,
-    threadId,
+  const result = await executeInThread({
+    prompt,
+    projectDir,
     projectName,
-    sessionId: resumeId ?? null,
-    startedAt: Date.now(),
-    busy: true,
-  };
-
-  activeSessions.set(threadId, session);
-
-  const timeout = setTimeout(() => {
-    if (session.busy) abortController.abort();
-  }, config.claudeTimeoutMs);
-
-  const safePrompt = sanitize(prompt);
-  const resolvedModel = resolveModel(model, projectName);
-
-  try {
-    const q = query({
-      prompt: safePrompt,
-      options: {
-        cwd: projectDir,
-        abortController,
-        permissionMode: 'default',
-        settingSources: ['user'],
-        ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
-        ...(resolvedModel ? { model: resolvedModel } : {}),
-        env: cleanEnv,
-        ...(resumeId ? { resume: resumeId } : {}),
-        canUseTool: makeCanUseTool(streamer),
-      },
-    });
-
-    return await processQuery(q, streamer, session, projectName, null);
-  } catch (err) {
-    session.busy = false;
-
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('aborted') || msg.includes('abort')) {
-      await streamer.finish({ exitType: 'cancelled' });
-    } else {
-      streamer.append(`\n[error] ${msg}\n`);
-      await streamer.finish({ exitType: 'error' });
-    }
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+    thread,
+    streamer,
+    reactMessage: null,
+    existingSessionId: existing?.sessionId ?? existingSessionId,
+    model,
+  });
+  return legacyResult(result);
 }
-
-// ── continueInThread: follow-up in an existing session thread ──────────
 
 export async function continueInThread(
   prompt: string,
   projectDir: string,
   projectName: string,
   message: Message,
-  model?: string
+  model?: string,
 ): Promise<void> {
   const thread = message.channel as AnyThreadChannel;
-  const threadId = thread.id;
-  const session = activeSessions.get(threadId);
-
+  const session = activeSessions.get(thread.id);
   if (session?.busy) {
     await message.reply('Claude is still working. Wait for it to finish or use `/cancel`.');
     return;
   }
-
   const resumeId = session?.sessionId ?? undefined;
   if (!resumeId) {
     await message.reply('No session to continue. Start a new prompt in the main channel.');
     return;
   }
 
-  // Update thread name while working
   const currentName = thread.name.replace(/^[⏳✅❌🛑🔁]+\s*/, '');
   await setThreadName(thread, `⏳ ${currentName}`);
-
   const streamer = new DiscordStreamer(thread);
   streamer.start();
-
-  const abortController = new AbortController();
-
-  if (session) {
-    session.abortController = abortController;
-    session.busy = true;
-  }
-
-  const activeSession = session ?? {
-    abortController,
-    channelId: thread.parentId!,
-    threadId,
+  const result = await executeInThread({
+    prompt,
+    projectDir,
     projectName,
-    sessionId: resumeId,
-    startedAt: Date.now(),
-    busy: true,
-  };
-
-  activeSessions.set(threadId, activeSession);
-
-  const timeout = setTimeout(() => {
-    if (activeSession.busy) abortController.abort();
-  }, config.claudeTimeoutMs);
-
-  const safePrompt = sanitize(prompt);
-  const resolvedModel = resolveModel(model, projectName);
-
-  try {
-    const q = query({
-      prompt: safePrompt,
-      options: {
-        cwd: projectDir,
-        abortController,
-        permissionMode: 'default',
-        settingSources: ['user'],
-        ...(config.mcpServers ? { mcpServers: config.mcpServers } : {}),
-        ...(resolvedModel ? { model: resolvedModel } : {}),
-        env: cleanEnv,
-        resume: resumeId,
-        canUseTool: makeCanUseTool(streamer),
-      },
-    });
-
-    const result = await processQuery(q, streamer, activeSession, projectName, message);
-    await setThreadName(thread, result?.exitType === 'success' ? `✅ ${currentName}` : `❌ ${currentName}`);
-  } catch (err) {
-    activeSession.busy = false;
-
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('aborted') || msg.includes('abort')) {
-      await streamer.finish({ exitType: 'cancelled' });
-      await setThreadName(thread, `🛑 ${currentName}`);
-    } else {
-      streamer.append(`\n[error] ${msg}\n`);
-      await streamer.finish({ exitType: 'error' });
-      await setThreadName(thread, `❌ ${currentName}`);
-    }
-  } finally {
-    clearTimeout(timeout);
-  }
+    thread,
+    streamer,
+    reactMessage: message,
+    existingSessionId: resumeId,
+    model,
+  });
+  const prefix = result.outcome === 'completed' ? '✅' : result.outcome === 'cancelled' ? '🛑' : '❌';
+  await setThreadName(thread, `${prefix} ${currentName}`);
 }
-
-// ── Session management ─────────────────────────────────────────────────
 
 export async function cancelSession(threadId: string): Promise<boolean> {
   const session = activeSessions.get(threadId);
   if (!session) return false;
-
-  session.abortController.abort();
+  await claudeProvider.cancelTask(session.sessionId ?? threadId);
   session.busy = false;
   return true;
 }
 
 export async function cancelAllForChannel(channelId: string): Promise<number> {
-  let count = 0;
-  for (const [, session] of activeSessions) {
-    if (session.channelId === channelId && session.busy) {
-      session.abortController.abort();
-      session.busy = false;
-      count++;
-    }
-  }
-  return count;
+  const sessions = getSessionsByChannel(channelId).filter(session => session.busy);
+  await Promise.all(sessions.map(session => claudeProvider.cancelTask(session.sessionId ?? session.threadId)));
+  for (const session of sessions) session.busy = false;
+  return sessions.length;
 }
 
 export function clearSession(threadId: string): void {

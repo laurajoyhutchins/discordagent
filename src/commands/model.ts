@@ -35,7 +35,7 @@ export async function handleModel(interaction: ChatInputCommandInteraction): Pro
   }
 
   // Determine current model
-  const currentModel = project.model || config.defaultModel || 'SDK default';
+  const currentModel = project.models?.claude || config.defaultModel || 'SDK default';
 
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
@@ -77,7 +77,7 @@ export async function handleModel(interaction: ChatInputCommandInteraction): Pro
           .setDescription(opt.description);
         if (opt.emoji) builder.setEmoji(opt.emoji);
         // Mark current model as default
-        if (opt.value === project.model || (opt.value === '__default__' && !project.model)) {
+        if (opt.value === project.models?.claude || (opt.value === '__default__' && !project.models?.claude)) {
           builder.setDefault(true);
         }
         return builder;

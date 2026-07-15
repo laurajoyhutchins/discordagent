@@ -23,7 +23,7 @@ export async function handleStopLoop(interaction: ChatInputCommandInteraction): 
       if (parentId) {
         const project = getProjectByChannel(parentId);
         if (project) {
-          targetChannelId = project.claudeChannelId;
+          targetChannelId = project.agentChannelId;
         }
       }
     }
@@ -31,7 +31,7 @@ export async function handleStopLoop(interaction: ChatInputCommandInteraction): 
     // Main channel
     const project = getProjectByChannel(interaction.channelId);
     if (project) {
-      targetChannelId = project.claudeChannelId;
+      targetChannelId = project.agentChannelId;
     }
   }
 

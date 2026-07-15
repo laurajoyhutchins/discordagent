@@ -1,83 +1,150 @@
-import { writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { Project, ProjectStore } from '../types.js';
+import type { AgentProviderId } from '../agents/contracts.js';
+import { openDatabase, type DatabaseHandle } from '../db/database.js';
+import { runMigrations } from '../db/migrations.js';
+import { importLegacyProjects } from '../repositories/legacyProjectImporter.js';
+import {
+  createProjectRepository,
+  type ProjectRepository,
+} from '../repositories/projectRepository.js';
+import {
+  normalizeProject,
+  type LegacyProjectStore,
+  type Project,
+} from '../types.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_PATH = join(__dirname, '..', 'data', 'projects.json');
+const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_LEGACY_PATH = join(moduleDirectory, '..', 'data', 'projects.json');
 
-// In-memory cache to avoid repeated disk reads and race conditions
-let cachedStore: ProjectStore | null = null;
+export interface ProjectStorePaths {
+  databasePath?: string;
+  legacyPath?: string;
+}
 
-function loadSync(): ProjectStore {
-  if (cachedStore) return cachedStore;
+interface EphemeralProjectState {
+  legacySessionId?: string;
+  roborevWebhookId?: string;
+  roborevWebhookToken?: string;
+}
+
+let database: DatabaseHandle | null = null;
+let projects: ProjectRepository | null = null;
+const ephemeralState = new Map<string, EphemeralProjectState>();
+
+function projectKey(name: string): string {
+  return name.toLowerCase();
+}
+
+function loadLegacyCredentials(path: string): void {
+  if (!existsSync(path)) return;
+
   try {
-    const raw = readFileSync(DATA_PATH, 'utf-8');
-    cachedStore = JSON.parse(raw) as ProjectStore;
-    return cachedStore;
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as LegacyProjectStore;
+    if (!Array.isArray(parsed.projects)) return;
+
+    for (const legacy of parsed.projects) {
+      const normalized = normalizeProject(legacy);
+      if (!normalized.roborevWebhookId && !normalized.roborevWebhookToken) continue;
+      ephemeralState.set(projectKey(normalized.name), {
+        roborevWebhookId: normalized.roborevWebhookId,
+        roborevWebhookToken: normalized.roborevWebhookToken,
+      });
+    }
   } catch {
-    cachedStore = { projects: [] };
-    return cachedStore;
+    // The authoritative importer reports malformed legacy input. Ephemeral
+    // credential loading must never make an already-imported store unusable.
   }
 }
 
-// Serialize writes to prevent race conditions
-let writeQueue: Promise<void> = Promise.resolve();
+export function initializeProjectStore(paths: ProjectStorePaths = {}): void {
+  closeProjectStore();
 
-function enqueueWrite(store: ProjectStore): void {
-  cachedStore = store;
-  writeQueue = writeQueue
-    .then(() => writeFile(DATA_PATH, JSON.stringify(store, null, 2) + '\n', 'utf-8'))
-    .catch((err) => console.error('[projectStore] Failed to write:', err));
+  database = openDatabase(paths.databasePath);
+  runMigrations(database);
+
+  const legacyPath = paths.legacyPath ?? DEFAULT_LEGACY_PATH;
+  importLegacyProjects(database, legacyPath);
+  loadLegacyCredentials(legacyPath);
+
+  projects = createProjectRepository(database);
+}
+
+export function closeProjectStore(): void {
+  projects = null;
+  ephemeralState.clear();
+  database?.close();
+  database = null;
+}
+
+function repository(): ProjectRepository {
+  if (!projects) initializeProjectStore();
+  return projects!;
+}
+
+function withEphemeral(project: Project | undefined): Project | undefined {
+  if (!project) return undefined;
+  const state = ephemeralState.get(projectKey(project.name));
+  return state ? { ...project, ...state } : project;
 }
 
 export function getAllProjects(): Project[] {
-  return loadSync().projects;
+  return repository().listActive().map(project => withEphemeral(project)!);
 }
 
 export function getProject(name: string): Project | undefined {
-  return loadSync().projects.find(p => p.name === name);
+  return withEphemeral(repository().findByName(name));
 }
 
 export function getProjectByChannel(channelId: string): Project | undefined {
-  return loadSync().projects.find(
-    p => p.claudeChannelId === channelId || (p.roborevChannelId && p.roborevChannelId === channelId)
-  );
+  return withEphemeral(repository().findByChannelId(channelId));
 }
 
 export function addProject(project: Project): void {
-  const store = loadSync();
-  if (store.projects.some(p => p.name === project.name)) {
-    throw new Error(`Project "${project.name}" already exists`);
+  const {
+    legacySessionId,
+    roborevWebhookId,
+    roborevWebhookToken,
+    ...persisted
+  } = project;
+
+  repository().create(persisted);
+
+  if (legacySessionId || roborevWebhookId || roborevWebhookToken) {
+    ephemeralState.set(projectKey(project.name), {
+      legacySessionId,
+      roborevWebhookId,
+      roborevWebhookToken,
+    });
   }
-  store.projects.push(project);
-  enqueueWrite(store);
 }
 
 export function updateProjectSession(name: string, sessionId: string): void {
-  const store = loadSync();
-  const project = store.projects.find(p => p.name === name);
-  if (project) {
-    project.sessionId = sessionId;
-    enqueueWrite(store);
-  }
+  if (!repository().findByName(name)) return;
+  const key = projectKey(name);
+  const current = ephemeralState.get(key) ?? {};
+  if (sessionId) current.legacySessionId = sessionId;
+  else delete current.legacySessionId;
+  ephemeralState.set(key, current);
 }
 
-export function updateProjectModel(name: string, model: string): void {
-  const store = loadSync();
-  const project = store.projects.find(p => p.name === name);
-  if (project) {
-    project.model = model || undefined;
-    enqueueWrite(store);
-  }
+export function updateProjectModel(
+  name: string,
+  model: string,
+  provider: AgentProviderId = 'claude',
+): void {
+  if (!repository().findByName(name)) return;
+  repository().updateModel(name, provider, model || undefined);
+}
+
+export function updateProjectProvider(name: string, provider: AgentProviderId): void {
+  if (!repository().findByName(name)) return;
+  repository().updateDefaultProvider(name, provider);
 }
 
 export function removeProject(name: string): Project | undefined {
-  const store = loadSync();
-  const idx = store.projects.findIndex(p => p.name === name);
-  if (idx === -1) return undefined;
-  const [removed] = store.projects.splice(idx, 1);
-  enqueueWrite(store);
-  return removed;
+  const project = withEphemeral(repository().archive(name));
+  ephemeralState.delete(projectKey(name));
+  return project;
 }

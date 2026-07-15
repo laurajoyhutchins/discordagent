@@ -15,14 +15,14 @@ export async function handleRemoveProject(interaction: ChatInputCommandInteracti
   await interaction.deferReply();
 
   // Kill any active session
-  await cancelSession(project.claudeChannelId);
+  await cancelSession(project.agentChannelId);
 
   // Delete channels
   try {
     await deleteProjectChannels(
       interaction.guild!,
       project.categoryId,
-      project.claudeChannelId,
+      project.agentChannelId,
       project.roborevChannelId // may be undefined — channelManager handles it
     );
   } catch (err) {

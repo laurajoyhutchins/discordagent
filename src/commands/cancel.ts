@@ -42,7 +42,7 @@ export async function handleCancel(interaction: ChatInputCommandInteraction): Pr
     return;
   }
 
-  const projectChannelId = project.claudeChannelId;
+  const projectChannelId = project.agentChannelId;
   const sessionCount = await cancelAllForChannel(projectChannelId);
   const loopIterations = cancelLoop(projectChannelId);
 

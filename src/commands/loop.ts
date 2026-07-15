@@ -14,7 +14,7 @@ export async function handleLoop(interaction: ChatInputCommandInteraction): Prom
   }
 
   const project = getProjectByChannel(interaction.channelId);
-  if (!project || interaction.channelId !== project.claudeChannelId) {
+  if (!project || interaction.channelId !== project.agentChannelId) {
     await interaction.reply({ content: 'This command can only be used in a project #claude channel.', ephemeral: true });
     return;
   }

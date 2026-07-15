@@ -7,7 +7,7 @@ import {
 
 interface ChannelSetup {
   categoryId: string;
-  claudeChannelId: string;
+  agentChannelId: string;
   roborevChannelId?: string;
   roborevWebhookId?: string;
   roborevWebhookToken?: string;
@@ -53,7 +53,7 @@ export async function createProjectChannels(
 
   const result: ChannelSetup = {
     categoryId: category.id,
-    claudeChannelId: claudeChannel.id,
+    agentChannelId: claudeChannel.id,
   };
 
   if (includeRoborev) {
@@ -80,7 +80,7 @@ export async function createProjectChannels(
 export async function deleteProjectChannels(
   guild: Guild,
   categoryId: string,
-  claudeChannelId: string,
+  agentChannelId: string,
   roborevChannelId?: string
 ): Promise<void> {
   const deleteChannel = async (id: string) => {
@@ -92,7 +92,7 @@ export async function deleteProjectChannels(
     }
   };
 
-  await deleteChannel(claudeChannelId);
+  await deleteChannel(agentChannelId);
   if (roborevChannelId) {
     await deleteChannel(roborevChannelId);
   }

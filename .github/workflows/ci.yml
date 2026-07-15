@@ -43,17 +43,23 @@ jobs:
           ref: feat/provider-neutral-runtime-completion
           fetch-depth: 0
 
-      - name: Reconstruct reviewed sources
+      - name: Reconstruct coordinator test
         shell: bash
         run: |
           set -euo pipefail
           cat .github/reconstruction/taskCoordinator.test.part-* \
             > src/coordinator/taskCoordinator.test.ts
           sha256sum src/coordinator/taskCoordinator.test.ts
-          test "$(grep -c '^  it(' src/coordinator/taskCoordinator.test.ts)" -eq 10
+          count="$(grep -c '^  it(' src/coordinator/taskCoordinator.test.ts)"
+          echo "Coordinator tests: $count"
+          test "$count" -eq 10
           grep -q "persists worktree and provider session" src/coordinator/taskCoordinator.test.ts
           grep -q "marks recoverable tasks interrupted" src/coordinator/taskCoordinator.test.ts
 
+      - name: Remove obsolete runtime fields
+        shell: bash
+        run: |
+          set -euo pipefail
           python - <<'PY'
           from pathlib import Path
           import hashlib
@@ -61,6 +67,7 @@ jobs:
           path = Path('src/types.ts')
           raw = path.read_bytes()
           current = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+          print('Current types blob:', current)
           assert current == '13433db1095281ff1c7e920de438cd22003a911c', current
           lines = raw.decode().splitlines(keepends=True)
           for index in sorted((18, 19, 113, 114), reverse=True):
@@ -68,6 +75,7 @@ jobs:
           path.write_text(''.join(lines))
           updated = path.read_bytes()
           result = hashlib.sha1(b'blob ' + str(len(updated)).encode() + b'\0' + updated).hexdigest()
+          print('Updated types blob:', result)
           assert result == '3260c3fc99c64783ac26400cf8540b49dc466ae3', result
           PY
 

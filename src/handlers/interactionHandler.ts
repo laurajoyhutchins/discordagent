@@ -8,13 +8,16 @@ import { handleCancel } from '../commands/cancel.js';
 import { handleLoop } from '../commands/loop.js';
 import { handleStopLoop } from '../commands/stopLoop.js';
 import { handleUsage } from '../commands/usage.js';
+import { handleAgents } from '../commands/agents.js';
 import { handleModel } from '../commands/model.js';
 import { handleProvider } from '../commands/provider.js';
 import { stopLoopFromButton } from '../services/loopRunner.js';
+import { handleCodexAuth, handleCodexAuthButton } from '../commands/codexAuth.js';
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   // Handle button interactions (e.g., loop stop button)
   if (interaction.isButton()) {
+    if (await handleCodexAuthButton(interaction)) return;
     if (interaction.customId.startsWith('loop_stop_')) {
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
       if (!isAuthorized(member)) {
@@ -60,8 +63,14 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
       case 'stop-loop':
         await handleStopLoop(interaction);
         break;
+      case 'agents':
+        await handleAgents(interaction);
+        break;
       case 'usage':
         await handleUsage(interaction);
+        break;
+      case 'codex-auth':
+        await handleCodexAuth(interaction);
         break;
       case 'provider':
         await handleProvider(interaction);

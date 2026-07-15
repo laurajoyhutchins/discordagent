@@ -1,0 +1,1 @@
+import type { UsageAdmissionService } from './usageAdmission.js';let service:UsageAdmissionService|null=null;export function setUsageAdmissionService(v:UsageAdmissionService){service=v;}export function getUsageAdmissionService(){return service??undefined;}export function clearUsageAdmissionService(){service=null;}

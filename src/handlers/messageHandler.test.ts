@@ -146,4 +146,26 @@ describe('messageHandler coordinator routing', () => {
     expect(taskCoordinator.startFromMessage).not.toHaveBeenCalled();
     expect(taskCoordinator.continueFromMessage).not.toHaveBeenCalled();
   });
+
+  it('holds an unauthenticated Codex request without creating a thread or worktree', async () => {
+    const taskCoordinator = coordinator();
+    const input = message({});
+    const codexProject = { ...project, defaultProvider: 'codex' as const, models: { codex: 'gpt-5.4' } };
+    const deferPendingTask = vi.fn();
+    const deps = {
+      ...dependencies(taskCoordinator),
+      getProjectByChannel: (channelId: string) => channelId === 'agent-1' ? codexProject : undefined,
+      checkProvider: vi.fn(async () => ({ available: false, authenticationRequired: true, reason: 'Sign in required' })),
+      deferPendingTask,
+    };
+
+    await handleMessage(input, deps);
+
+    expect(taskCoordinator.startFromMessage).not.toHaveBeenCalled();
+    expect(deferPendingTask).toHaveBeenCalledWith({
+      userId: 'user-1', projectName: 'factory-floor', prompt: 'Implement the worker registry', message: input, model: 'gpt-5.4',
+    });
+    expect(input.reply).toHaveBeenCalledWith(expect.stringContaining('without creating a thread or worktree'));
+  });
+
 });

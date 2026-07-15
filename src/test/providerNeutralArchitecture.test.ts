@@ -12,7 +12,7 @@ function productionTypeScriptFiles(directory: string): string[] {
   });
 }
 
-describe('provider-neutral Phase 1 architecture', () => {
+describe('complete provider-neutral workspace architecture', () => {
   it('removes obsolete Claude compatibility services and imports', () => {
     expect(existsSync(join(root, 'src/services/claudeRunner.ts'))).toBe(false);
     expect(existsSync(join(root, 'src/services/discordStreamer.ts'))).toBe(false);
@@ -57,12 +57,14 @@ describe('provider-neutral Phase 1 architecture', () => {
     expect(packageJson.description).toMatch(/provider-neutral/i);
     expect(readme).toMatch(/#agent/);
     expect(readme).toMatch(/old provider sessions are not automatically resumed/i);
-    expect(readme).toMatch(/Codex.*not yet executable/is);
+    expect(readme).toMatch(/Claude and Codex adapters/i);
+    expect(readme).toMatch(/persistent primary-agent chat/i);
+    expect(readme).toMatch(/quiet usage admission/i);
     expect(readme).toMatch(/redact.*before.*SQLite.*Discord.*logs/is);
     expect(operatorGuide).toMatch(/TaskCoordinator/);
     expect(operatorGuide).toMatch(/ClaudeProvider/);
-    expect(architecture).toMatch(/persist.*provider session.*before.*await/is);
-    expect(architecture).toMatch(/redact.*before.*persistence.*rendering.*logging/is);
+    expect(architecture).toMatch(/persist the provider session before awaiting completion/is);
+    expect(architecture).toMatch(/redacted before persistence, Discord, and logs/is);
 
     const addProject = readFileSync(join(root, 'src/commands/addProject.ts'), 'utf8');
     expect(addProject).toMatch(/non-git.*cannot start.*Git/is);

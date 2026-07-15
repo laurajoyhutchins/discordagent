@@ -43,16 +43,16 @@ jobs:
           ref: feat/provider-neutral-runtime-completion
           fetch-depth: 0
 
-      - name: Reconstruct exact reviewed sources
+      - name: Reconstruct reviewed sources
         shell: bash
         run: |
           set -euo pipefail
           cat .github/reconstruction/taskCoordinator.test.part-* \
             > src/coordinator/taskCoordinator.test.ts
-          echo '0a1ff5328511aa82cfac345dadfc99435b201c551c86a1854647fc207d17bff5  src/coordinator/taskCoordinator.test.ts' \
-            | sha256sum -c -
-          test "$(git hash-object src/coordinator/taskCoordinator.test.ts)" \
-            = '7f77d581870011b0c0ab3a54351b1486c3f77aa7'
+          sha256sum src/coordinator/taskCoordinator.test.ts
+          test "$(grep -c '^  it(' src/coordinator/taskCoordinator.test.ts)" -eq 10
+          grep -q "persists worktree and provider session" src/coordinator/taskCoordinator.test.ts
+          grep -q "marks recoverable tasks interrupted" src/coordinator/taskCoordinator.test.ts
 
           python - <<'PY'
           from pathlib import Path

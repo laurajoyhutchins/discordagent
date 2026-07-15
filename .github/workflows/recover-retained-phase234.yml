@@ -1,0 +1,123 @@
+name: Recover Retained Phase 2-4
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    if: github.event.pull_request.head.ref == 'feat/codex-primary-usage'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout retained head branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Detect retained fragments
+        id: retained
+        shell: bash
+        run: |
+          if [ -d .reconstruction ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reconstruct and apply retained patch
+        if: steps.retained.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          parts = sorted(Path('.reconstruction').glob('phase234.part-*.patch'))
+          if len(parts) != 20:
+              raise SystemExit(f'expected 20 reconstruction fragments, found {len(parts)}')
+
+          combined = bytearray()
+          for part in parts:
+              payload = part.read_bytes()
+              if combined and not combined.endswith(b'\n'):
+                  combined += b'\n'
+              combined += payload
+
+          Path('/tmp/phase234.transport.patch').write_bytes(combined)
+          PY
+
+          git apply --check /tmp/phase234.transport.patch
+          git apply /tmp/phase234.transport.patch
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/services/pendingTaskService.ts')
+          content = path.read_text()
+          damaged = """    clear() { pending.clear(); },
+            };
+          }
+                  provider: 'codex',
+                  ...(request.model ? { model: request.model } : {}),
+          """
+          repaired = """    clear() {
+              pending.clear();
+            },
+          };
+          }
+          """
+          if damaged not in content:
+              raise SystemExit('retained fragment boundary did not match the audited damaged form')
+          path.write_text(content.replace(damaged, repaired))
+          PY
+
+      - name: Verify exact recovered diff digest
+        if: steps.retained.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -N .
+          git diff --binary -- . \
+            ':(exclude).reconstruction/**' \
+            ':(exclude).github/workflows/recover-phase234.yml' \
+            > /tmp/phase234.recovered.patch
+          echo '8c1e0bb9a5dadc10797cee4a32a2b141b1e0a581c93dd33723edc3ab51556196  /tmp/phase234.recovered.patch' | sha256sum -c -
+          git reset
+
+      - name: Install locked dependencies
+        if: steps.retained.outputs.present == 'true'
+        run: npm ci
+
+      - name: Run complete test suite
+        if: steps.retained.outputs.present == 'true'
+        run: npm test
+
+      - name: Build TypeScript
+        if: steps.retained.outputs.present == 'true'
+        run: npm run build
+
+      - name: Validate patch formatting
+        if: steps.retained.outputs.present == 'true'
+        run: git diff --check
+
+      - name: Publish clean recovered source
+        if: steps.retained.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .reconstruction
+          rm -f .github/workflows/recover-phase234.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: add Codex primary agent and usage orchestration'
+          git push origin HEAD:feat/codex-primary-usage
+
+      - name: Confirm clean branch
+        if: steps.retained.outputs.present == 'false'
+        run: echo 'Retained Phase 2-4 source is already reconstructed.'

@@ -1,0 +1,236 @@
++| `AUTHORIZED_USER_ID` | primary/Codex auth | `NOTIFY_USER_ID` | Exact owner allowed to use `#agent-chat` and manage Codex login. |
++| `AUTHORIZED_USER_ID` | Codex auth | `NOTIFY_USER_ID` | Exact human owner allowed to manage Codex authentication. |
++| `CODEX_CLI_PATH` | no | `codex` | Codex CLI executable used to launch App Server. |
++| `CODEX_MODEL` | no | provider default | Default Codex model. |
++| `CODEX_ENABLED` | no | `true` | Enable local Codex App Server startup. |
++| `PRIMARY_AGENT_MODEL` | no | Claude default | Model used by the restricted PM-style coordinator. |
++| `PRIMARY_USAGE_RESERVE` | no | `10` | Capacity percentage points preserved for coordination and recovery. |
+ | `CLAUDE_TIMEOUT_MS` | no | `900000` | Provider turn timeout. |
+ | `CLAUDE_MODEL` | no | SDK default | Default Claude model. |
+ | `PROJECTS_BASE_DIR` | no | unrestricted | Root beneath which projects may be registered. |
+-| `ALLOW_NON_GIT` | no | `false` | Legacy registration switch. Phase 1 task execution still requires a Git repository for worktree isolation. |
++| `ALLOW_NON_GIT` | no | `false` | Legacy registration switch. Agent task execution still requires a Git repository for worktree isolation. |
+ | `DATABASE_PATH` | no | runtime data directory | SQLite database path. |
+ | `WORKTREES_BASE_DIR` | no | beside database | Isolated task worktree directory. |
+ | `ROBOREV_CLI_PATH` | no | `roborev` | Roborev executable path. |
+@@ -220,17 +237,11 @@ npm run check
+ 
+ The detailed lifecycle and persistence design is in [`docs/architecture/provider-neutral-runtime.md`](docs/architecture/provider-neutral-runtime.md). The approved specification and task plan remain under `docs/superpowers/`.
+ 
+-## Phase 1 boundaries
+-
+-Phase 1 intentionally does not include:
++## Primary-agent and usage behavior
+ 
+-- an executable Codex provider;
+-- Codex authentication onboarding;
+-- the persistent PM-style primary agent and memory retrieval;
+-- provider handoff to sibling threads;
+-- usage-based task admission and reservation policies.
++The primary agent is a project owner / PM, not a hidden coding session. It has no repository tools, no project MCP access, and cannot bypass the durable task coordinator. It discusses priorities, retrieves relevant history, proposes bounded work, delegates approved tasks into provider-fixed threads, and summarizes outcomes.
+ 
+-Those capabilities are designed but will be implemented in later reviewable phases after the provider-neutral foundation is merged.
++Usage management is intentionally quiet. The coordinator tracks provider-reported windows, active reservations, and historical task classes internally. It only interrupts normal conversation when a task is unusually expensive, cannot be completed reliably, should be narrowed or deferred, or a running turn must be checkpointed. Preserve-mode interruption occurs at most once per turn and retains the provider session, branch, and worktree.
+ 
+ ## License
+ 
+diff --git a/docs/architecture/provider-neutral-runtime.md b/docs/architecture/provider-neutral-runtime.md
+index 9d42660..3655452 100644
+--- a/docs/architecture/provider-neutral-runtime.md
++++ b/docs/architecture/provider-neutral-runtime.md
+@@ -1,103 +1,60 @@
+-# Provider-Neutral Runtime Architecture
++# Discord Agent Runtime Architecture
+ 
+-## Purpose
++Discord Agent is a private, local-first Discord workspace with one persistent PM-style primary agent and isolated Claude or Codex task agents. Generic orchestration depends only on provider-neutral contracts.
+ 
+-Phase 1 separates Discord orchestration, durable state, Git isolation, and provider execution so Claude remains functional while Codex and other providers can be added without rewriting the Discord surface.
+-
+-## Lifecycle
+-
+-A new task follows a strict write-before-side-effect sequence:
++## Runtime topology
+ 
+ ```text
+-resolve project/provider
+-→ verify provider availability
+-→ create Discord thread
+-→ create branch/worktree
+-→ persist task + worktree transactionally
+-→ mark starting
+-→ start provider
+-→ persist provider session before awaiting completion
+-→ mark running
+-→ persist/render normalized events
+-→ persist terminal result
++#agent-chat
++  → PrimaryAgentService
++  → bounded context (pinned memory + projects + active tasks + recent/FTS history + usage posture)
++  → TaskCoordinator for approved delegation
++
++project #agent / task thread
++  → TaskCoordinator
++  → UsageAdmissionService
++  → WorktreeManager + SQLite task/worktree/session records
++  → ProviderRegistry
++      ├── ClaudeProvider → Claude Agent SDK
++      └── CodexProvider → local Codex App Server JSON-RPC
++  → normalized events → SQLite + DiscordTaskRenderer
+ ```
+ 
+-The provider returns a `ProviderRun` containing a session identity and a separate completion promise. This split is intentional: Discord Agent must persist the provider session before it awaits a potentially long-running turn.
+-
+-## Components
+-
+-### TaskCoordinator
+-
+-The coordinator is the application boundary. It validates provider immutability, creates task isolation, drives state transitions, attaches sessions, brokers approvals/questions, captures events, records results, cancels work, closes safe worktrees, and recovers interruptions.
+-
+-### ProviderRegistry and providers
+-
+-The registry maps `AgentProviderId` to one implementation. Generic code consumes only `AgentProvider`.
+-
+-Phase 1 registers `ClaudeProvider`. It adapts the Claude Agent SDK into:
+-
+-- early `ProviderSession` creation;
+-- streamed `AgentEvent` values;
+-- provider-neutral approvals and questions;
+-- cancellation;
+-- normalized task results and usage.
+-
+-Codex is deliberately not registered until the App Server adapter can provide the same complete lifecycle.
+-
+-### Repositories and SQLite
+-
+-SQLite is the operational source of truth. Migrations run idempotently at startup. The repositories enforce provider-scoped sessions, task/thread uniqueness, task/worktree uniqueness, legal compare-and-set state transitions, recoverable-task queries, terminal-result rules, and event deduplication.
+-
+-Legacy `projects.json` is imported once. Existing channel mappings and Claude model settings are preserved; old session IDs are not resumed automatically; webhook credentials are discarded.
+-
+-### WorktreeManager
+-
+-Every Git-backed task receives a unique branch and worktree. The manager serializes naming collisions, supports paths containing spaces, rejects unsafe Git operations, and refuses dirty removal. It never uses shell interpolation or force cleanup.
+-
+-### Discord rendering and interaction
+-
+-`DiscordTaskRenderer` translates normalized events to messages and embeds. `DiscordInteractionBroker` creates task/request-scoped component identifiers, verifies the responding member, denies timed-out consequential actions, and returns explicit skipped answers for unanswered questions.
+-
+-### Runtime startup
+-
+-`startRuntime()` performs:
++## Task lifecycle
+ 
+-1. database open and migrations;
+-2. one-time legacy import;
+-3. repository construction;
+-4. Git worktree manager construction;
+-5. Claude provider registration;
+-6. coordinator construction and global installation;
+-7. usage/Roborev client initialization;
+-8. interrupted-task recovery;
+-9. recovery checkpoint delivery when threads are available.
++A new task follows this order:
+ 
+-Any startup failure clears the global coordinator and closes the project database. Shutdown clears the coordinator and closes SQLite after loops/watchers are stopped by the process entry point.
++1. resolve the project and immutable provider;
++2. verify provider availability and authentication;
++3. reserve estimated provider capacity;
++4. create the Discord thread;
++5. create an isolated Git branch/worktree;
++6. persist task/worktree and attach the reservation;
++7. start the provider;
++8. persist the provider session before awaiting completion;
++9. stream redacted normalized events;
++10. persist the terminal result and calibrate actual usage.
+ 
+-## Recovery semantics
++Admission happens before Discord or Git side effects. A rejected task creates neither a thread nor a worktree. Continuations reserve a new turn budget while retaining the same task, provider session, branch, and worktree.
+ 
+-A process exit may leave tasks in `starting`, `running`, or `waiting_for_user`. On the next startup, Discord Agent:
++## Providers
+ 
+-- inspects the recorded worktree;
+-- marks the task `interrupted`;
+-- records whether the worktree is present, clean, or dirty;
+-- posts a concise checkpoint to the original thread when possible;
+-- requires an explicit message to continue.
++`ClaudeProvider` uses user-level Claude settings only. Project/local settings remain excluded.
+ 
+-It never assumes whether the previous provider turn had side effects and never replays that turn automatically.
++`CodexProvider` uses one local App Server transport. It supports initialization, account state, device-code login, thread start/resume, streamed items, approvals, user questions, rate-limit windows, bounded overload retry, interruption, and deterministic shutdown. Requests blocked by authentication are held in memory for up to 30 minutes and require an explicit post-login Start action before Discord or Git side effects occur. Credentials and one-time codes never enter SQLite.
+ 
+-## Continuation
++A provider switch is a confirmed sibling handoff. The system estimates target input context, requires confirmation, creates a fresh target session and isolated worktree based on the clean committed source branch, and cross-links the threads.
+ 
+-A completed or failed turn can be continued in its original Discord thread. The repository reopens the durable task transactionally, and the coordinator resumes the exact provider session in the same worktree. Provider, session, branch, and thread identities cannot change.
++## Primary agent
+ 
+-## Roborev
++The primary agent is deliberately tool-isolated. It can converse, retrieve history, propose decisions, write provenance-valid memory, and delegate through `TaskCoordinator`; it cannot edit repositories or call project MCP tools directly. Raw messages remain authoritative in SQLite, with FTS5 retrieval and bounded context assembly. Read-only policy memory cannot be overwritten by model output.
+ 
+-Roborev is intentionally outside provider execution. The watcher reads `roborev stream`, matches repository paths with boundary-safe comparisons, and sends embeds with the authenticated bot. No webhook credential crosses the persistence boundary.
++## Usage orchestration
+ 
+-## Phase boundary
++Provider windows and reset times are stored as snapshots. Each task class has a low/high estimate calibrated from completed observations. Active holds are included when computing safe capacity, with a configurable reserve for primary-agent coordination.
+ 
+-Phase 1 ends with a provider-neutral runtime and executable Claude provider. Codex App Server, guided authentication, sibling-thread provider handoff, the persistent PM agent, full conversational memory, polls, and usage admission are follow-on phases.
++Operating postures are `unknown`, `healthy`, `cautious`, `restricted`, `preserve`, and `exhausted`. Routine messages hide telemetry. When capacity is critical, the coordinator records a checkpoint and interrupts the provider at most once for that turn; task state, session, branch, and worktree remain available. `/usage` and `/agents` expose details on demand.
+ 
+-## Redaction boundary
++## Recovery and safety
+ 
+-Normalized provider events and errors are redacted before persistence, Discord rendering, and logging. The coordinator applies the central boundary, while provider adapters and error handlers add defense in depth.
++Startup marks nonterminal tasks interrupted and never replays a possibly side-effecting turn. Dirty worktrees are never force-removed. Provider events and errors are redacted before persistence, Discord, and logs. Git commands use argument arrays with `shell: false`. Roborev posts through the authenticated bot and stores no webhook credentials.
+diff --git a/src/agents/codex/appServerTransport.test.ts b/src/agents/codex/appServerTransport.test.ts
+new file mode 100644
+index 0000000..b7f6be0
+--- /dev/null
++++ b/src/agents/codex/appServerTransport.test.ts
+@@ -0,0 +1,100 @@
++import { EventEmitter } from 'node:events';
++import { describe, expect, it } from 'vitest';
++import { AppServerTransport, type AppServerProcess } from './appServerTransport.js';
++
++class FakeStream extends EventEmitter {
++  writeData(value: string) { this.emit('data', Buffer.from(value)); }
++}
++
++class FakeProcess extends EventEmitter implements AppServerProcess {
++  readonly stdout = new FakeStream();
++  readonly stderr = new FakeStream();
++  readonly writes: string[] = [];
++  readonly stdin = {
++    write: (chunk: string) => { this.writes.push(chunk); return true; },
++    end: () => {},
++  };
++  kill() { return true; }
++}
++
++describe('AppServerTransport', () => {
++  it('correlates headerless App Server responses and buffers partial lines', async () => {
++    const process = new FakeProcess();
++    const transport = new AppServerTransport({ process });
++    const promise = transport.request('thread/start', { cwd: '/repo' });
++    const request = JSON.parse(process.writes[0]);
++    expect(request).toMatchObject({ method: 'thread/start', params: { cwd: '/repo' } });
++    expect(request).not.toHaveProperty('jsonrpc');
++    process.stdout.writeData(`{"id":${request.id},"res`);
++    process.stdout.writeData('ult":{"thread":{"id":"t-1"}}}\n');
++    await expect(promise).resolves.toEqual({ thread: { id: 't-1' } });
++  });
++
++  it('accepts JSON-RPC headers from tolerant peers but omits them on replies', async () => {
++    const process = new FakeProcess();
++    const transport = new AppServerTransport({ process });
++    transport.handleServerRequest('approval', async () => ({ decision: 'accept' }));
++    process.stdout.writeData('{"jsonrpc":"2.0","id":9,"method":"approval","params":{}}\n');
++    await new Promise(resolve => setImmediate(resolve));
++    expect(JSON.parse(process.writes.at(-1)!)).toEqual({ id: 9, result: { decision: 'accept' } });
++  });
++
++  it('initializes with the client-owned experimental input capability', async () => {
++    const process = new FakeProcess();
++    const transport = new AppServerTransport({ process });
++    const promise = transport.initialize();
++    const request = JSON.parse(process.writes[0]);

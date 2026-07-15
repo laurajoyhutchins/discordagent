@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { pathToFileURL } from 'node:url';
 import { REST, Routes } from 'discord.js';
 import { commands } from '../commands/definitions.js';

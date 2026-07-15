@@ -1,0 +1,97 @@
++      return true;
++    }
++    await interaction.update({ content: 'Starting the pending Codex task…', components: [] });
++    try {
++      await deps.pendingTasks?.start(interaction.user.id);
++      await interaction.followUp({ content: '✅ Pending Codex task started in its project thread.', ephemeral: true });
++    } catch (error) {
++      await interaction.followUp({ content: `Unable to start the pending task: ${redactErrorMessage(error)}`, ephemeral: true });
++    }
++  } else if (interaction.customId === 'codex_auth_discard_pending') {
++    deps.pendingTasks?.discard(interaction.user.id);
++    await interaction.update({ content: 'Pending Codex task discarded. No thread or worktree was created.', components: [] });
++  } else if (interaction.customId === 'codex_auth_cancel') {
++    await deps.auth.cancelLogin();
++    await interaction.update({ content: 'Codex sign-in cancelled. No task was started.', components: [] });
++  } else if (interaction.customId === 'codex_auth_logout_confirm') {
++    await deps.auth.logout();
++    await interaction.update({ content: 'Codex has been logged out on the bot host.', components: [] });
++  }
++  return true;
++}
+diff --git a/src/commands/definitions.ts b/src/commands/definitions.ts
+index f426496..524fb02 100644
+--- a/src/commands/definitions.ts
++++ b/src/commands/definitions.ts
+@@ -43,6 +43,10 @@ export const commands = [
+     .setName('stop-loop')
+     .setDescription('Stop the running loop in this channel'),
+ 
++  new SlashCommandBuilder()
++    .setName('agents')
++    .setDescription('Show active agent tasks and reserved capacity'),
++
+   new SlashCommandBuilder()
+     .setName('usage')
+     .setDescription('Show provider rate limit usage and task stats'),
+@@ -57,10 +61,19 @@ export const commands = [
+         .setRequired(false)
+         .addChoices(
+           { name: 'Claude', value: 'claude' },
+-          { name: 'Codex (available in Phase 2)', value: 'codex' },
++          { name: 'Codex', value: 'codex' },
+         )
+     ),
+ 
++
++
++  new SlashCommandBuilder()
++    .setName('codex-auth')
++    .setDescription('Manage local Codex authentication')
++    .addSubcommand(command => command.setName('status').setDescription('Check Codex authentication state'))
++    .addSubcommand(command => command.setName('login').setDescription('Start private device-code sign-in'))
++    .addSubcommand(command => command.setName('logout').setDescription('Log out Codex after confirmation')),
++
+   new SlashCommandBuilder()
+     .setName('model')
+     .setDescription("Pick the model for this project's active provider")
+diff --git a/src/commands/inspection.test.ts b/src/commands/inspection.test.ts
+new file mode 100644
+index 0000000..09f3186
+--- /dev/null
++++ b/src/commands/inspection.test.ts
+@@ -0,0 +1,44 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++import type { ChatInputCommandInteraction } from 'discord.js';
++import { ProviderRegistry } from '../agents/providerRegistry.js';
++import { setAgentRuntimeServices, clearAgentRuntimeServices } from '../services/agentRuntimeService.js';
++import { setUsageAdmissionService, clearUsageAdmissionService } from '../services/usageAdmissionRegistry.js';
++import { handleAgents } from './agents.js';
++import { handleUsage } from './usage.js';
++
++beforeEach(() => {
++  clearAgentRuntimeServices();
++  clearUsageAdmissionService();
++});
++
++function interaction() {
++  return {
++    reply: vi.fn(async () => undefined),
++    deferReply: vi.fn(async () => undefined),
++    editReply: vi.fn(async () => undefined),
++  } as unknown as ChatInputCommandInteraction;
++}
++
++describe('inspection commands', () => {
++  it('reports active tasks with reservations', async () => {
++    const tasks = { listActive: () => [{ id: 'task-123456', projectName: 'factory-floor', provider: 'codex', status: 'running', objective: 'Implement registry', threadId: 'thread-1' }] } as never;
++    setAgentRuntimeServices({ providers: new ProviderRegistry(), tasks });
++    setUsageAdmissionService({
++      reservations: () => [{ id: 'r', taskId: 'task-123456', provider: 'codex', taskClass: 'contained_feature', low: 6, high: 14, confidence: 'low', status: 'active', createdAt: 1 }],
++    } as never);
++    const value = interaction();
++    await handleAgents(value);
++    expect(value.reply).toHaveBeenCalledWith(expect.objectContaining({ embeds: expect.any(Array), ephemeral: true }));
++  });
++
++  it('shows detailed provider posture only on demand', async () => {

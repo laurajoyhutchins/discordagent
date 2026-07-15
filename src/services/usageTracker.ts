@@ -1,5 +1,6 @@
 import { EmbedBuilder, TextChannel, Client } from 'discord.js';
 import { config } from '../config.js';
+import { redactErrorMessage } from '../utils/redaction.js';
 
 // ── Types matching SDK's SDKRateLimitInfo ────────────────────────────────
 
@@ -93,7 +94,7 @@ export async function captureSessionResult(
   // Post to usage channel if configured
   if (config.usageChannelId && discordClient) {
     await postUsageUpdate(entry).catch(err => {
-      console.error('[usage] Failed to post usage update:', err);
+      console.error('[usage] Failed to post usage update:', redactErrorMessage(err));
     });
   }
 }

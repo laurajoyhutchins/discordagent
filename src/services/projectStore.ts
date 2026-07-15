@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { AgentProviderId } from '../agents/contracts.js';
@@ -11,7 +10,6 @@ import {
 } from '../repositories/projectRepository.js';
 import {
   normalizeProject,
-  type LegacyProjectStore,
   type Project,
 } from '../types.js';
 
@@ -25,8 +23,6 @@ export interface ProjectStorePaths {
 
 interface EphemeralProjectState {
   legacySessionId?: string;
-  roborevWebhookId?: string;
-  roborevWebhookToken?: string;
 }
 
 let database: DatabaseHandle | null = null;
@@ -37,27 +33,6 @@ function projectKey(name: string): string {
   return name.toLowerCase();
 }
 
-function loadLegacyCredentials(path: string): void {
-  if (!existsSync(path)) return;
-
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as LegacyProjectStore;
-    if (!Array.isArray(parsed.projects)) return;
-
-    for (const legacy of parsed.projects) {
-      const normalized = normalizeProject(legacy);
-      if (!normalized.roborevWebhookId && !normalized.roborevWebhookToken) continue;
-      ephemeralState.set(projectKey(normalized.name), {
-        roborevWebhookId: normalized.roborevWebhookId,
-        roborevWebhookToken: normalized.roborevWebhookToken,
-      });
-    }
-  } catch {
-    // The authoritative importer reports malformed legacy input. Ephemeral
-    // credential loading must never make an already-imported store unusable.
-  }
-}
-
 export function initializeProjectStore(paths: ProjectStorePaths = {}): void {
   closeProjectStore();
 
@@ -66,8 +41,6 @@ export function initializeProjectStore(paths: ProjectStorePaths = {}): void {
 
   const legacyPath = paths.legacyPath ?? DEFAULT_LEGACY_PATH;
   importLegacyProjects(database, legacyPath);
-  loadLegacyCredentials(legacyPath);
-
   projects = createProjectRepository(database);
 }
 
@@ -81,6 +54,15 @@ export function closeProjectStore(): void {
 function repository(): ProjectRepository {
   if (!projects) initializeProjectStore();
   return projects!;
+}
+
+export function getProjectRepository(): ProjectRepository {
+  return repository();
+}
+
+export function getProjectDatabase(): DatabaseHandle {
+  if (!database) initializeProjectStore();
+  return database!;
 }
 
 function withEphemeral(project: Project | undefined): Project | undefined {
@@ -102,21 +84,10 @@ export function getProjectByChannel(channelId: string): Project | undefined {
 }
 
 export function addProject(project: Project): void {
-  const {
-    legacySessionId,
-    roborevWebhookId,
-    roborevWebhookToken,
-    ...persisted
-  } = project;
-
+  const { legacySessionId, ...persisted } = project;
   repository().create(persisted);
-
-  if (legacySessionId || roborevWebhookId || roborevWebhookToken) {
-    ephemeralState.set(projectKey(project.name), {
-      legacySessionId,
-      roborevWebhookId,
-      roborevWebhookToken,
-    });
+  if (legacySessionId) {
+    ephemeralState.set(projectKey(project.name), { legacySessionId });
   }
 }
 

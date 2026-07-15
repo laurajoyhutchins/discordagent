@@ -2,10 +2,11 @@ import { ChatInputCommandInteraction } from 'discord.js';
 import { getProjectByChannel } from '../services/projectStore.js';
 import { stopLoop, getLoopChannelForThread } from '../services/loopRunner.js';
 import { isAuthorized } from '../utils/permissions.js';
+import { redactErrorMessage } from '../utils/redaction.js';
 
 export async function handleStopLoop(interaction: ChatInputCommandInteraction): Promise<void> {
   const member = await interaction.guild?.members.fetch(interaction.user.id)
-    .catch((e) => { console.warn('[stop-loop] member fetch failed:', e); return null; }) ?? null;
+    .catch((e) => { console.warn('[stop-loop] member fetch failed:', redactErrorMessage(e)); return null; }) ?? null;
   if (!isAuthorized(member)) {
     await interaction.reply({ content: 'You are not authorized.', ephemeral: true });
     return;

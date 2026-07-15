@@ -1,21 +1,20 @@
-import { spawn, execFile, ChildProcess } from 'node:child_process';
+import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
-import { WebhookClient, EmbedBuilder } from 'discord.js';
+import { EmbedBuilder, type Client, type TextChannel } from 'discord.js';
 import { config } from '../config.js';
 import { getAllProjects } from './projectStore.js';
 import type { Project } from '../types.js';
+import { redactErrorMessage, redactSensitiveText } from '../utils/redaction.js';
 
+const execFileAsync = promisify(execFile);
 let roborevProcess: ChildProcess | null = null;
+let discordClient: Client | null = null;
 let backoffMs = 1000;
 let consecutiveFailures = 0;
-const MAX_BACKOFF = 60000;
-const MAX_FAILURES = 10; // Stop retrying after this many consecutive failures
+const MAX_BACKOFF = 60_000;
+const MAX_FAILURES = 10;
 
-const webhookClients = new Map<string, WebhookClient>();
-
-interface StreamEvent {
+export interface RoborevStreamEvent {
   type: string;
   ts: string;
   job_id: number;
@@ -26,34 +25,30 @@ interface StreamEvent {
   verdict?: string;
 }
 
-function getWebhookClient(project: Project): WebhookClient | null {
-  if (!project.roborevWebhookId || !project.roborevWebhookToken) return null;
-  const key = project.roborevWebhookId;
-  if (!webhookClients.has(key)) {
-    webhookClients.set(
-      key,
-      new WebhookClient({ id: project.roborevWebhookId, token: project.roborevWebhookToken })
-    );
-  }
-  return webhookClients.get(key)!;
+export interface RoborevRoutingDependencies {
+  client: Client;
+  getProjects(): Project[];
+  getReviewBody(jobId: number): Promise<string>;
 }
 
-function matchProject(repoPath: string): Project | undefined {
-  const projects = getAllProjects();
+export function initRoborevWatcher(client: Client): void {
+  discordClient = client;
+}
+
+function matchProject(repoPath: string, projects: Project[]): Project | undefined {
   const repo = repoPath.toLowerCase().replace(/\/+$/, '');
-  return projects.find(p => {
-    if (!p.roborevWebhookId) return false;
-    // Boundary-safe prefix match so /Users/a/proj doesn't match /Users/a/proj2
-    const dir = p.workingDirectory.toLowerCase().replace(/\/+$/, '');
-    return repo === dir || repo.startsWith(dir + '/');
+  return projects.find(project => {
+    if (!project.roborevChannelId) return false;
+    const directory = project.workingDirectory.toLowerCase().replace(/\/+$/, '');
+    return repo === directory || repo.startsWith(`${directory}/`);
   });
 }
 
-async function getReviewBody(jobId: number): Promise<string> {
+async function fetchReviewBody(jobId: number): Promise<string> {
   try {
     const { stdout } = await execFileAsync(config.roborevCliPath, ['show', String(jobId)], {
       encoding: 'utf-8',
-      timeout: 10000,
+      timeout: 10_000,
       env: { ...process.env, CLAUDECODE: '' },
     });
     return stdout.trim();
@@ -62,9 +57,6 @@ async function getReviewBody(jobId: number): Promise<string> {
   }
 }
 
-/**
- * Check if the roborev CLI is actually available on the system.
- */
 async function isRoborevCliAvailable(): Promise<boolean> {
   try {
     await execFileAsync(config.roborevCliPath, ['version'], {
@@ -85,128 +77,129 @@ const VERDICT_CONFIG: Record<string, { color: number; label: string; emoji: stri
   F: { color: 0xe74c3c, label: 'Critical Issues', emoji: '❌' },
 };
 
-async function handleEvent(event: StreamEvent): Promise<void> {
-  if (event.type === 'review.started') {
-    const project = matchProject(event.repo);
-    if (!project) return;
+async function sendEmbed(client: Client, channelId: string, embed: EmbedBuilder): Promise<void> {
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel || !('send' in channel)) return;
+  await (channel as TextChannel).send({ embeds: [embed] });
+}
 
-    const webhook = getWebhookClient(project);
-    if (!webhook) return;
+export async function handleRoborevEvent(
+  event: RoborevStreamEvent,
+  injected?: RoborevRoutingDependencies,
+): Promise<void> {
+  const dependencies = injected ?? (discordClient
+    ? { client: discordClient, getProjects: getAllProjects, getReviewBody: fetchReviewBody }
+    : null);
+  if (!dependencies) {
+    console.warn('[roborev] Discord client is not initialized; event skipped.');
+    return;
+  }
+
+  const project = matchProject(event.repo, dependencies.getProjects());
+  if (!project?.roborevChannelId) return;
+
+  if (event.type === 'review.started') {
     const embed = new EmbedBuilder()
       .setColor(0x95a5a6)
       .setTitle(`🔍 Reviewing ${event.sha.slice(0, 8)}`)
       .setDescription(`Agent: **${event.agent}**`)
       .setTimestamp(new Date(event.ts));
-
-    try {
-      await webhook.send({ embeds: [embed] });
-    } catch (err) {
-      console.error(`[roborev] Failed to send started embed:`, err);
-    }
+    await sendEmbed(dependencies.client, project.roborevChannelId, embed).catch(error => {
+      console.error('[roborev] Failed to send started embed:', redactErrorMessage(error));
+    });
     return;
   }
 
   if (event.type === 'review.completed') {
-    const project = matchProject(event.repo);
-    if (!project) return;
-
-    const webhook = getWebhookClient(project);
-    if (!webhook) return;
-    const verdictInfo = VERDICT_CONFIG[event.verdict ?? ''] ?? { color: 0x95a5a6, label: 'Unknown', emoji: '❓' };
-
-    const reviewBody = await getReviewBody(event.job_id);
-
+    const verdict = VERDICT_CONFIG[event.verdict ?? '']
+      ?? { color: 0x95a5a6, label: 'Unknown', emoji: '❓' };
+    const reviewBody = await dependencies.getReviewBody(event.job_id);
     const embed = new EmbedBuilder()
-      .setColor(verdictInfo.color)
-      .setTitle(`${verdictInfo.emoji} Review: ${event.sha.slice(0, 8)} — ${verdictInfo.label}`)
+      .setColor(verdict.color)
+      .setTitle(`${verdict.emoji} Review: ${event.sha.slice(0, 8)} — ${verdict.label}`)
       .setTimestamp(new Date(event.ts));
 
     if (reviewBody) {
-      const body = reviewBody.length > 4000 ? reviewBody.slice(0, 4000) + '\n...(truncated)' : reviewBody;
-      embed.setDescription(body);
+      embed.setDescription(reviewBody.length > 4000
+        ? `${reviewBody.slice(0, 4000)}\n...(truncated)`
+        : reviewBody);
     } else {
-      embed.setDescription(`Verdict: **${verdictInfo.label}** (${event.verdict})\nRun \`roborev show ${event.job_id}\` for details.`);
+      embed.setDescription(
+        `Verdict: **${verdict.label}** (${event.verdict ?? 'unknown'})\n` +
+        `Run \`roborev show ${event.job_id}\` for details.`,
+      );
     }
-
     embed.addFields(
       { name: 'Commit', value: `\`${event.sha.slice(0, 8)}\``, inline: true },
       { name: 'Agent', value: event.agent, inline: true },
-      { name: 'Verdict', value: `${verdictInfo.emoji} ${event.verdict}`, inline: true }
+      { name: 'Verdict', value: `${verdict.emoji} ${event.verdict ?? '?'}`, inline: true },
     );
-
-    try {
-      await webhook.send({ embeds: [embed] });
-    } catch (err) {
-      console.error(`[roborev] Failed to send completed embed:`, err);
-    }
+    await sendEmbed(dependencies.client, project.roborevChannelId, embed).catch(error => {
+      console.error('[roborev] Failed to send completed embed:', redactErrorMessage(error));
+    });
     return;
   }
 
   console.log(`[roborev] Unhandled event type: ${event.type}`);
 }
 
-/**
- * Check if any registered projects have roborev enabled.
- */
-export function anyProjectHasRoborev(): boolean {
-  return getAllProjects().some(p => !!p.roborevWebhookId);
+export function anyProjectHasRoborev(
+  getProjects: () => Project[] = getAllProjects,
+): boolean {
+  return getProjects().some(project => Boolean(project.roborevChannelId));
 }
 
 export async function startRoborevWatcher(): Promise<void> {
-  // Only start if at least one project has roborev enabled
   if (!anyProjectHasRoborev()) {
     console.log('[roborev] No projects with roborev enabled, skipping watcher.');
     return;
   }
-
-  // Check if the CLI is actually available before spawning
-  const cliAvailable = await isRoborevCliAvailable();
-  if (!cliAvailable) {
-    console.warn(`[roborev] CLI not found at "${config.roborevCliPath}". Watcher disabled. Install roborev or set ROBOREV_CLI_PATH.`);
+  if (!discordClient) {
+    console.warn('[roborev] Discord client is not initialized. Watcher disabled.');
+    return;
+  }
+  if (!await isRoborevCliAvailable()) {
+    console.warn(
+      `[roborev] CLI not found at "${config.roborevCliPath}". ` +
+      'Watcher disabled. Install roborev or set ROBOREV_CLI_PATH.',
+    );
     return;
   }
 
   if (roborevProcess) {
     roborevProcess.removeAllListeners('close');
     roborevProcess.kill('SIGTERM');
-    roborevProcess = null;
   }
 
   console.log('[roborev] Starting watcher...');
-
   roborevProcess = spawn(config.roborevCliPath, ['stream'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
     env: { ...process.env, CLAUDECODE: '' },
   });
 
-  let lineBuf = '';
-
+  let lineBuffer = '';
   roborevProcess.stdout!.on('data', (data: Buffer) => {
-    lineBuf += data.toString();
-    const lines = lineBuf.split('\n');
-    lineBuf = lines.pop()!;
-
+    lineBuffer += data.toString();
+    const lines = lineBuffer.split('\n');
+    lineBuffer = lines.pop() ?? '';
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
-        const event = JSON.parse(line) as StreamEvent;
+        const event = JSON.parse(line) as RoborevStreamEvent;
         console.log(`[roborev] Event: ${event.type} job=${event.job_id} repo=${event.repo_name}`);
-        handleEvent(event).catch(err =>
-          console.error('[roborev] Error handling event:', err)
-        );
+        void handleRoborevEvent(event).catch(error => {
+          console.error('[roborev] Error handling event:', redactErrorMessage(error));
+        });
       } catch {
-        console.error('[roborev] Non-JSON line:', line);
+        console.error('[roborev] Non-JSON line:', redactSensitiveText(line));
       }
     }
   });
-
   roborevProcess.stderr!.on('data', (data: Buffer) => {
-    console.error('[roborev stderr]', data.toString());
+    console.error('[roborev stderr]', redactSensitiveText(data.toString()));
   });
 
-  // Reset backoff and failure count if the process stays alive for 5 seconds.
-  // Store the timer so we can cancel it if the process exits early.
   const stabilityTimer = setTimeout(() => {
     if (roborevProcess) {
       backoffMs = 1000;
@@ -214,41 +207,37 @@ export async function startRoborevWatcher(): Promise<void> {
     }
   }, 5000);
 
-  roborevProcess.on('close', (code) => {
+  roborevProcess.on('close', code => {
     clearTimeout(stabilityTimer);
     roborevProcess = null;
     consecutiveFailures++;
-
     if (consecutiveFailures >= MAX_FAILURES) {
-      console.error(`[roborev] Process failed ${consecutiveFailures} times. Giving up. Restart the bot to retry.`);
+      console.error(`[roborev] Process failed ${consecutiveFailures} times. Restart the bot to retry.`);
       return;
     }
-
-    console.log(`[roborev] Process exited with code ${code}. Restarting in ${backoffMs}ms... (attempt ${consecutiveFailures}/${MAX_FAILURES})`);
-
+    console.log(
+      `[roborev] Process exited with code ${code}. Restarting in ${backoffMs}ms ` +
+      `(attempt ${consecutiveFailures}/${MAX_FAILURES})`,
+    );
     setTimeout(() => {
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
-      startRoborevWatcher().catch(err => {
-        console.error('[roborev] Retry failed:', err);
-      });
+      void startRoborevWatcher().catch(error => console.error('[roborev] Retry failed:', redactErrorMessage(error)));
     }, backoffMs);
   });
 
-  roborevProcess.on('error', (err) => {
+  roborevProcess.on('error', error => {
     clearTimeout(stabilityTimer);
-    console.error('[roborev] Failed to spawn:', err.message);
+    console.error('[roborev] Failed to spawn:', redactErrorMessage(error));
     roborevProcess = null;
     consecutiveFailures++;
-
     if (consecutiveFailures >= MAX_FAILURES) {
-      console.error(`[roborev] Spawn failed ${consecutiveFailures} times. Giving up. Restart the bot to retry.`);
+      console.error(`[roborev] Spawn failed ${consecutiveFailures} times. Restart the bot to retry.`);
       return;
     }
-
     setTimeout(() => {
       backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
-      startRoborevWatcher().catch(err2 => {
-        console.error('[roborev] Retry failed:', err2);
+      void startRoborevWatcher().catch(retryError => {
+        console.error('[roborev] Retry failed:', redactErrorMessage(retryError));
       });
     }, backoffMs);
   });
@@ -259,8 +248,4 @@ export function stopRoborevWatcher(): void {
     roborevProcess.kill('SIGTERM');
     roborevProcess = null;
   }
-  for (const client of webhookClients.values()) {
-    client.destroy();
-  }
-  webhookClients.clear();
 }

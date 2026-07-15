@@ -1,0 +1,100 @@
+name: Recover Phase 2-4
+
+on:
+  push:
+    branches:
+      - feat/codex-primary-usage
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout retained reconstruction branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct and apply retained patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          parts = sorted(Path('.reconstruction').glob('phase234.part-*.patch'))
+          if len(parts) != 20:
+              raise SystemExit(f'expected 20 reconstruction fragments, found {len(parts)}')
+
+          combined = bytearray()
+          for part in parts:
+              payload = part.read_bytes()
+              if combined and not combined.endswith(b'\n'):
+                  combined += b'\n'
+              combined += payload
+
+          Path('/tmp/phase234.transport.patch').write_bytes(combined)
+          PY
+
+          git apply --check /tmp/phase234.transport.patch
+          git apply /tmp/phase234.transport.patch
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/services/pendingTaskService.ts')
+          content = path.read_text()
+          damaged = """    clear() { pending.clear(); },
+            };
+          }
+                  provider: 'codex',
+                  ...(request.model ? { model: request.model } : {}),
+          """
+          repaired = """    clear() {
+              pending.clear();
+            },
+          };
+          }
+          """
+          if damaged not in content:
+              raise SystemExit('retained fragment boundary did not match the audited damaged form')
+          path.write_text(content.replace(damaged, repaired))
+          PY
+
+      - name: Verify exact recovered diff digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -N .
+          git diff --binary -- . \
+            ':(exclude).reconstruction/**' \
+            ':(exclude).github/workflows/recover-phase234.yml' \
+            > /tmp/phase234.recovered.patch
+          echo '8c1e0bb9a5dadc10797cee4a32a2b141b1e0a581c93dd33723edc3ab51556196  /tmp/phase234.recovered.patch' | sha256sum -c -
+          git reset
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run complete test suite
+        run: npm test
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Validate patch formatting
+        run: git diff --check
+
+      - name: Publish clean recovered source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .reconstruction
+          rm -f .github/workflows/recover-phase234.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: add Codex primary agent and usage orchestration'
+          git push origin HEAD:feat/codex-primary-usage

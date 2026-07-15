@@ -1,7 +1,6 @@
 import { ChatInputCommandInteraction } from 'discord.js';
 import { removeProject } from '../services/projectStore.js';
 import { deleteProjectChannels } from '../services/channelManager.js';
-import { cancelSession } from '../services/claudeRunner.js';
 
 export async function handleRemoveProject(interaction: ChatInputCommandInteraction): Promise<void> {
   const name = interaction.options.getString('name', true);
@@ -13,9 +12,6 @@ export async function handleRemoveProject(interaction: ChatInputCommandInteracti
   }
 
   await interaction.deferReply();
-
-  // Kill any active session
-  await cancelSession(project.agentChannelId);
 
   // Delete channels
   try {
@@ -31,5 +27,5 @@ export async function handleRemoveProject(interaction: ChatInputCommandInteracti
     return;
   }
 
-  await interaction.editReply(`Project **${name}** removed and channels cleaned up.`);
+  await interaction.editReply(`Project **${name}** archived and channels cleaned up. Existing task worktrees and history were preserved.`);
 }

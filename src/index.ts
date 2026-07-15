@@ -5,9 +5,10 @@ import { handleInteraction } from './handlers/interactionHandler.js';
 import { handleMessage } from './handlers/messageHandler.js';
 import { handleThreadDelete } from './handlers/threadDeleteHandler.js';
 import { startRoborevWatcher, stopRoborevWatcher } from './services/roborevWatcher.js';
+import { startRuntime, stopRuntime, type RuntimeServices } from './services/runtime.js';
 import { stopAllLoops } from './services/loopRunner.js';
-import { initUsageTracker } from './services/usageTracker.js';
 import { commands } from './commands/definitions.js';
+import { redactErrorMessage } from './utils/redaction.js';
 
 // ── Single-instance lock ─────────────────────────────────────────────
 // Multiple bot processes sharing one token cause duplicate message
@@ -19,10 +20,10 @@ lockServer.unref();
 lockServer.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
     console.error(
-      `Another DiscordClaude instance is already running (lock port ${LOCK_PORT} in use). Exiting.`
+      `Another Discord Agent instance is already running (lock port ${LOCK_PORT} in use). Exiting.`
     );
   } else {
-    console.error('Instance lock error:', err);
+    console.error('Instance lock error:', redactErrorMessage(err));
   }
   process.exit(1);
 });
@@ -30,6 +31,8 @@ lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
   console.log(`Instance lock acquired on port ${LOCK_PORT}.`);
   client.login(config.discordToken);
 });
+
+let runtime: RuntimeServices | null = null;
 
 const client = new Client({
   intents: [
@@ -44,8 +47,18 @@ const client = new Client({
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user!.tag}`);
 
-  // Initialize usage tracker with client reference
-  initUsageTracker(client);
+  try {
+    runtime = await startRuntime(client);
+  } catch (error) {
+    console.error('Failed to initialize Discord Agent runtime:', redactErrorMessage(error));
+    process.exit(1);
+    return;
+  }
+
+  // Do not accept work until the durable coordinator and recovery pass are ready.
+  client.on('interactionCreate', handleInteraction);
+  client.on('messageCreate', handleMessage);
+  client.on('threadDelete', handleThreadDelete);
 
   // Register slash commands on startup
   try {
@@ -56,21 +69,18 @@ client.once('clientReady', async () => {
     );
     console.log('Slash commands registered.');
   } catch (err) {
-    console.error('Failed to register slash commands:', err);
+    console.error('Failed to register slash commands:', redactErrorMessage(err));
   }
 
   // Start roborev watcher (async — checks CLI availability first)
   startRoborevWatcher().catch(err => {
-    console.error('Failed to start roborev watcher:', err);
+    console.error('Failed to start roborev watcher:', redactErrorMessage(err));
   });
 });
 
-client.on('interactionCreate', handleInteraction);
-client.on('messageCreate', handleMessage);
-client.on('threadDelete', handleThreadDelete);
 
 client.on('error', (err) => {
-  console.error('Discord client error:', err);
+  console.error('Discord client error:', redactErrorMessage(err));
 });
 
 // ── WebSocket health monitoring ──────────────────────────────────────
@@ -119,7 +129,7 @@ setInterval(async () => {
         await client.login(config.discordToken);
         console.log('[heartbeat] Reconnected successfully');
       } catch (err) {
-        console.error('[heartbeat] Reconnect failed, exiting so the process manager can restart us:', err);
+        console.error('[heartbeat] Reconnect failed, exiting so the process manager can restart us:', redactErrorMessage(err));
         process.exit(1);
       } finally {
         reconnecting = false;
@@ -134,15 +144,16 @@ setInterval(async () => {
   }
 }, HEARTBEAT_CHECK_INTERVAL_MS);
 
-function shutdown() {
+async function shutdown(): Promise<void> {
   console.log('Shutting down...');
   stopAllLoops();
   stopRoborevWatcher();
+  if (runtime) await stopRuntime(runtime);
   client.destroy();
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => { void shutdown(); });
+process.on('SIGTERM', () => { void shutdown(); });
 // Login happens in the lockServer.listen callback above, once the
 // single-instance lock is held.

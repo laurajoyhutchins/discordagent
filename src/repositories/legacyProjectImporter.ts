@@ -49,12 +49,7 @@ export function importLegacyProjects(db: DatabaseHandle, jsonPath: string): Lega
         continue;
       }
 
-      const {
-        roborevWebhookId: _webhookId,
-        roborevWebhookToken: _webhookToken,
-        legacySessionId,
-        ...safeProject
-      } = normalized;
+      const { legacySessionId, ...safeProject } = normalized;
       const metadata = legacySessionId ? { legacySessionId } : undefined;
       projects.create(safeProject, metadata);
       imported += 1;

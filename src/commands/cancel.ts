@@ -1,62 +1,72 @@
-import { ChatInputCommandInteraction } from 'discord.js';
-import { cancelSession, cancelAllForChannel, getSession } from '../services/claudeRunner.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
+import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
+import type { Project } from '../types.js';
 import { getProjectByChannel } from '../services/projectStore.js';
 import { cancelLoop, getLoopChannelForThread } from '../services/loopRunner.js';
+import { getTaskCoordinator } from '../services/taskCoordinatorService.js';
 
-export async function handleCancel(interaction: ChatInputCommandInteraction): Promise<void> {
+export interface CancelCommandDependencies {
+  coordinator: Pick<TaskCoordinator, 'cancelByThread'>;
+  getProjectByChannel(channelId: string): Project | undefined;
+  cancelLoop(channelId: string): number | null;
+  getLoopChannelForThread(threadId: string): string | undefined;
+}
+
+function defaultDependencies(): CancelCommandDependencies {
+  return {
+    coordinator: getTaskCoordinator(),
+    getProjectByChannel,
+    cancelLoop,
+    getLoopChannelForThread,
+  };
+}
+
+export async function handleCancel(
+  interaction: ChatInputCommandInteraction,
+  injected?: CancelCommandDependencies,
+): Promise<void> {
+  const dependencies = injected ?? defaultDependencies();
   const channel = interaction.channel;
   const channelId = interaction.channelId;
 
-  // If used in a thread, cancel that specific thread's session
   if (channel?.isThread()) {
     const parts: string[] = [];
-
-    // Cancel the session in this thread
-    const session = getSession(channelId);
-    if (session) {
-      const cancelled = await cancelSession(channelId);
-      if (cancelled) parts.push('Claude session cancelled in this thread.');
+    if (await dependencies.coordinator.cancelByThread(channelId)) {
+      parts.push('Task cancelled in this thread.');
     }
 
-    // If this is a loop thread, also stop the loop
-    const loopChannelId = getLoopChannelForThread(channelId);
+    const loopChannelId = dependencies.getLoopChannelForThread(channelId);
     if (loopChannelId) {
-      const loopIters = cancelLoop(loopChannelId);
-      if (loopIters !== null) {
-        parts.push(`Stopped loop (${loopIters} iteration${loopIters !== 1 ? 's' : ''} completed).`);
+      const iterations = dependencies.cancelLoop(loopChannelId);
+      if (iterations !== null) {
+        parts.push(`Stopped loop (${iterations} iteration${iterations === 1 ? '' : 's'} completed).`);
       }
     }
 
     if (parts.length === 0) {
-      await interaction.reply({ content: 'No active session or loop in this thread.', ephemeral: true });
+      await interaction.reply({
+        content: 'No active task or loop in this thread.',
+        ephemeral: true,
+      });
     } else {
       await interaction.reply(parts.join('\n'));
     }
     return;
   }
 
-  // In main channel — cancel all sessions + any running loop
-  const project = getProjectByChannel(channelId);
-  if (!project) {
-    await interaction.reply({ content: 'This command can only be used in a project channel or thread.', ephemeral: true });
+  const project = dependencies.getProjectByChannel(channelId);
+  if (!project || channelId !== project.agentChannelId) {
+    await interaction.reply({
+      content: 'This command can only be used in a project channel or task thread.',
+      ephemeral: true,
+    });
     return;
   }
 
-  const projectChannelId = project.agentChannelId;
-  const sessionCount = await cancelAllForChannel(projectChannelId);
-  const loopIterations = cancelLoop(projectChannelId);
-
-  const parts: string[] = [];
-  if (sessionCount > 0) {
-    parts.push(`Cancelled ${sessionCount} active session${sessionCount > 1 ? 's' : ''}.`);
-  }
-  if (loopIterations !== null) {
-    parts.push(`Stopped loop (${loopIterations} iteration${loopIterations !== 1 ? 's' : ''} completed).`);
-  }
-
-  if (parts.length === 0) {
-    await interaction.reply({ content: 'No active sessions or loops to cancel.', ephemeral: true });
-  } else {
-    await interaction.reply(parts.join('\n'));
-  }
+  const iterations = dependencies.cancelLoop(project.agentChannelId);
+  const parts = iterations === null
+    ? ['No project loop is running.']
+    : [`Stopped loop (${iterations} iteration${iterations === 1 ? '' : 's'} completed).`];
+  parts.push('To cancel an active agent task, use `/cancel` inside that task thread.');
+  await interaction.reply(parts.join('\n'));
 }

@@ -22,6 +22,7 @@ import {
   adaptClaudeMessage,
   classifyClaudeError,
 } from './claudeEventAdapter.js';
+import { safeStringify } from '../../utils/redaction.js';
 
 export type ClaudeQueryRequest = Parameters<typeof sdkQuery>[0];
 export type ClaudeQueryFunction = (request: ClaudeQueryRequest) => AsyncIterable<unknown>;
@@ -100,9 +101,9 @@ function toolPreviewEvent(toolName: string, input: Record<string, unknown>): Age
   }
   if (toolName === 'Edit' || toolName === 'Write') {
     const path = String(input.file_path ?? input.path ?? 'unknown');
-    return { type: 'file_change', paths: [path], summary: JSON.stringify(input) };
+    return { type: 'file_change', paths: [path], summary: safeStringify(input) };
   }
-  return { type: 'status', phase: `tool:${toolName}`, detail: JSON.stringify(input) };
+  return { type: 'status', phase: `tool:${toolName}`, detail: safeStringify(input) };
 }
 
 function questionsFromInput(input: Record<string, unknown>, toolUseId: string): UserQuestion[] {
@@ -320,7 +321,7 @@ export class ClaudeProvider implements AgentProvider {
             ? 'file_change'
             : 'tool',
         title: toolName,
-        details: JSON.stringify(input),
+        details: safeStringify(input),
       };
       await host.emit({ type: 'approval_request', request });
       const decision = await host.requestApproval(request);

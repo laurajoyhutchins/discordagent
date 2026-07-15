@@ -38,8 +38,8 @@ jobs:
           from pathlib import Path
 
           parts = sorted(Path('.reconstruction').glob('phase234.part-*.patch'))
-          if len(parts) != 20:
-              raise SystemExit(f'expected 20 reconstruction fragments, found {len(parts)}')
+          if len(parts) != 21:
+              raise SystemExit(f'expected 21 reconstruction fragments, found {len(parts)}')
 
           combined = bytearray()
           for part in parts:
@@ -59,21 +59,13 @@ jobs:
 
           path = Path('src/services/pendingTaskService.ts')
           content = path.read_text()
-          damaged = """    clear() { pending.clear(); },
-            };
-          }
-                  provider: 'codex',
-                  ...(request.model ? { model: request.model } : {}),
-          """
-          repaired = """    clear() {
-              pending.clear();
-            },
-          };
-          }
-          """
-          if damaged not in content:
-              raise SystemExit('retained fragment boundary did not match the audited damaged form')
-          path.write_text(content.replace(damaged, repaired))
+          marker = "    clear() { pending.clear(); },\n  };\n}\n"
+          duplicate_tail = "        provider: 'codex',\n        ...(request.model ? { model: request.model } : {}),\n"
+          index = content.find(marker)
+          if index < 0 or content[index + len(marker):] != duplicate_tail:
+              raise SystemExit('retained fragment boundary did not match the audited overlapping tail')
+          repaired = "    clear() {\n      pending.clear();\n    },\n  };\n}\n"
+          path.write_text(content[:index] + repaired)
           PY
 
       - name: Verify exact recovered diff digest

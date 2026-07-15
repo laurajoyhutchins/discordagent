@@ -8,7 +8,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -31,80 +31,3 @@ jobs:
 
       - name: Build
         run: npm run build
-
-  finalize-completion:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/provider-neutral-runtime-completion' && github.actor != 'github-actions[bot]'
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout completion branch
-        uses: actions/checkout@v4
-        with:
-          ref: feat/provider-neutral-runtime-completion
-          fetch-depth: 0
-
-      - name: Reconstruct coordinator test
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat .github/reconstruction/taskCoordinator.test.part-* \
-            > src/coordinator/taskCoordinator.test.ts
-          sha256sum src/coordinator/taskCoordinator.test.ts
-          count="$(grep -c '^  it(' src/coordinator/taskCoordinator.test.ts)"
-          echo "Coordinator tests: $count"
-          test "$count" -eq 10
-          grep -q "persists worktree and provider session" src/coordinator/taskCoordinator.test.ts
-          grep -q "marks recoverable tasks interrupted" src/coordinator/taskCoordinator.test.ts
-
-      - name: Remove obsolete runtime fields
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import hashlib
-
-          path = Path('src/types.ts')
-          raw = path.read_bytes()
-          current = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
-          print('Current types blob:', current)
-          assert current == '13433db1095281ff1c7e920de438cd22003a911c', current
-          lines = raw.decode().splitlines(keepends=True)
-          for index in sorted((16, 17, 111, 112), reverse=True):
-              del lines[index]
-          path.write_text(''.join(lines))
-          updated = path.read_bytes()
-          result = hashlib.sha1(b'blob ' + str(len(updated)).encode() + b'\0' + updated).hexdigest()
-          print('Updated types blob:', result)
-          assert result == '3260c3fc99c64783ac26400cf8540b49dc466ae3', result
-          PY
-
-      - name: Regenerate locked package metadata
-        run: |
-          npm install --package-lock-only --ignore-scripts
-          node - <<'NODE'
-          const lock = require('./package-lock.json');
-          if (lock.name !== 'discord-agent') throw new Error('Unexpected lockfile package name');
-          if (lock.packages?.['']?.engines?.node !== '>=22') throw new Error('Missing Node 22 engine');
-          NODE
-
-      - name: Install and verify complete Phase 1
-        run: |
-          npm ci
-          npm test
-          npm run build
-
-      - name: Remove reconstruction scaffolding and restore ordinary CI
-        run: |
-          git fetch origin feat/provider-neutral-foundation:refs/remotes/origin/feat/provider-neutral-foundation
-          git checkout origin/feat/provider-neutral-foundation -- .github/workflows/ci.yml
-          rm -rf .github/reconstruction
-          rm .github/workflows/finalize-phase1.yml
-
-      - name: Commit verified completion
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'test: verify complete provider-neutral foundation'
-          git push origin HEAD:feat/provider-neutral-runtime-completion

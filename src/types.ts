@@ -14,8 +14,6 @@ export interface Project {
   models?: ProjectModels;
   baseBranch?: string;
   roborevChannelId?: string;
-  roborevWebhookId?: string;
-  roborevWebhookToken?: string;
   legacySessionId?: string;
 }
 
@@ -109,8 +107,6 @@ export function normalizeProject(input: LegacyProject | Project): Project {
     models,
     baseBranch: input.baseBranch,
     roborevChannelId: input.roborevChannelId,
-    roborevWebhookId: input.roborevWebhookId,
-    roborevWebhookToken: input.roborevWebhookToken,
     legacySessionId: 'legacySessionId' in input ? input.legacySessionId : legacySessionId,
   };
 }

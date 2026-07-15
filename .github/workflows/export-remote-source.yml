@@ -1,0 +1,28 @@
+name: Export remote source
+
+on:
+  push:
+    branches:
+      - feat/provider-neutral-foundation
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-source-${{ github.sha }}
+          path: |
+            .
+            !.git/**
+            !node_modules/**
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1

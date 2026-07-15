@@ -1,0 +1,287 @@
++  if (type === 'webSearch') return [{ type: 'status', phase: 'web_search', ...(stringValue(item.query) ? { detail: stringValue(item.query) } : {}) }];
++  return [];
++}
++
++function normalizePlan(value: unknown): PlanItem[] {
++  const items = Array.isArray(value) ? value : isRecord(value) && Array.isArray(value.items) ? value.items : [];
++  return items.flatMap((entry, index) => {
++    if (typeof entry === 'string') return [{ id: String(index), text: entry, status: 'pending' as const }];
++    if (!isRecord(entry)) return [];
++    const text = stringValue(entry.step ?? entry.text);
++    if (!text) return [];
++    const raw = stringValue(entry.status);
++    const status: PlanItem['status'] = raw === 'completed'
++      ? 'completed'
++      : raw === 'inProgress' || raw === 'in_progress'
++        ? 'in_progress'
++        : raw === 'blocked'
++          ? 'blocked'
++          : 'pending';
++    return [{ id: stringValue(entry.id) ?? String(index), text, status }];
++  });
++}
++
++function toolState(value: unknown, completed: boolean): ToolState {
++  const raw = stringValue(value);
++  if (raw === 'failed' || raw === 'declined') return 'failed';
++  if (raw === 'cancelled' || raw === 'canceled') return 'cancelled';
++  if (raw === 'completed' || completed) return 'completed';
++  return 'running';
++}
++
++function normalizeUsage(p: Record<string, unknown>): ProviderUsage {
++  const inputTokens = numberValue(p.inputTokens ?? p.input_tokens);
++  const outputTokens = numberValue(p.outputTokens ?? p.output_tokens);
++  const cachedInputTokens = numberValue(p.cachedInputTokens ?? p.cached_input_tokens);
++  const totalTokens = numberValue(p.totalTokens ?? p.total_tokens) ?? ((inputTokens ?? 0) + (outputTokens ?? 0));
++  return { inputTokens, outputTokens, cachedInputTokens, totalTokens };
++}
++
++function statusDetail(p: Record<string, unknown>): string | undefined {
++  if (typeof p.message === 'string') return p.message;
++  if (typeof p.summary === 'string') return p.summary;
++  if (typeof p.reason === 'string') return p.reason;
++  if (typeof p.toModel === 'string') return `Rerouted to ${p.toModel}`;
++  return undefined;
++}
++
++function codexErrorCode(error: Record<string, unknown> | undefined): string {
++  const info = error && isRecord(error.codexErrorInfo) ? error.codexErrorInfo : undefined;
++  return stringValue(info?.type ?? info?.code) ?? 'codex_error';
++}
++
++function isRetryable(error: Record<string, unknown> | undefined): boolean {
++  const code = codexErrorCode(error);
++  return !['BadRequest', 'Unauthorized', 'ContextWindowExceeded'].includes(code);
++}
++
++function stringValue(value: unknown): string | undefined { return typeof value === 'string' && value.length ? value : undefined; }
++function numberValue(value: unknown): number | undefined { return typeof value === 'number' && Number.isFinite(value) ? value : undefined; }
+diff --git a/src/agents/codex/codexProvider.test.ts b/src/agents/codex/codexProvider.test.ts
+new file mode 100644
+index 0000000..78f00c3
+--- /dev/null
++++ b/src/agents/codex/codexProvider.test.ts
+@@ -0,0 +1,118 @@
++import { EventEmitter } from 'node:events';
++import { describe, expect, it, vi } from 'vitest';
++import type { AgentRunHost } from '../contracts.js';
++import { CodexProvider } from './codexProvider.js';
++
++class FakeTransport extends EventEmitter {
++  handlers = new Map<string, Function>();
++  request = vi.fn(async (method: string) => method === 'thread/start' ? { thread: { id: 'thread-1' } } : method === 'thread/resume' ? { thread: { id: 'thread-1' } } : method === 'turn/start' ? { turn: { id: 'turn-1' } } : {});
++  handleServerRequest(method: string, fn: Function) { this.handlers.set(method, fn); return () => this.handlers.delete(method); }
++}
++
++function createHost(overrides: Partial<AgentRunHost> = {}): AgentRunHost {
++  return {
++    emit: async () => {},
++    requestApproval: async () => 'allow',
++    requestUserInput: async () => ({ skipped: false, values: ['yes'] }),
++    ...overrides,
++  };
++}
++
++const startInput = { taskId: 'task', projectName: 'p', workingDirectory: '/repo', channelId: 'c', threadId: 'd', prompt: 'hello', model: 'gpt-5.4' };
++
++describe('CodexProvider', () => {
++  it('uses documented thread and turn policy values and returns the session before completion', async () => {
++    const transport = new FakeTransport();
++    const events: unknown[] = [];
++    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
++    const run = await provider.startTask(startInput, createHost({ emit: async event => { events.push(event); } }));
++    expect(run.session.sessionId).toBe('thread-1');
++    expect(transport.request).toHaveBeenNthCalledWith(1, 'thread/start', {
++      cwd: '/repo', model: 'gpt-5.4', approvalPolicy: 'onRequest', sandbox: 'workspaceWrite', serviceName: 'discord-agent',
++    });
++    expect(transport.request).toHaveBeenNthCalledWith(2, 'turn/start', {
++      threadId: 'thread-1', input: [{ type: 'text', text: 'hello' }], cwd: '/repo', model: 'gpt-5.4',
++      approvalPolicy: 'onRequest', sandboxPolicy: { type: 'workspaceWrite', writableRoots: ['/repo'], networkAccess: false },
++    });
++    transport.emit('notification', 'item/agentMessage/delta', { threadId: 'thread-1', delta: 'hi' });
++    transport.emit('notification', 'turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', error: null } });
++    await expect(run.completion).resolves.toMatchObject({ outcome: 'completed', sessionId: 'thread-1' });
++    expect(events).toContainEqual({ type: 'text_delta', text: 'hi' });
++  });
++
++  it('resumes a stored thread before starting a continuation turn', async () => {
++    const transport = new FakeTransport();
++    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
++    await provider.continueTask({ ...startInput, session: { provider: 'codex', sessionId: 'thread-1', createdAt: 1 } }, createHost());
++    expect(transport.request).toHaveBeenNthCalledWith(1, 'thread/resume', {
++      threadId: 'thread-1', cwd: '/repo', model: 'gpt-5.4', approvalPolicy: 'onRequest', sandbox: 'workspaceWrite', serviceName: 'discord-agent',
++    });
++    expect(transport.request).toHaveBeenNthCalledWith(2, 'turn/start', expect.objectContaining({ threadId: 'thread-1' }));
++  });
++
++  it('maps command and file approvals to App Server decisions', async () => {
++    const transport = new FakeTransport();
++    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
++    await provider.startTask(startInput, createHost());
++    await expect(transport.handlers.get('item/commandExecution/requestApproval')!('x', { threadId: 'thread-1', itemId: 'item-1', command: 'npm test' })).resolves.toEqual({ decision: 'accept' });
++    await expect(transport.handlers.get('item/fileChange/requestApproval')!('x', { threadId: 'thread-1', itemId: 'item-2', reason: 'apply patch' })).resolves.toEqual({ decision: 'accept' });
++  });
++
++  it('denies built-in permission elevation by default', async () => {
++    const transport = new FakeTransport();
++    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
++    await provider.startTask(startInput, createHost({ requestApproval: async () => 'deny' }));
++    await expect(transport.handlers.get('item/permissions/requestApproval')!('x', {
++      threadId: 'thread-1', permissions: { network: { enabled: true }, fileSystem: { writableRoots: ['/outside'] } },
++    })).resolves.toEqual({ permissions: {}, scope: 'turn' });
++  });
++
++  it('returns question-id keyed answers and never collects secret input through Discord', async () => {
++    const transport = new FakeTransport();
++    const questions: unknown[] = [];
++    const events: unknown[] = [];
++    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
++    await provider.startTask(startInput, createHost({
++      emit: async event => { events.push(event); },
++      requestUserInput: async question => { questions.push(question); return { skipped: false, values: ['Option A'] }; },
++    }));
++
++    await expect(transport.handlers.get('item/tool/requestUserInput')!('x', {
++      threadId: 'thread-1',
++      turnId: 'turn-1',
++      itemId: 'item-3',
++      questions: [
++        { id: 'choice', header: 'Choose', question: 'Which option?', isOther: false, isSecret: false, options: [{ label: 'Option A', description: 'recommended' }] },
++        { id: 'secret', header: 'Credential', question: 'Enter token', isOther: true, isSecret: true, options: null },
++      ],
++      autoResolutionMs: null,
++    })).resolves.toEqual({ answers: {
++      choice: { answers: ['Option A'] },
++      secret: { answers: [] },
++    } });
++    expect(questions).toEqual([expect.objectContaining({
++      id: 'choice', prompt: 'Choose\nWhich option?', options: [{ label: 'Option A', value: 'Option A' }], allowFreeText: false,
++    })]);
++    expect(events).toContainEqual(expect.objectContaining({ type: 'status', phase: 'Secret input required' }));
++  });
++
++  it('grants only explicitly approved permissions contained by the task worktree', async () => {
++    const transport = new FakeTransport();
++    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
++    await provider.startTask(startInput, createHost({ requestApproval: async () => 'allow' }));
++    await expect(transport.handlers.get('item/permissions/requestApproval')!('x', {
++      threadId: 'thread-1',
++      permissions: {
++        network: { enabled: true },
++        fileSystem: { read: ['/repo', '/outside'], write: ['/repo/src', '/outside'], globScanMaxDepth: 4 },
++      },
++    })).resolves.toEqual({
++      permissions: {
++        network: { enabled: true },
++        fileSystem: { read: ['/repo'], write: ['/repo/src'] },
++      },
++      scope: 'turn',
++    });
++  });
++
++});
+diff --git a/src/agents/codex/codexProvider.ts b/src/agents/codex/codexProvider.ts
+new file mode 100644
+index 0000000..7cb95e0
+--- /dev/null
++++ b/src/agents/codex/codexProvider.ts
+@@ -0,0 +1,264 @@
++import { isAbsolute, relative, resolve } from 'node:path';
++import type {
++  AgentProvider, AgentRunHost, ContinueTaskInput, HandoffEstimate, HandoffEstimateInput,
++  ProviderAvailability, ProviderRun, StartTaskInput, TaskResult,
++} from '../contracts.js';
++import { redactErrorMessage } from '../../utils/redaction.js';
++import type { AppServerTransport } from './appServerTransport.js';
++import type { CodexAuthService } from './codexAuthService.js';
++import { adaptCodexNotification } from './codexEventAdapter.js';
++import { isRecord } from './protocol.js';
++
++interface ActiveTurn {
++  threadId: string;
++  turnId?: string;
++  workingDirectory: string;
++  host: AgentRunHost;
++  startedAt: number;
++  resolve(result: TaskResult): void;
++  reject(error: Error): void;
++}
++
++export interface CodexProviderOptions {
++  transport: AppServerTransport;
++  auth: CodexAuthService;
++  defaultModel?: string;
++}
++
++const THREAD_POLICY = {
++  approvalPolicy: 'onRequest',
++  sandbox: 'workspaceWrite',
++  serviceName: 'discord-agent',
++} as const;
++
++export class CodexProvider implements AgentProvider {
++  readonly id = 'codex' as const;
++  private readonly active = new Map<string, ActiveTurn>();
++  private readonly unsubs: Array<() => void> = [];
++
++  constructor(private readonly options: CodexProviderOptions) {
++    const onNotification = (method: string, params: unknown) => void this.handleNotification(method, params);
++    options.transport.on('notification', onNotification);
++    this.unsubs.push(() => options.transport.off('notification', onNotification));
++    this.installServerHandlers();
++  }
++
++  async checkAvailability(): Promise<ProviderAvailability> {
++    try {
++      const account = await this.options.auth.readAccount();
++      return account.authenticated
++        ? { available: true }
++        : { available: false, authenticationRequired: true, reason: 'Codex sign-in is required. Run /codex-auth login.' };
++    } catch (error) {
++      return { available: false, reason: `Codex App Server unavailable: ${redactErrorMessage(error)}` };
++    }
++  }
++
++  startTask(input: StartTaskInput, host: AgentRunHost): Promise<ProviderRun> {
++    return this.startOrContinue(input, host);
++  }
++
++  continueTask(input: ContinueTaskInput, host: AgentRunHost): Promise<ProviderRun> {
++    return this.startOrContinue(input, host, input.session.sessionId);
++  }
++
++  async cancelTask(sessionId: string): Promise<void> {
++    const active = this.active.get(sessionId);
++    await this.options.transport.request('turn/interrupt', {
++      threadId: sessionId,
++      ...(active?.turnId ? { turnId: active.turnId } : {}),
++    }).catch(() => undefined);
++  }
++
++  async estimateHandoff(input: HandoffEstimateInput): Promise<HandoffEstimate> {
++    const chars = input.summaryCharacters + Math.min(input.transcriptCharacters, 12_000) + input.changedFiles * 300;
++    return {
++      estimatedInputTokens: Math.max(1, Math.ceil(chars / 4)),
++      confidence: input.transcriptCharacters <= 20_000 ? 'medium' : 'low',
++      explanation: 'Estimated target-provider input context; excludes future tool output and responses.',
++    };
++  }
++
++  async close(): Promise<void> {
++    this.unsubs.splice(0).forEach(fn => fn());
++    for (const active of this.active.values()) active.reject(new Error('Codex provider closed'));
++    this.active.clear();
++  }
++
++  private async startOrContinue(input: StartTaskInput, host: AgentRunHost, existingThreadId?: string): Promise<ProviderRun> {
++    const model = input.model ?? this.options.defaultModel;
++    const threadParams = {
++      ...(existingThreadId ? { threadId: existingThreadId } : {}),
++      cwd: input.workingDirectory,
++      ...(model ? { model } : {}),
++      ...THREAD_POLICY,
++    };
++    const threadResponse = await this.options.transport.request(existingThreadId ? 'thread/resume' : 'thread/start', threadParams);
++    const threadId = extractId(threadResponse, 'thread');
++    if (!threadId) throw new Error('Codex App Server did not return a thread identifier');

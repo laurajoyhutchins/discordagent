@@ -70,7 +70,7 @@ jobs:
           print('Current types blob:', current)
           assert current == '13433db1095281ff1c7e920de438cd22003a911c', current
           lines = raw.decode().splitlines(keepends=True)
-          for index in sorted((18, 19, 113, 114), reverse=True):
+          for index in sorted((16, 17, 111, 112), reverse=True):
               del lines[index]
           path.write_text(''.join(lines))
           updated = path.read_bytes()

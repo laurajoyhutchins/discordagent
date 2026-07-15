@@ -1,0 +1,307 @@
++        provider: 'codex',
++        ...(request.model ? { model: request.model } : {}),
++      });
++      pending.delete(userId);
++    },
++    clear() {
++      pending.clear();
++    },
++  };
++}
+diff --git a/src/services/primaryAgentServiceRegistry.ts b/src/services/primaryAgentServiceRegistry.ts
+new file mode 100644
+index 0000000..b30f0c0
+--- /dev/null
++++ b/src/services/primaryAgentServiceRegistry.ts
+@@ -0,0 +1,5 @@
++import type { PrimaryAgentService } from '../primary/primaryAgentService.js';
++let service: PrimaryAgentService | null = null;
++export function setPrimaryAgentService(value: PrimaryAgentService): void { service = value; }
++export function getPrimaryAgentService(): PrimaryAgentService | undefined { return service ?? undefined; }
++export function clearPrimaryAgentService(): void { service = null; }
+diff --git a/src/services/runtime.test.ts b/src/services/runtime.test.ts
+index d9881cd..181618f 100644
+--- a/src/services/runtime.test.ts
++++ b/src/services/runtime.test.ts
+@@ -7,6 +7,7 @@ import { openDatabase } from '../db/database.js';
+ import { runMigrations } from '../db/migrations.js';
+ import { createProjectRepository } from '../repositories/projectRepository.js';
+ import { createTaskRepository } from '../repositories/taskRepository.js';
++import { createUsageRepository } from '../repositories/usageRepository.js';
+ import type { AgentProvider, ProviderAvailability } from '../agents/contracts.js';
+ 
+ process.env.DISCORD_TOKEN = 'test';
+@@ -15,6 +16,7 @@ process.env.DISCORD_GUILD_ID = 'test';
+ process.env.AUTHORIZED_ROLE_IDS = 'role';
+ 
+ const { getTaskCoordinator } = await import('./taskCoordinatorService.js');
++const { getUsageAdmissionService } = await import('./usageAdmissionRegistry.js');
+ const { startRuntime, stopRuntime } = await import('./runtime.js');
+ 
+ const directories: string[] = [];
+@@ -56,9 +58,11 @@ describe('runtime startup', () => {
+     expect(getTaskCoordinator()).toBe(runtime.coordinator);
+     expect(runtime.providers.require('claude').id).toBe('claude');
+     expect(runtime.projects.listActive()).toEqual([]);
++    expect(getUsageAdmissionService()).toBe(runtime.usage);
+ 
+     await stopRuntime(runtime);
+     expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
++    expect(getUsageAdmissionService()).toBeUndefined();
+   });
+ 
+   it('cleans partial startup state when the injected provider is not Claude', async () => {
+@@ -75,6 +79,56 @@ describe('runtime startup', () => {
+     expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
+   });
+ 
++
++  it('uses an injected Codex provider without spawning the CLI and records authoritative windows', async () => {
++    const directory = tempDirectory();
++    const codex = { ...fakeProvider(), id: 'codex' as const };
++    let publishRateLimits: ((windows: Array<{ name: string; remaining?: number; utilization?: number }>) => void) | undefined;
++    const unsubscribe = vi.fn();
++    const auth = {
++      readRateLimits: vi.fn(async () => [{ name: 'primary', remaining: 42, utilization: 58 }]),
++      onRateLimitsUpdated: vi.fn((listener: typeof publishRateLimits) => { publishRateLimits = listener; return unsubscribe; }),
++      close: vi.fn(async () => undefined),
++    };
++    const runtime = await startRuntime({} as Client, {
++      databasePath: join(directory, 'runtime.sqlite'),
++      legacyPath: join(directory, 'missing-projects.json'),
++      worktreesBaseDir: join(directory, 'worktrees'),
++      claudeProvider: fakeProvider(),
++      codexProvider: codex,
++      codexAuth: auth as never,
++      disableUsagePolling: true,
++      disablePrimaryAgent: true,
++    });
++    expect(runtime.providers.require('codex')).toBe(codex);
++    expect(runtime.usage.posture('codex')).toMatchObject({ available: 42, posture: 'cautious' });
++    publishRateLimits?.([{ name: 'primary', remaining: 8, utilization: 92 }]);
++    expect(runtime.usage.posture('codex')).toMatchObject({ available: 8, posture: 'preserve' });
++    await stopRuntime(runtime);
++    expect(unsubscribe).toHaveBeenCalledOnce();
++  });
++
++  it('releases stale pre-task usage holds during restart recovery', async () => {
++    const directory = tempDirectory();
++    const databasePath = join(directory, 'runtime.sqlite');
++    const db = openDatabase(databasePath);
++    runMigrations(db);
++    const usage = createUsageRepository(db);
++    usage.createHold({ provider: 'claude', taskClass: 'contained_feature', low: 6, high: 14, confidence: 'low' });
++    db.close();
++
++    const runtime = await startRuntime({} as Client, {
++      databasePath,
++      legacyPath: join(directory, 'missing-projects.json'),
++      worktreesBaseDir: join(directory, 'worktrees'),
++      claudeProvider: fakeProvider(),
++      disableCodex: true,
++      disablePrimaryAgent: true,
++    });
++    expect(runtime.usage.reservations()).toEqual([]);
++    await stopRuntime(runtime);
++  });
++
+   it('marks nonterminal tasks interrupted and posts a recovery checkpoint without replaying them', async () => {
+     const directory = tempDirectory();
+     const databasePath = join(directory, 'runtime.sqlite');
+diff --git a/src/services/runtime.ts b/src/services/runtime.ts
+index da6e6ea..b79632d 100644
+--- a/src/services/runtime.ts
++++ b/src/services/runtime.ts
+@@ -25,6 +25,21 @@ import {
+ } from './taskCoordinatorService.js';
+ import { captureRateLimitEvent, captureSessionResult, initUsageTracker } from './usageTracker.js';
+ import { redactErrorMessage } from '../utils/redaction.js';
++import { AppServerTransport } from '../agents/codex/appServerTransport.js';
++import { CodexAuthService } from '../agents/codex/codexAuthService.js';
++import { CodexProvider } from '../agents/codex/codexProvider.js';
++import { clearAgentRuntimeServices, setAgentRuntimeServices } from './agentRuntimeService.js';
++import { createMessageRepository, type MessageRepository } from '../repositories/messageRepository.js';
++import { createMemoryRepository, type MemoryRepository } from '../repositories/memoryRepository.js';
++import { ClaudePrimaryModel, type PrimaryModel } from '../primary/primaryModel.js';
++import { createContextAssembler } from '../primary/contextAssembler.js';
++import { createPrimaryAgentService, type PrimaryAgentService } from '../primary/primaryAgentService.js';
++import { ensurePrimaryAgentChannel } from './channelManager.js';
++import { clearPrimaryAgentService, setPrimaryAgentService } from './primaryAgentServiceRegistry.js';
++import { createUsageRepository } from '../repositories/usageRepository.js';
++import { createUsageAdmissionService, type UsageAdmissionService } from './usageAdmission.js';
++import { clearUsageAdmissionService, setUsageAdmissionService } from './usageAdmissionRegistry.js';
++import { createPendingTaskService, type PendingTaskService } from './pendingTaskService.js';
+ 
+ export interface RuntimeOptions {
+   databasePath?: string;
+@@ -32,6 +47,13 @@ export interface RuntimeOptions {
+   worktreesBaseDir?: string;
+   git?: GitClient;
+   claudeProvider?: AgentProvider;
++  codexProvider?: AgentProvider;
++  codexTransport?: AppServerTransport;
++  codexAuth?: CodexAuthService;
++  disableCodex?: boolean;
++  primaryModel?: PrimaryModel;
++  disablePrimaryAgent?: boolean;
++  disableUsagePolling?: boolean;
+ }
+ 
+ export interface RuntimeServices {
+@@ -42,6 +64,15 @@ export interface RuntimeServices {
+   worktrees: WorktreeManager;
+   providers: ProviderRegistry;
+   coordinator: TaskCoordinator;
++  codexTransport?: AppServerTransport;
++  codexAuth?: CodexAuthService;
++  messages: MessageRepository;
++  memories: MemoryRepository;
++  primaryAgent?: PrimaryAgentService;
++  usage: UsageAdmissionService;
++  pendingTasks: PendingTaskService;
++  usagePoll?: ReturnType<typeof setInterval>;
++  usageUnsubscribe?: () => void;
+ }
+ 
+ export async function startRuntime(
+@@ -49,6 +80,14 @@ export async function startRuntime(
+   options: RuntimeOptions = {},
+ ): Promise<RuntimeServices> {
+   clearTaskCoordinator();
++  clearAgentRuntimeServices();
++  clearPrimaryAgentService();
++  clearUsageAdmissionService();
++
++  let codexTransport = options.codexTransport;
++  let codexAuth = options.codexAuth;
++  let codexProvider = options.codexProvider;
++  let usageUnsubscribe: (() => void) | undefined;
+ 
+   try {
+     initializeProjectStore({
+@@ -60,6 +99,9 @@ export async function startRuntime(
+     const projects = getProjectRepository();
+     const tasks = createTaskRepository(database);
+     const events = createEventRepository(database);
++    const messages = createMessageRepository(database);
++    const memories = createMemoryRepository(database);
++    const usage = createUsageAdmissionService(createUsageRepository(database), { primaryReserve: config.primaryUsageReserve });
+     const worktrees = createWorktreeManager({
+       baseDirectory: options.worktreesBaseDir ?? config.worktreesBaseDir,
+       git: options.git ?? createGitClient(),
+@@ -70,7 +112,20 @@ export async function startRuntime(
+       mcpServers: config.mcpServers,
+       defaultModel: config.defaultModel,
+       resolveProjectModel: projectName => projects.findByName(projectName)?.models?.claude,
+-      onRateLimit: captureRateLimitEvent,
++      onRateLimit: info => {
++        captureRateLimitEvent(info);
++        const raw = typeof info.utilization === 'number' ? info.utilization : undefined;
++        const utilization = raw === undefined ? undefined : raw <= 1 ? raw * 100 : raw;
++        usage.recordWindow({
++          provider: 'claude',
++          windowType: typeof info.rateLimitType === 'string' ? info.rateLimitType : 'unknown',
++          utilization,
++          remaining: utilization === undefined ? undefined : Math.max(0, 100 - utilization),
++          resetsAt: typeof info.resetsAt === 'number' ? info.resetsAt : undefined,
++          capturedAt: Date.now(),
++          payload: info,
++        });
++      },
+       onSessionResult: captureSessionResult,
+     });
+     if (claudeProvider.id !== 'claude') {
+@@ -78,32 +133,121 @@ export async function startRuntime(
+     }
+     providers.register(claudeProvider);
+ 
++    if (!codexProvider && !options.disableCodex && config.codexEnabled) {
++      try {
++        codexTransport ??= new AppServerTransport({ command: config.codexCliPath });
++        await codexTransport.initialize();
++        codexAuth ??= new CodexAuthService(codexTransport);
++        codexProvider = new CodexProvider({ transport: codexTransport, auth: codexAuth, defaultModel: config.defaultCodexModel });
++      } catch (error) {
++        console.warn('[runtime] Codex App Server unavailable:', redactErrorMessage(error));
++        await codexTransport?.close().catch(() => undefined);
++        codexTransport = undefined;
++        codexAuth = undefined;
++        codexProvider = undefined;
++      }
++    }
++    if (codexProvider) {
++      if (codexProvider.id !== 'codex') throw new Error(`Runtime expected a Codex provider, received "${codexProvider.id}"`);
++      providers.register(codexProvider);
++    }
++
+     const coordinator = createTaskCoordinator({
+       projects,
+       tasks,
+       events,
+       worktrees,
+       providers,
++      usage,
+       rendererFactory: () => new DiscordTaskRenderer({ notifyUserId: config.notifyUserId }),
+       brokerFactory: () => new DiscordInteractionBroker(),
+     });
+ 
++    const pendingTasks = createPendingTaskService(coordinator);
+     initUsageTracker(client);
+     initRoborevWatcher(client);
+     setTaskCoordinator(coordinator);
++    setAgentRuntimeServices({ providers, tasks, pendingTasks, ...(codexAuth ? { codexAuth } : {}) });
++    setUsageAdmissionService(usage);
++    let primaryAgent: PrimaryAgentService | undefined;
++    if (!options.disablePrimaryAgent && config.authorizedUserId) {
++      const guild = await client.guilds.fetch(config.guildId);
++      const primaryChannel = await ensurePrimaryAgentChannel(guild, config.authorizedRoleIds);
++      primaryAgent = createPrimaryAgentService({
++        channelId: primaryChannel.id, ownerId: config.authorizedUserId,
++        model: options.primaryModel ?? new ClaudePrimaryModel({ model: config.primaryAgentModel }),
++        context: createContextAssembler({ projects, tasks, messages, memories, usage }), messages, memories, projects, coordinator,
++        fetchProjectChannel: async id => { const channel = await client.channels.fetch(id).catch(() => null); return channel?.isTextBased() && !channel.isDMBased() && !channel.isThread() ? channel as import('discord.js').TextChannel : null; },
++      });
++      setPrimaryAgentService(primaryAgent);
++    }
++
++    let usagePoll: ReturnType<typeof setInterval> | undefined;
++    if (codexAuth) {
++      const recordCodexWindows = (windows: readonly import('../agents/codex/codexAuthService.js').CodexRateLimitWindow[]) => {
++        for (const window of windows) {
++          usage.recordWindow({
++            provider: 'codex',
++            windowType: window.name,
++            utilization: window.utilization,
++            remaining: window.remaining,
++            resetsAt: window.resetsAt,
++            capturedAt: Date.now(),
++            payload: window,
++          });
++        }
++      };
++      const refreshCodexUsage = async () => recordCodexWindows(await codexAuth!.readRateLimits());
++      usageUnsubscribe = codexAuth.onRateLimitsUpdated(recordCodexWindows);
++      await refreshCodexUsage().catch(error => {
++        console.warn('[runtime] Failed to read Codex usage:', redactErrorMessage(error));
++      });
++      if (!options.disableUsagePolling) {
++        usagePoll = setInterval(() => {
++          void refreshCodexUsage().catch(error => {
++            console.warn('[runtime] Failed to refresh Codex usage:', redactErrorMessage(error));
++          });
++        }, 60_000);
++        usagePoll.unref?.();
++      }
++    }
++
+     const recoveredTasks = await coordinator.recoverInterruptedTasks();
++    const recoveredIds = new Set(recoveredTasks.map(task => task.id));
++    for (const reservation of usage.reservations()) {
++      const task = reservation.taskId ? tasks.findById(reservation.taskId) : undefined;
++      if (!reservation.taskId || !task || recoveredIds.has(reservation.taskId) || ['completed', 'failed', 'cancelled', 'interrupted'].includes(task.status)) {
++        try { usage.release(reservation.id); } catch { /* already finalized */ }
++      }
++    }
+     await notifyRecoveredTasks(client, recoveredTasks, events);
+ 
+-    return { database, projects, tasks, events, worktrees, providers, coordinator };

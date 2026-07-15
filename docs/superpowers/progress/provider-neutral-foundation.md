@@ -7,7 +7,7 @@
 - [x] Task 5: Guarded Git worktree management
 - [x] Task 6: Task, session, event, and result repositories
 - [x] Task 7: Provider registry and Claude provider adapter
-- [ ] Task 8: Provider-neutral Discord rendering
+- [x] Task 8: Provider-neutral Discord rendering
 - [ ] Task 9: Durable task coordinator
 - [ ] Task 10: Commands, channels, loops, and Roborev adaptation
 - [ ] Task 11: Runtime startup, migration, and recovery
@@ -21,4 +21,9 @@
 - Task 4: project repository/importer/facade suites — 6 tests passed; full suite — 21 tests passed; `npm run build` — exit 0.
 - Task 5: real Git worktree suite — 6 tests passed after symbolic remote-default review fix; full suite — 33 tests passed; `npm run build` — exit 0.
 - Task 6: task/session/event repository suite — 6 tests passed; full suite — 33 tests passed; `npm run build` — exit 0; GitHub Actions Node 22 run succeeded.
-- Task 7: provider registry and Claude adapter suites — 8 tests passed; full suite — 41 tests passed; `npm run build` — exit 0; remote CI pending.
+- Task 7: provider registry and Claude adapter suites — 8 tests passed; full suite — 41 tests passed; `npm run build` — exit 0.
+- Task 8: provider-neutral renderer and interaction broker are present; the current PR merge checkout passes `npm ci`, `npm test`, and `npm run build` on Node 22.
+
+## Scope note
+
+This branch is the first half of the approved Phase 1 plan. Tasks 9–12 are intentionally not represented as complete and require a follow-up implementation PR before the full provider-neutral foundation is considered finished.

@@ -1,0 +1,122 @@
+    agentChannelId: 'agent-1',
+    defaultProvider: 'claude',
+    baseBranch: 'main',
+  });
+  const projects = {
+    ...baseProjects,
+    findByName(name: string) {
+      order.push('project');
+      return baseProjects.findByName(name);
+    },
+  };
+  const baseTasks = createTaskRepository(db);
+  const tasks: TaskRepository = {
+    ...baseTasks,
+    createWithWorktree(input) { order.push('persist'); return baseTasks.createWithWorktree(input); },
+    attachProviderSession(taskId, session) { order.push('session'); baseTasks.attachProviderSession(taskId, session); },
+    transition(taskId, expected, next) { order.push(next); return baseTasks.transition(taskId, expected, next); },
+    saveResult(taskId, result) { order.push('result'); baseTasks.saveResult(taskId, result); },
+  };
+  const events = createEventRepository(db);
+  const worktree: CreatedWorktree = {
+    repositoryPath: join(directory, 'factory-floor'),
+    worktreePath: join(directory, 'worktree'),
+    branchName: 'agent/claude/task-123456',
+    baseRef: 'main',
+  };
+  let removeCount = 0;
+  const removedInputs: unknown[] = [];
+  const worktrees: WorktreeManager = {
+    async create() { order.push('worktree'); return worktree; },
+    async inspect(path) { return { path, exists: true, dirty: false, branchName: worktree.branchName }; },
+    async remove(input) { removeCount += 1; removedInputs.push(input); },
+    async pruneAdministrativeMetadata() {},
+  };
+  const provider = new FakeProvider();
+  provider.onAvailability = () => order.push('availability');
+  const providers = new ProviderRegistry();
+  providers.register(provider);
+  const renderers: FakeRenderer[] = [];
+  const broker = new FakeBroker();
+  let id = 0;
+  const coordinator = createTaskCoordinator({
+    projects,
+    tasks,
+    events,
+    worktrees,
+    providers,
+    rendererFactory: () => {
+      const renderer = new FakeRenderer();
+      renderers.push(renderer);
+      return renderer;
+    },
+    brokerFactory: () => broker,
+    idFactory: prefix => `${prefix}-${++id}`,
+  });
+  return {
+    coordinator, tasks: baseTasks, events, provider, renderers, broker,
+    worktree, worktrees, removeCount: () => removeCount, removedInputs,
+  };
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 500;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('condition not reached');
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+}
+
+afterEach(() => {
+  while (databases.length > 0) databases.pop()?.close();
+  while (directories.length > 0) rmSync(directories.pop()!, { recursive: true, force: true });
+});
+
+describe('TaskCoordinator', () => {
+  it('persists worktree and provider session in the required order before awaiting completion', async () => {
+    const order: string[] = [];
+    const context = setup(order);
+    const completion = deferred<TaskResult>();
+    context.provider.startImpl = async (_input, host) => {
+      order.push('provider');
+      await host.emit({ type: 'status', phase: 'working', detail: 'Inspecting files' });
+      return {
+        session: { provider: 'claude', sessionId: 'session-1', createdAt: 11 },
+        completion: completion.promise,
+      };
+    };
+    const thread = new FakeThread();
+    const message = new FakeMessage(thread, order);
+
+    const running = context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Implement registry', message: message as unknown as Message,
+    });
+    await waitUntil(() => order.includes('running'));
+    expect(order.filter(item => [
+      'project', 'availability', 'thread', 'worktree', 'persist', 'starting',
+      'provider', 'session', 'running', 'completed', 'result',
+    ].includes(item))).toEqual([
+      'project', 'availability', 'thread', 'worktree', 'persist', 'starting',
+      'provider', 'session', 'running',
+    ]);
+    expect(context.tasks.findByThreadId(thread.id)).toMatchObject({
+      status: 'running', providerSessionId: 'session-1',
+    });
+    expect(context.events.list('task-1').map(entry => entry.event)).toContainEqual({
+      type: 'status', phase: 'working', detail: 'Inspecting files',
+    });
+
+    completion.resolve(completed('session-1'));
+    await expect(running).resolves.toMatchObject({ status: 'completed' });
+    expect(order.slice(-2)).toEqual(['completed', 'result']);
+    expect(context.renderers[0].results[0]).toMatchObject({
+      outcome: 'completed', branchName: context.worktree.branchName,
+    });
+  });
+
+  it('rejects an unavailable provider before creating a Discord thread or worktree', async () => {
+    const order: string[] = [];
+    const context = setup(order);
+    context.provider.available = false;
+    const message = new FakeMessage(new FakeThread(), order);
+

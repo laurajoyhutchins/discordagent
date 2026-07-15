@@ -94,6 +94,9 @@ export interface TaskResult {
   costUsd?: number;
   durationMs?: number;
   numTurns?: number;
+  branchName?: string;
+  verification?: string[];
+  unresolved?: string[];
   error?: NormalizedAgentError;
 }
 

@@ -1,0 +1,330 @@
++    if (existingThreadId && threadId !== existingThreadId) throw new Error('Codex App Server resumed a different thread');
++
++    const startedAt = Date.now();
++    const session = { provider: 'codex' as const, sessionId: threadId, createdAt: startedAt };
++    await host.emit({ type: 'session_started', session });
++
++    let resolveCompletion!: (result: TaskResult) => void;
++    let rejectCompletion!: (error: Error) => void;
++    const completion = new Promise<TaskResult>((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject; });
++    const active: ActiveTurn = {
++      threadId,
++      workingDirectory: input.workingDirectory,
++      host,
++      startedAt,
++      resolve: resolveCompletion,
++      reject: rejectCompletion,
++    };
++    this.active.set(threadId, active);
++    try {
++      const response = await this.options.transport.request('turn/start', {
++        threadId,
++        input: [{ type: 'text', text: input.prompt }],
++        cwd: input.workingDirectory,
++        ...(model ? { model } : {}),
++        approvalPolicy: 'onRequest',
++        sandboxPolicy: {
++          type: 'workspaceWrite',
++          writableRoots: [input.workingDirectory],
++          networkAccess: false,
++        },
++      });
++      active.turnId = extractId(response, 'turn');
++    } catch (error) {
++      this.active.delete(threadId);
++      throw error;
++    }
++    return { session, completion };
++  }
++
++  private async handleNotification(method: string, params: unknown): Promise<void> {
++    const adapted = adaptCodexNotification(method, params);
++    if (!adapted.threadId) return;
++    const active = this.active.get(adapted.threadId);
++    if (!active) return;
++    for (const event of adapted.events) await active.host.emit(event);
++    if (adapted.terminal) {
++      this.active.delete(adapted.threadId);
++      active.resolve({ ...adapted.terminal, startedAt: active.startedAt, sessionId: active.threadId });
++    }
++  }
++
++  private installServerHandlers(): void {
++    const approval = async (method: string, params: unknown) => {
++      const p = isRecord(params) ? params : {};
++      const threadId = typeof p.threadId === 'string' ? p.threadId : '';
++      const active = this.active.get(threadId);
++      if (!active) return { decision: 'decline' };
++      const fileChange = /file/i.test(method);
++      const network = isRecord(p.networkApprovalContext);
++      const decision = await active.host.requestApproval({
++        id: String(p.itemId ?? p.requestId ?? p.id ?? Date.now()),
++        kind: fileChange ? 'file_change' : 'command',
++        title: network ? 'Allow Codex network access?' : fileChange ? 'Apply file changes?' : 'Run command?',
++        details: approvalDetails(p),
++        risk: network ? 'high' : 'medium',
++      });
++      return { decision: decision === 'allow' ? 'accept' : decision === 'timeout' ? 'cancel' : 'decline' };
++    };
++    for (const method of ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval']) {
++      this.unsubs.push(this.options.transport.handleServerRequest(method, approval));
++    }
++
++    this.unsubs.push(this.options.transport.handleServerRequest('item/permissions/requestApproval', async (_method, params) => {
++      const p = isRecord(params) ? params : {};
++      const threadId = typeof p.threadId === 'string' ? p.threadId : '';
++      const active = this.active.get(threadId);
++      if (!active) return { permissions: {}, scope: 'turn' };
++      const requested = isRecord(p.permissions) ? p.permissions : {};
++      const decision = await active.host.requestApproval({
++        id: String(p.itemId ?? p.requestId ?? p.id ?? Date.now()),
++        kind: 'tool',
++        title: 'Grant additional Codex permissions?',
++        details: String(p.reason ?? JSON.stringify(requested)),
++        risk: 'high',
++      });
++      return {
++        permissions: decision === 'allow' ? filterPermissions(requested, active.workingDirectory) : {},
++        scope: 'turn',
++      };
++    }));
++
++    this.unsubs.push(this.options.transport.handleServerRequest('item/tool/requestUserInput', async (_method, params) => {
++      const p = isRecord(params) ? params : {};
++      const threadId = typeof p.threadId === 'string' ? p.threadId : '';
++      const active = this.active.get(threadId);
++      if (!active) return { answers: {} };
++
++      const questions = Array.isArray(p.questions) ? p.questions.filter(isRecord) : [];
++      const answers: Record<string, { answers: string[] }> = {};
++      for (const question of questions) {
++        const questionId = typeof question.id === 'string' ? question.id : String(Date.now());
++        if (question.isSecret === true) {
++          await active.host.emit({
++            type: 'status',
++            phase: 'Secret input required',
++            detail: 'Codex requested secret input. Enter it locally; secrets are never collected through Discord.',
++          });
++          answers[questionId] = { answers: [] };
++          continue;
++        }
++        const options = Array.isArray(question.options)
++          ? question.options.flatMap(option => isRecord(option) && typeof option.label === 'string'
++            ? [{ label: option.label, value: option.label }]
++            : [])
++          : undefined;
++        const answer = await active.host.requestUserInput({
++          id: questionId,
++          prompt: [question.header, question.question]
++            .filter((value): value is string => typeof value === 'string' && value.length > 0)
++            .join('\n') || 'Codex needs input',
++          ...(options?.length ? { options } : {}),
++          allowFreeText: question.isOther === true || !options?.length,
++        });
++        answers[questionId] = { answers: answer.skipped ? [] : answer.values };
++      }
++      return { answers };
++    }));
++  }
++}
++
++function approvalDetails(params: Record<string, unknown>): string {
++  if (isRecord(params.networkApprovalContext)) {
++    const host = String(params.networkApprovalContext.host ?? 'unknown host');
++    const protocol = String(params.networkApprovalContext.protocol ?? 'network');
++    return `${protocol} access to ${host}`;
++  }
++  return String(params.command ?? params.reason ?? params.diff ?? params.details ?? 'No additional details supplied.');
++}
++
++function filterPermissions(requested: Record<string, unknown>, workingDirectory: string): Record<string, unknown> {
++  const granted: Record<string, unknown> = {};
++  if (isRecord(requested.network)) granted.network = requested.network;
++  if (isRecord(requested.fileSystem)) {
++    const fileSystem: Record<string, unknown> = {};
++    for (const key of ['read', 'write'] as const) {
++      if (!Array.isArray(requested.fileSystem[key])) continue;
++      const roots = requested.fileSystem[key].filter((value): value is string => typeof value === 'string' && isWithin(workingDirectory, value));
++      if (roots.length) fileSystem[key] = roots;
++    }
++    if (Object.keys(fileSystem).length) granted.fileSystem = fileSystem;
++  }
++  return granted;
++}
++
++function isWithin(root: string, candidate: string): boolean {
++  const rel = relative(resolve(root), resolve(candidate));
++  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
++}
++
++function extractId(value: unknown, nested: 'thread' | 'turn'): string | undefined {
++  if (!isRecord(value)) return undefined;
++  if (typeof value.id === 'string') return value.id;
++  if (typeof value[`${nested}Id`] === 'string') return value[`${nested}Id`] as string;
++  const object = value[nested];
++  return isRecord(object) && typeof object.id === 'string' ? object.id : undefined;
++}
+diff --git a/src/agents/codex/protocol.ts b/src/agents/codex/protocol.ts
+new file mode 100644
+index 0000000..68cc0d8
+--- /dev/null
++++ b/src/agents/codex/protocol.ts
+@@ -0,0 +1,44 @@
++export type JsonRpcId = number | string;
++
++interface JsonRpcBase {
++  jsonrpc?: '2.0';
++}
++
++export interface JsonRpcRequest extends JsonRpcBase {
++  id: JsonRpcId;
++  method: string;
++  params?: unknown;
++}
++
++export interface JsonRpcNotification extends JsonRpcBase {
++  method: string;
++  params?: unknown;
++}
++
++export interface JsonRpcSuccess extends JsonRpcBase {
++  id: JsonRpcId;
++  result: unknown;
++}
++
++export interface JsonRpcFailure extends JsonRpcBase {
++  id: JsonRpcId | null;
++  error: { code: number; message: string; data?: unknown };
++}
++
++export type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcSuccess | JsonRpcFailure;
++
++export function isRecord(value: unknown): value is Record<string, unknown> {
++  return typeof value === 'object' && value !== null;
++}
++
++export function parseJsonRpcLine(line: string): JsonRpcMessage {
++  const parsed: unknown = JSON.parse(line);
++  if (!isRecord(parsed)) throw new Error('Invalid JSON-RPC message');
++  if (parsed.jsonrpc !== undefined && parsed.jsonrpc !== '2.0') throw new Error('Invalid JSON-RPC version');
++  const hasMethod = typeof parsed.method === 'string';
++  const hasResult = Object.prototype.hasOwnProperty.call(parsed, 'result');
++  const hasError = isRecord(parsed.error) && typeof parsed.error.message === 'string';
++  const hasId = typeof parsed.id === 'number' || typeof parsed.id === 'string' || parsed.id === null;
++  if (!hasMethod && !(hasId && (hasResult || hasError))) throw new Error('Invalid JSON-RPC message');
++  return parsed as unknown as JsonRpcMessage;
++}
+diff --git a/src/commands/agents.ts b/src/commands/agents.ts
+new file mode 100644
+index 0000000..89f26a3
+--- /dev/null
++++ b/src/commands/agents.ts
+@@ -0,0 +1,30 @@
++import { EmbedBuilder, type ChatInputCommandInteraction } from 'discord.js';
++import { getTaskRepository } from '../services/agentRuntimeService.js';
++import { getUsageAdmissionService } from '../services/usageAdmissionRegistry.js';
++
++export async function handleAgents(interaction: ChatInputCommandInteraction): Promise<void> {
++  const tasks = getTaskRepository().listActive();
++  const usage = getUsageAdmissionService();
++  if (tasks.length === 0) {
++    await interaction.reply({ content: 'No agent tasks are currently active.', ephemeral: true });
++    return;
++  }
++
++  const embed = new EmbedBuilder()
++    .setTitle('Active Agent Tasks')
++    .setColor(0x5865f2)
++    .setTimestamp();
++
++  for (const task of tasks.slice(0, 25)) {
++    const reservation = usage?.reservations(task.provider).find(item => item.taskId === task.id);
++    const reservationText = reservation
++      ? `\n**Reserved capacity:** ${reservation.low.toFixed(1)}–${reservation.high.toFixed(1)} (${reservation.confidence})`
++      : '';
++    embed.addFields({
++      name: `${task.projectName} · ${task.provider} · ${task.status}`,
++      value: `**Task:** ${task.objective.slice(0, 300)}\n**Thread:** <#${task.threadId}>${reservationText}`,
++    });
++  }
++
++  await interaction.reply({ embeds: [embed], ephemeral: true });
++}
+diff --git a/src/commands/codexAuth.test.ts b/src/commands/codexAuth.test.ts
+new file mode 100644
+index 0000000..9b9ad0a
+--- /dev/null
++++ b/src/commands/codexAuth.test.ts
+@@ -0,0 +1,54 @@
++import { describe, expect, it, vi } from 'vitest';
++import { handleCodexAuth, handleCodexAuthButton } from './codexAuth.js';
++
++describe('codex auth command', () => {
++  it('is owner-only', async () => {
++    const reply = vi.fn();
++    await handleCodexAuth({ user: { id: 'other' }, options: { getSubcommand: () => 'status' }, reply } as never, { authorizedUserId: 'owner', auth: {} as never });
++    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('Only') }));
++  });
++  it('shows device-code guidance privately', async () => {
++    const reply = vi.fn();
++    const auth = { readAccount: vi.fn(async () => ({ authenticated: false })), startDeviceLogin: vi.fn(async () => ({ loginId: 'l', verificationUrl: 'https://example.test', userCode: 'ABCD' })) };
++    await handleCodexAuth({ user: { id: 'owner' }, options: { getSubcommand: () => 'login' }, reply } as never, { authorizedUserId: 'owner', auth: auth as never });
++    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('ABCD'), ephemeral: true }));
++  });
++
++  it('offers an explicit Start task action only after a fresh authenticated account read', async () => {
++    const update = vi.fn(async () => undefined);
++    const pending = { projectName: 'factory-floor', prompt: 'finish the worker registry' };
++    const pendingTasks = { get: vi.fn(() => pending), start: vi.fn(async () => undefined), discard: vi.fn() };
++    const interaction = {
++      customId: 'codex_auth_check',
++      user: { id: 'owner' },
++      message: { components: [] },
++      update,
++    } as never;
++    await handleCodexAuthButton(interaction, {
++      authorizedUserId: 'owner',
++      auth: { readAccount: vi.fn(async () => ({ authenticated: true })) } as never,
++      pendingTasks: pendingTasks as never,
++    });
++    expect(update).toHaveBeenCalledWith(expect.objectContaining({
++      content: expect.stringContaining('Pending task'),
++      components: expect.any(Array),
++    }));
++  });
++
++  it('starts the held task only after rechecking authentication', async () => {
++    const pendingTasks = { start: vi.fn(async () => undefined) };
++    const interaction = {
++      customId: 'codex_auth_start_pending',
++      user: { id: 'owner' },
++      update: vi.fn(async () => undefined),
++      followUp: vi.fn(async () => undefined),
++    } as never;
++    await handleCodexAuthButton(interaction, {
++      authorizedUserId: 'owner',
++      auth: { readAccount: vi.fn(async () => ({ authenticated: true })) } as never,
++      pendingTasks: pendingTasks as never,
++    });
++    expect(pendingTasks.start).toHaveBeenCalledWith('owner');
++  });
++
++});
+diff --git a/src/commands/codexAuth.ts b/src/commands/codexAuth.ts
+new file mode 100644
+index 0000000..91d48b2
+--- /dev/null
++++ b/src/commands/codexAuth.ts
+@@ -0,0 +1,111 @@
++import {
++  ActionRowBuilder, ButtonBuilder, ButtonStyle, type ButtonInteraction,
++  type ChatInputCommandInteraction,
++} from 'discord.js';
++import type { CodexAuthService } from '../agents/codex/codexAuthService.js';
++import { getCodexAuthService, maybeGetPendingTaskService } from '../services/agentRuntimeService.js';
++import type { PendingTaskService } from '../services/pendingTaskService.js';
++import { redactErrorMessage } from '../utils/redaction.js';
++
++export interface CodexAuthDependencies {
++  auth: CodexAuthService;
++  authorizedUserId: string;

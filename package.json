@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "check": "npm test && npm run build"
+    "check": "npm test && npm run build",
+    "smoke:host": "tsx src/smoke/hostPreflight.ts",
+    "smoke:discord": "tsx src/smoke/discordConnectivity.ts",
+    "smoke": "npm run smoke:host && npm run smoke:discord"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.87",

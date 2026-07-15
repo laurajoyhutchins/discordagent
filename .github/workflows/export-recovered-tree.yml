@@ -1,0 +1,25 @@
+name: Export recovered tree
+
+on:
+  push:
+    branches:
+      - tmp/recovered-phase1-tree
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recovered-tree-${{ github.sha }}
+          path: |
+            .
+            !.git/**
+            !node_modules/**
+            !dist/**
+          include-hidden-files: true
+          retention-days: 1

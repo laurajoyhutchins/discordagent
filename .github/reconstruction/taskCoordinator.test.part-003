@@ -1,0 +1,108 @@
+    const completion = deferred<TaskResult>();
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'cancel-session', createdAt: 11 },
+      completion: completion.promise,
+    });
+    const thread = new FakeThread('thread-cancel');
+    const running = context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Long task',
+      message: new FakeMessage(thread) as unknown as Message,
+    });
+    await waitUntil(() => context.tasks.findByThreadId(thread.id)?.status === 'running');
+
+    await expect(context.coordinator.cancelByThread(thread.id)).resolves.toBe(true);
+    expect(context.provider.cancelled).toEqual(['cancel-session']);
+    expect(context.removeCount()).toBe(0);
+    expect(context.tasks.findByThreadId(thread.id)?.status).toBe('cancelled');
+
+    completion.resolve(completed('cancel-session', {
+      outcome: 'cancelled', exitType: 'cancelled', summary: 'Cancelled',
+    }));
+    await expect(running).resolves.toMatchObject({ status: 'cancelled' });
+  });
+
+
+
+  it('closes a terminal task by removing the clean worktree while preserving its branch', async () => {
+    const context = setup();
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'close-session', createdAt: 11 },
+      completion: Promise.resolve(completed('close-session')),
+    });
+    const task = await context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Closable task',
+      message: new FakeMessage(new FakeThread('thread-close')) as unknown as Message,
+    });
+
+    await context.coordinator.closeTask(task.id);
+    expect(context.removedInputs).toEqual([
+      expect.objectContaining({
+        worktreePath: context.worktree.worktreePath,
+        branchName: context.worktree.branchName,
+        removeBranch: false,
+      }),
+    ]);
+    expect(context.tasks.getWorktree(task.id)?.removedAt).toEqual(expect.any(Number));
+  });
+
+  it('keeps a stored terminal result successful when the final Discord render fails', async () => {
+    const context = setup();
+    const completion = deferred<TaskResult>();
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'render-failure-session', createdAt: 11 },
+      completion: completion.promise,
+    });
+    const running = context.coordinator.startFromMessage({
+      projectName: 'factory-floor',
+      prompt: 'Finish despite Discord failure',
+      message: new FakeMessage(new FakeThread('thread-render-failure')) as unknown as Message,
+    });
+    await waitUntil(() => context.renderers.length === 1);
+    context.renderers[0].finish = async () => { throw new Error('Discord unavailable'); };
+
+    completion.resolve(completed('render-failure-session'));
+
+    await expect(running).resolves.toMatchObject({ status: 'completed' });
+    expect(context.tasks.findByThreadId('thread-render-failure')?.status).toBe('completed');
+  });
+
+  it('marks the task failed when a provider completion promise rejects unexpectedly', async () => {
+    const context = setup();
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'reject-session', createdAt: 11 },
+      completion: Promise.reject(new Error('transport disconnected')),
+    });
+    const thread = new FakeThread('thread-reject');
+
+    await expect(context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Fragile task',
+      message: new FakeMessage(thread) as unknown as Message,
+    })).resolves.toMatchObject({ status: 'failed' });
+    expect(context.tasks.findByThreadId(thread.id)).toMatchObject({ status: 'failed' });
+    expect(context.renderers[0].results[0]).toMatchObject({
+      outcome: 'failed', summary: 'transport disconnected',
+    });
+  });
+
+  it('marks recoverable tasks interrupted, inspects worktrees, and never invokes a provider', async () => {
+    const context = setup();
+    for (const [id, status] of [['one', 'starting'], ['two', 'running'], ['three', 'waiting_for_user']] as const) {
+      context.tasks.createWithWorktree({
+        taskId: id,
+        projectName: 'factory-floor',
+        provider: 'claude',
+        channelId: 'agent-1',
+        threadId: `thread-${id}`,
+        objective: id,
+        worktree: {
+          id: `worktree-${id}`,
+          repositoryPath: '/repo',
+          worktreePath: `/worktrees/${id}`,
+          branchName: `agent/claude/${id}`,
+          baseRef: 'main',
+        },
+      });
+      context.tasks.transition(id, ['created'], 'starting');
+      if (status === 'running' || status === 'waiting_for_user') {
+        context.tasks.transition(id, ['starting'], 'running');
+      }

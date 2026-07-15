@@ -1,6 +1,7 @@
 name: Recovery Export
 
 on:
+  pull_request:
   push:
     branches:
       - recovery/export-main

@@ -1,0 +1,55 @@
+name: Cleanup Stale Branches
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Delete confirmed stale branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          branches=(
+            feat/codex-primary-usage
+            docs/discord-agent-workspace-design
+            feat/provider-neutral-foundation
+            feat/provider-neutral-runtime-completion
+            sync/provider-neutral-final
+            tmp/recovered-phase1-tree
+            recovery/export-main
+            recovery/export-main-pr
+            recovery/export-trigger
+            ops/repository-cleanup
+          )
+
+          for branch in "${branches[@]}"; do
+            if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              git push origin --delete "$branch"
+            else
+              echo "Already absent: $branch"
+            fi
+          done
+
+      - name: Remove one-time cleanup workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/cleanup-stale-branches.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/cleanup-stale-branches.yml
+          git commit -m 'chore: remove one-time branch cleanup'
+          git push origin HEAD:main

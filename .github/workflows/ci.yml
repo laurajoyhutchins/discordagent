@@ -31,3 +31,17 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Export verified source snapshot
+        if: github.head_ref == 'feat/provider-neutral-runtime-completion'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-phase1-source
+          path: |
+            .
+            !.git
+            !node_modules
+            !dist
+            !src/data/*.sqlite*
+          include-hidden-files: true
+          retention-days: 1

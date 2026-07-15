@@ -27,7 +27,9 @@ jobs:
           ready_file=.github/patches/current.patch.ready
 
           if [[ -f "$ready_file" ]] && compgen -G '.github/patches/current.patch.part-*' > /dev/null; then
-            cat .github/patches/current.patch.part-* > /tmp/current.patch
+            cat .github/patches/current.patch.part-* \
+              | base64 --decode \
+              | gzip --decompress > /tmp/current.patch
             rm .github/patches/current.patch.part-* "$ready_file"
           elif [[ -f "$plain_patch" ]]; then
             cp "$plain_patch" /tmp/current.patch

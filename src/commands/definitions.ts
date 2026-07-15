@@ -3,7 +3,7 @@ import { SlashCommandBuilder } from 'discord.js';
 export const commands = [
   new SlashCommandBuilder()
     .setName('add-project')
-    .setDescription('Register a project for Claude Code orchestration')
+    .setDescription('Register a project for agent orchestration')
     .addStringOption(opt =>
       opt.setName('name').setDescription('Project name (used for category)').setRequired(true)
     )
@@ -27,7 +27,7 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName('cancel')
-    .setDescription('Cancel the active Claude session in this channel'),
+    .setDescription('Cancel the active agent task in this thread'),
 
   new SlashCommandBuilder()
     .setName('loop')
@@ -45,11 +45,25 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName('usage')
-    .setDescription('Show Claude Code rate limit usage and session stats'),
+    .setDescription('Show provider rate limit usage and task stats'),
+
+
+  new SlashCommandBuilder()
+    .setName('provider')
+    .setDescription('Show or change the default agent provider for this project')
+    .addStringOption(opt =>
+      opt.setName('provider')
+        .setDescription('Provider for new task threads')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Claude', value: 'claude' },
+          { name: 'Codex (available in Phase 2)', value: 'codex' },
+        )
+    ),
 
   new SlashCommandBuilder()
     .setName('model')
-    .setDescription('Pick which Claude model to use for this project')
+    .setDescription("Pick the model for this project's active provider")
     .addStringOption(opt =>
       opt.setName('model')
         .setDescription('Choose a model')

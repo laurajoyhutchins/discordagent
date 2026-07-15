@@ -1,5 +1,6 @@
 import { Interaction } from 'discord.js';
 import { isAuthorized } from '../utils/permissions.js';
+import { redactErrorMessage } from '../utils/redaction.js';
 import { handleAddProject } from '../commands/addProject.js';
 import { handleListProjects } from '../commands/listProjects.js';
 import { handleRemoveProject } from '../commands/removeProject.js';
@@ -8,6 +9,7 @@ import { handleLoop } from '../commands/loop.js';
 import { handleStopLoop } from '../commands/stopLoop.js';
 import { handleUsage } from '../commands/usage.js';
 import { handleModel } from '../commands/model.js';
+import { handleProvider } from '../commands/provider.js';
 import { stopLoopFromButton } from '../services/loopRunner.js';
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
@@ -25,7 +27,7 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
       return;
     }
 
-    // Other button interactions (tool approval, ask user) are handled by discordStreamer
+    // Task-scoped agent components are consumed by InteractionBroker message collectors.
     return;
   }
 
@@ -61,6 +63,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
       case 'usage':
         await handleUsage(interaction);
         break;
+      case 'provider':
+        await handleProvider(interaction);
+        break;
       case 'model':
         await handleModel(interaction);
         break;
@@ -68,7 +73,7 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
         await interaction.reply({ content: 'Unknown command.', ephemeral: true });
     }
   } catch (err) {
-    console.error(`Error handling command ${interaction.commandName}:`, err);
+    console.error(`Error handling command ${interaction.commandName}:`, redactErrorMessage(err));
     const userMsg = 'An unexpected error occurred. Check server logs for details.';
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(userMsg).catch(() => {});

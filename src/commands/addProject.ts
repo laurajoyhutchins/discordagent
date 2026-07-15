@@ -11,7 +11,7 @@ import { config } from '../config.js';
  */
 function isRoborevAvailable(): boolean {
   try {
-    execFileSync(config.roborevCliPath, ['--version'], {
+    execFileSync(config.roborevCliPath, ['version'], {
       timeout: 5000,
       stdio: 'ignore',
     });
@@ -109,10 +109,10 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     });
 
     let replyMsg = `Project **${name}** created!\n` +
-      `- <#${channels.agentChannelId}> — send Claude prompts here`;
+      `- <#${channels.agentChannelId}> — talk to the project agent here`;
 
     if (!isGitRepo) {
-      replyMsg += `\n\n⚠️ **Warning:** This is not a git repository. Claude Code will work, but you won't have version control protection against destructive changes. Consider initializing git: \`git init\``;
+      replyMsg += `\n\n⚠️ **Warning:** This non-Git project was registered, but agent tasks cannot start until the directory is initialized as a Git repository. Run \`git init && git add -A && git commit -m \"initial\"\` before sending a task.`;
     }
 
     if (channels.roborevChannelId) {
@@ -123,28 +123,6 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
 
     await interaction.editReply(replyMsg);
 
-    // Send webhook URL privately via DM (only if roborev was set up)
-    if (channels.roborevWebhookId && channels.roborevWebhookToken) {
-      const webhookUrl = `https://discord.com/api/webhooks/${channels.roborevWebhookId}/${channels.roborevWebhookToken}`;
-      try {
-        const dm = await interaction.user.createDM();
-        await dm.send(
-          `**Roborev webhook URL for ${name}:**\n\`\`\`\n${webhookUrl}\n\`\`\`\n` +
-          `Add this to your roborev config to route reviews to Discord.`
-        );
-        await interaction.followUp({ content: 'Webhook URL sent to your DMs.', ephemeral: true });
-      } catch {
-        // If DMs are disabled, fall back to ephemeral follow-up
-        try {
-          await interaction.followUp({
-            content: `**Roborev webhook URL:**\n\`\`\`\n${webhookUrl}\n\`\`\`\nAdd this to your roborev config to route reviews to Discord.`,
-            ephemeral: true,
-          });
-        } catch (followUpErr) {
-          console.error(`[addProject] Failed to send webhook URL to user ${interaction.user.id}:`, followUpErr);
-        }
-      }
-    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await interaction.editReply(`Failed to create project: ${msg}`);

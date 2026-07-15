@@ -1,6 +1,7 @@
 import { REST, Routes } from 'discord.js';
 import { config } from '../config.js';
 import { commands } from './definitions.js';
+import { redactErrorMessage } from '../utils/redaction.js';
 
 async function register() {
   const rest = new REST().setToken(config.discordToken);
@@ -15,4 +16,4 @@ async function register() {
   console.log('Slash commands registered successfully.');
 }
 
-register().catch(console.error);
+register().catch(error => console.error(redactErrorMessage(error)));

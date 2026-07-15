@@ -52,6 +52,12 @@ export const config = {
   mcpServers: loadUserMcpServers(),
   usageChannelId: process.env.USAGE_CHANNEL_ID ?? '',
   defaultModel: process.env.CLAUDE_MODEL ?? '',
+  defaultCodexModel: process.env.CODEX_MODEL ?? '',
+  codexCliPath: process.env.CODEX_CLI_PATH ?? 'codex',
+  codexEnabled: process.env.CODEX_ENABLED !== 'false',
+  authorizedUserId: process.env.AUTHORIZED_USER_ID ?? process.env.NOTIFY_USER_ID ?? '',
+  primaryAgentModel: process.env.PRIMARY_AGENT_MODEL ?? process.env.CLAUDE_MODEL ?? '',
+  primaryUsageReserve: parseFloat(process.env.PRIMARY_USAGE_RESERVE ?? '10'),
   databasePath,
   worktreesBaseDir: process.env.WORKTREES_BASE_DIR ?? defaultWorktreesBaseDir,
 } as const;

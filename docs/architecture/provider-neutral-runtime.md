@@ -1,103 +1,60 @@
-# Provider-Neutral Runtime Architecture
+# Discord Agent Runtime Architecture
 
-## Purpose
+Discord Agent is a private, local-first Discord workspace with one persistent PM-style primary agent and isolated Claude or Codex task agents. Generic orchestration depends only on provider-neutral contracts.
 
-Phase 1 separates Discord orchestration, durable state, Git isolation, and provider execution so Claude remains functional while Codex and other providers can be added without rewriting the Discord surface.
-
-## Lifecycle
-
-A new task follows a strict write-before-side-effect sequence:
+## Runtime topology
 
 ```text
-resolve project/provider
-→ verify provider availability
-→ create Discord thread
-→ create branch/worktree
-→ persist task + worktree transactionally
-→ mark starting
-→ start provider
-→ persist provider session before awaiting completion
-→ mark running
-→ persist/render normalized events
-→ persist terminal result
+#agent-chat
+  → PrimaryAgentService
+  → bounded context (pinned memory + projects + active tasks + recent/FTS history + usage posture)
+  → TaskCoordinator for approved delegation
+
+project #agent / task thread
+  → TaskCoordinator
+  → UsageAdmissionService
+  → WorktreeManager + SQLite task/worktree/session records
+  → ProviderRegistry
+      ├── ClaudeProvider → Claude Agent SDK
+      └── CodexProvider → local Codex App Server JSON-RPC
+  → normalized events → SQLite + DiscordTaskRenderer
 ```
 
-The provider returns a `ProviderRun` containing a session identity and a separate completion promise. This split is intentional: Discord Agent must persist the provider session before it awaits a potentially long-running turn.
+## Task lifecycle
 
-## Components
+A new task follows this order:
 
-### TaskCoordinator
+1. resolve the project and immutable provider;
+2. verify provider availability and authentication;
+3. reserve estimated provider capacity;
+4. create the Discord thread;
+5. create an isolated Git branch/worktree;
+6. persist task/worktree and attach the reservation;
+7. start the provider;
+8. persist the provider session before awaiting completion;
+9. stream redacted normalized events;
+10. persist the terminal result and calibrate actual usage.
 
-The coordinator is the application boundary. It validates provider immutability, creates task isolation, drives state transitions, attaches sessions, brokers approvals/questions, captures events, records results, cancels work, closes safe worktrees, and recovers interruptions.
+Admission happens before Discord or Git side effects. A rejected task creates neither a thread nor a worktree. Continuations reserve a new turn budget while retaining the same task, provider session, branch, and worktree.
 
-### ProviderRegistry and providers
+## Providers
 
-The registry maps `AgentProviderId` to one implementation. Generic code consumes only `AgentProvider`.
+`ClaudeProvider` uses user-level Claude settings only. Project/local settings remain excluded.
 
-Phase 1 registers `ClaudeProvider`. It adapts the Claude Agent SDK into:
+`CodexProvider` uses one local App Server transport. It supports initialization, account state, device-code login, thread start/resume, streamed items, approvals, user questions, rate-limit windows, bounded overload retry, interruption, and deterministic shutdown. Requests blocked by authentication are held in memory for up to 30 minutes and require an explicit post-login Start action before Discord or Git side effects occur. Credentials and one-time codes never enter SQLite.
 
-- early `ProviderSession` creation;
-- streamed `AgentEvent` values;
-- provider-neutral approvals and questions;
-- cancellation;
-- normalized task results and usage.
+A provider switch is a confirmed sibling handoff. The system estimates target input context, requires confirmation, creates a fresh target session and isolated worktree based on the clean committed source branch, and cross-links the threads.
 
-Codex is deliberately not registered until the App Server adapter can provide the same complete lifecycle.
+## Primary agent
 
-### Repositories and SQLite
+The primary agent is deliberately tool-isolated. It can converse, retrieve history, propose decisions, write provenance-valid memory, and delegate through `TaskCoordinator`; it cannot edit repositories or call project MCP tools directly. Raw messages remain authoritative in SQLite, with FTS5 retrieval and bounded context assembly. Read-only policy memory cannot be overwritten by model output.
 
-SQLite is the operational source of truth. Migrations run idempotently at startup. The repositories enforce provider-scoped sessions, task/thread uniqueness, task/worktree uniqueness, legal compare-and-set state transitions, recoverable-task queries, terminal-result rules, and event deduplication.
+## Usage orchestration
 
-Legacy `projects.json` is imported once. Existing channel mappings and Claude model settings are preserved; old session IDs are not resumed automatically; webhook credentials are discarded.
+Provider windows and reset times are stored as snapshots. Each task class has a low/high estimate calibrated from completed observations. Active holds are included when computing safe capacity, with a configurable reserve for primary-agent coordination.
 
-### WorktreeManager
+Operating postures are `unknown`, `healthy`, `cautious`, `restricted`, `preserve`, and `exhausted`. Routine messages hide telemetry. When capacity is critical, the coordinator records a checkpoint and interrupts the provider at most once for that turn; task state, session, branch, and worktree remain available. `/usage` and `/agents` expose details on demand.
 
-Every Git-backed task receives a unique branch and worktree. The manager serializes naming collisions, supports paths containing spaces, rejects unsafe Git operations, and refuses dirty removal. It never uses shell interpolation or force cleanup.
+## Recovery and safety
 
-### Discord rendering and interaction
-
-`DiscordTaskRenderer` translates normalized events to messages and embeds. `DiscordInteractionBroker` creates task/request-scoped component identifiers, verifies the responding member, denies timed-out consequential actions, and returns explicit skipped answers for unanswered questions.
-
-### Runtime startup
-
-`startRuntime()` performs:
-
-1. database open and migrations;
-2. one-time legacy import;
-3. repository construction;
-4. Git worktree manager construction;
-5. Claude provider registration;
-6. coordinator construction and global installation;
-7. usage/Roborev client initialization;
-8. interrupted-task recovery;
-9. recovery checkpoint delivery when threads are available.
-
-Any startup failure clears the global coordinator and closes the project database. Shutdown clears the coordinator and closes SQLite after loops/watchers are stopped by the process entry point.
-
-## Recovery semantics
-
-A process exit may leave tasks in `starting`, `running`, or `waiting_for_user`. On the next startup, Discord Agent:
-
-- inspects the recorded worktree;
-- marks the task `interrupted`;
-- records whether the worktree is present, clean, or dirty;
-- posts a concise checkpoint to the original thread when possible;
-- requires an explicit message to continue.
-
-It never assumes whether the previous provider turn had side effects and never replays that turn automatically.
-
-## Continuation
-
-A completed or failed turn can be continued in its original Discord thread. The repository reopens the durable task transactionally, and the coordinator resumes the exact provider session in the same worktree. Provider, session, branch, and thread identities cannot change.
-
-## Roborev
-
-Roborev is intentionally outside provider execution. The watcher reads `roborev stream`, matches repository paths with boundary-safe comparisons, and sends embeds with the authenticated bot. No webhook credential crosses the persistence boundary.
-
-## Phase boundary
-
-Phase 1 ends with a provider-neutral runtime and executable Claude provider. Codex App Server, guided authentication, sibling-thread provider handoff, the persistent PM agent, full conversational memory, polls, and usage admission are follow-on phases.
-
-## Redaction boundary
-
-Normalized provider events and errors are redacted before persistence, Discord rendering, and logging. The coordinator applies the central boundary, while provider adapters and error handlers add defense in depth.
+Startup marks nonterminal tasks interrupted and never replays a possibly side-effecting turn. Dirty worktrees are never force-removed. Provider events and errors are redacted before persistence, Discord, and logs. Git commands use argument arrays with `shell: false`. Roborev posts through the authenticated bot and stores no webhook credentials.

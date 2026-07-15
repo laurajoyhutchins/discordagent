@@ -1,6 +1,7 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
 import type { AgentProviderId } from '../agents/contracts.js';
 import type { Project } from '../types.js';
+import { getProviderRegistry } from '../services/agentRuntimeService.js';
 import {
   getProjectByChannel,
   updateProjectProvider,
@@ -9,11 +10,13 @@ import {
 export interface ProviderCommandDependencies {
   getProjectByChannel(channelId: string): Project | undefined;
   updateProjectProvider(name: string, provider: AgentProviderId): void;
+  checkProvider(provider: AgentProviderId): Promise<{ available: boolean; reason?: string; authenticationRequired?: boolean }>;
 }
 
 const defaultDependencies: ProviderCommandDependencies = {
   getProjectByChannel,
   updateProjectProvider,
+  checkProvider: provider => getProviderRegistry().require(provider).checkAvailability(),
 };
 
 export async function handleProvider(
@@ -22,7 +25,7 @@ export async function handleProvider(
 ): Promise<void> {
   if (interaction.channel?.isThread()) {
     await interaction.reply({
-      content: 'A task thread keeps the provider it started with. Change the project default from the main project channel; provider handoff will create a sibling thread in Phase 2.',
+      content: 'A task thread keeps the provider it started with. Use `/provider claude` or `/provider codex` as a text command in this task thread to request a confirmed sibling handoff.',
       ephemeral: true,
     });
     return;
@@ -46,17 +49,15 @@ export async function handleProvider(
     return;
   }
 
-  if (requested === 'codex') {
-    await interaction.reply({
-      content: 'Codex App Server support is planned for Phase 2 and is not executable in this foundation release. The project provider was not changed.',
-      ephemeral: true,
-    });
+  const availability = await dependencies.checkProvider(requested);
+  if (!availability.available) {
+    await interaction.reply({ content: availability.reason ?? `Provider ${requested} is unavailable.`, ephemeral: true });
     return;
   }
 
-  dependencies.updateProjectProvider(project.name, 'claude');
+  dependencies.updateProjectProvider(project.name, requested);
   await interaction.reply({
-    content: `Default provider for **${project.name}** set to **Claude**. New task threads will use Claude.`,
+    content: `Default provider for **${project.name}** set to **${requested === 'codex' ? 'Codex' : 'Claude'}**. New task threads will use ${requested}.`,
     ephemeral: true,
   });
 }

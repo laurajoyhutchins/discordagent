@@ -37,7 +37,9 @@ export interface TaskRepository {
   markWorktreeRemoved(taskId: string, removedAt?: number): void;
   reopenForContinuation(taskId: string): TaskRecord;
   listRecoverable(): TaskRecord[];
+  listActive(): TaskRecord[];
   saveResult(taskId: string, result: TaskResult): void;
+  getResult(taskId: string): TaskResult | undefined;
 }
 
 
@@ -315,12 +317,44 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
       return requireTask(taskId);
     },
 
+    listActive(): TaskRecord[] {
+      const rows = db.raw.prepare(`${TASK_SELECT}
+        WHERE t.status IN ('created', 'starting', 'running', 'waiting_for_user')
+        ORDER BY t.created_at, t.id
+      `).all() as TaskRow[];
+      return rows.map(toTaskRecord);
+    },
+
     listRecoverable(): TaskRecord[] {
       const rows = db.raw.prepare(`${TASK_SELECT}
         WHERE t.status IN ('starting', 'running', 'waiting_for_user')
         ORDER BY t.created_at, t.id
       `).all() as TaskRow[];
       return rows.map(toTaskRecord);
+    },
+
+    getResult(taskId: string): TaskResult | undefined {
+      const task = requireTask(taskId);
+      const row = db.raw.prepare(`
+        SELECT outcome, summary, verification_json, unresolved_json, usage_json, completed_at
+        FROM task_results WHERE task_id = ?
+      `).get(taskId) as {
+        outcome: TaskResult['outcome']; summary: string; verification_json: string;
+        unresolved_json: string; usage_json: string | null; completed_at: number;
+      } | undefined;
+      if (!row) return undefined;
+      return {
+        provider: task.provider,
+        outcome: row.outcome,
+        exitType: row.outcome,
+        startedAt: task.startedAt ?? task.createdAt,
+        completedAt: row.completed_at,
+        ...(task.providerSessionId ? { sessionId: task.providerSessionId } : {}),
+        summary: row.summary,
+        verification: JSON.parse(row.verification_json) as string[],
+        unresolved: JSON.parse(row.unresolved_json) as string[],
+        ...(row.usage_json ? { usage: JSON.parse(row.usage_json) } : {}),
+      };
     },
 
     saveResult(taskId: string, result: TaskResult): void {

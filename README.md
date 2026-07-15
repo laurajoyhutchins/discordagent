@@ -2,21 +2,24 @@
 
 Discord Agent is a private, local-first Discord workspace for running coding agents against repositories on the machine hosting the bot. It is based on [Nicolai Lolansen's DiscordClaude](https://github.com/NicolaiLolansen/DiscordClaude) and retains the upstream MIT license and attribution.
 
-Phase 1 provides a provider-neutral runtime with Claude Code as the executable provider. Codex is represented in the domain model and `/provider` interface, but **Codex is not yet executable**; the Codex App Server adapter and guided authentication flow are Phase 2.
+Discord Agent provides a provider-neutral runtime with executable Claude and Codex providers. Codex runs through the local App Server protocol with guided device-code authentication, streamed events, approvals, questions, cancellation, quota state, and confirmed sibling-thread handoffs.
 
-## What Phase 1 provides
+## What the runtime provides
 
+- **Persistent primary-agent chat** — a private `#agent-chat` channel provides one PM-style point of contact for natural conversation, planning, delegation, and concise reporting.
 - **Natural-language project channels** — each registered project receives a private `#agent` channel.
 - **Task threads** — each new prompt creates a Discord thread representing one durable agent task and one immutable provider session.
 - **Isolated Git worktrees** — each Git-backed task receives its own branch and writable worktree before provider execution begins.
 - **Durable state** — projects, tasks, worktrees, provider sessions, events, results, and recovery checkpoints are stored in SQLite.
-- **Claude provider adapter** — Claude Code runs through `ClaudeProvider`, behind the same interface future providers use.
+- **Claude and Codex adapters** — Claude uses the Agent SDK; Codex uses the local App Server JSONL protocol behind the same provider contract.
 - **Streaming and approvals** — responses, plans, commands, file changes, approvals, and user questions are rendered through provider-neutral Discord components.
 - **Continuation and cancellation** — replies continue the same provider session; `/cancel` cancels the task associated with the current thread.
 - **Safe restart recovery** — nonterminal tasks are marked interrupted, their worktrees are preserved, and no provider turn is replayed automatically.
 - **Recurring tasks** — a loop reuses one thread, task, worktree, and provider session without overlapping iterations.
 - **Roborev routing** — optional reviews are posted by the authenticated bot directly to `#roborev`; webhook credentials are not created or stored.
-- **Usage visibility** — `/usage` exposes Claude usage details when requested. Routine task messages remain outcome-focused.
+- **Durable memory and retrieval** — the primary agent uses a SQLite journal, FTS5 retrieval, provenance-controlled memory, and bounded context assembly.
+- **Discord-native decisions** — confirmations, select menus, and native polls collect user choices without turning routine conversation into command syntax.
+- **Quiet usage admission** — provider windows, calibrated task estimates, and active reservations are managed internally; `/usage` and `/agents` expose details on demand, while normal conversation surfaces only material constraints.
 
 ## Safety model
 
@@ -39,8 +42,9 @@ Discord Agent is intended for a private server with trusted users and repositori
 - Git
 - A private Discord server where you can install a bot
 - Claude Code installed and authenticated on the bot host
+- Codex CLI installed when Codex tasks are desired
 
-Run Claude once locally to complete authentication before starting Discord Agent.
+Run Claude once locally to complete authentication. Codex can be authenticated privately from Discord with `/codex-auth login`, or locally with `codex login --device-auth`.
 
 ## Installation
 
@@ -105,12 +109,14 @@ Send a normal message in `#agent` to create a task. Discord Agent will:
 | `/add-project` | Register a local project and create its channels. |
 | `/list-projects` | List active projects, providers, models, and channels. |
 | `/remove-project` | Soft-archive the project record and delete its Discord channels. Historical tasks remain in SQLite. |
-| `/provider [claude\|codex]` | Show or change the project's default provider. Phase 1 accepts Claude; Codex returns a deterministic Phase 2 notice without changing state. |
+| `/provider [claude\|codex]` | Show or change the project's default provider after an authoritative availability check. In a task thread, proposing the other provider creates a confirmed sibling handoff. |
 | `/model [model] [custom]` | Set the model override for the project's current provider. |
 | `/cancel` | In a task thread, cancel that durable task while preserving its worktree. |
 | `/loop <prompt> [interval]` | Start a recurring task in one thread/session/worktree. |
 | `/stop-loop` | Stop the loop associated with the project or loop thread. |
-| `/usage` | Show detailed Claude usage and rate-limit information. |
+| `/agents` | Show active task threads, providers, status, and reserved capacity. |
+| `/usage` | Show provider windows, operating posture, and active reservations. |
+| `/codex-auth status\|login\|logout` | Check, establish, or revoke Codex authentication using owner-only ephemeral controls. |
 
 Text commands in `#agent` include `/provider`, `/model`, `/loop`, `/stop-loop`, and `/status`. Ordinary natural-language messages are the default interface.
 
@@ -118,7 +124,7 @@ Text commands in `#agent` include `/provider`, `/model`, `/loop`, `/stop-loop`, 
 
 ### Claude
 
-Claude is executable in Phase 1 through `@anthropic-ai/claude-agent-sdk`.
+Claude executes through `@anthropic-ai/claude-agent-sdk`.
 
 Model precedence is:
 
@@ -131,9 +137,11 @@ Claude continues to respect `~/.claude/settings.json`. Project-level `.claude/se
 
 ### Codex
 
-The provider ID `codex` exists so projects, tasks, sessions, and commands do not need another domain migration. In Phase 1, selecting Codex is rejected safely with an explanation that the App Server adapter is not installed yet. No task or repository change is started.
+Codex runs through a singleton local App Server process using newline-delimited JSON requests, responses, notifications, and server-initiated approval/input requests. A Codex task persists the returned thread identifier before awaiting turn completion, streams normalized plans/commands/file changes/diffs/usage, and maps Discord decisions back to App Server approval values.
 
-Phase 2 will add Codex App Server process management, account-state checks, device-code authentication, approvals, user-input requests, rate-limit updates, cancellation, recovery, and confirmed sibling-thread handoffs.
+When sign-in is required, the original request is held in memory for up to 30 minutes without creating a thread or worktree. `/codex-auth login` shows the OpenAI device URL and one-time code only in an ephemeral owner interaction. The bot performs a fresh account read after completion and requires an explicit **Start task** or **Discard** action. API keys and secret tool inputs are never requested through Discord.
+
+A provider change inside a completed task thread is a confirmed sibling handoff, not an in-place session conversion. The new task receives a fresh provider session and isolated worktree based on the committed source-task branch. The handoff transfers a bounded structured summary rather than the complete transcript.
 
 ## Git worktrees
 
@@ -162,7 +170,9 @@ SQLite stores:
 - worktrees and branches;
 - provider session identifiers;
 - normalized task events and terminal results;
-- message, interaction, memory, and usage tables reserved for later phases.
+- the complete primary-agent conversation journal and FTS index;
+- durable memory records and revision provenance;
+- provider usage snapshots, task-cost observations, and capacity reservations.
 
 On startup, tasks left in `starting`, `running`, or `waiting_for_user` become `interrupted`. Discord Agent inspects the recorded worktree, writes a recovery event, and posts a concise checkpoint in the original thread when it is still available. **No provider turn is automatically replayed.**
 
@@ -192,10 +202,17 @@ When enabled, the bot starts `roborev stream`, matches events to registered repo
 | `DISCORD_GUILD_ID` | yes | — | Private server ID. |
 | `AUTHORIZED_ROLE_IDS` | yes | — | Comma-separated authorized role IDs. |
 | `NOTIFY_USER_ID` | no | empty | User to mention after task completion. |
+| `AUTHORIZED_USER_ID` | primary/Codex auth | `NOTIFY_USER_ID` | Exact owner allowed to use `#agent-chat` and manage Codex login. |
+| `AUTHORIZED_USER_ID` | Codex auth | `NOTIFY_USER_ID` | Exact human owner allowed to manage Codex authentication. |
+| `CODEX_CLI_PATH` | no | `codex` | Codex CLI executable used to launch App Server. |
+| `CODEX_MODEL` | no | provider default | Default Codex model. |
+| `CODEX_ENABLED` | no | `true` | Enable local Codex App Server startup. |
+| `PRIMARY_AGENT_MODEL` | no | Claude default | Model used by the restricted PM-style coordinator. |
+| `PRIMARY_USAGE_RESERVE` | no | `10` | Capacity percentage points preserved for coordination and recovery. |
 | `CLAUDE_TIMEOUT_MS` | no | `900000` | Provider turn timeout. |
 | `CLAUDE_MODEL` | no | SDK default | Default Claude model. |
 | `PROJECTS_BASE_DIR` | no | unrestricted | Root beneath which projects may be registered. |
-| `ALLOW_NON_GIT` | no | `false` | Legacy registration switch. Phase 1 task execution still requires a Git repository for worktree isolation. |
+| `ALLOW_NON_GIT` | no | `false` | Legacy registration switch. Agent task execution still requires a Git repository for worktree isolation. |
 | `DATABASE_PATH` | no | runtime data directory | SQLite database path. |
 | `WORKTREES_BASE_DIR` | no | beside database | Isolated task worktree directory. |
 | `ROBOREV_CLI_PATH` | no | `roborev` | Roborev executable path. |
@@ -220,17 +237,11 @@ npm run check
 
 The detailed lifecycle and persistence design is in [`docs/architecture/provider-neutral-runtime.md`](docs/architecture/provider-neutral-runtime.md). The approved specification and task plan remain under `docs/superpowers/`.
 
-## Phase 1 boundaries
+## Primary-agent and usage behavior
 
-Phase 1 intentionally does not include:
+The primary agent is a project owner / PM, not a hidden coding session. It has no repository tools, no project MCP access, and cannot bypass the durable task coordinator. It discusses priorities, retrieves relevant history, proposes bounded work, delegates approved tasks into provider-fixed threads, and summarizes outcomes.
 
-- an executable Codex provider;
-- Codex authentication onboarding;
-- the persistent PM-style primary agent and memory retrieval;
-- provider handoff to sibling threads;
-- usage-based task admission and reservation policies.
-
-Those capabilities are designed but will be implemented in later reviewable phases after the provider-neutral foundation is merged.
+Usage management is intentionally quiet. The coordinator tracks provider-reported windows, active reservations, and historical task classes internally. It only interrupts normal conversation when a task is unusually expensive, cannot be completed reliably, should be narrowed or deferred, or a running turn must be checkpointed. Preserve-mode interruption occurs at most once per turn and retains the provider session, branch, and worktree.
 
 ## License
 

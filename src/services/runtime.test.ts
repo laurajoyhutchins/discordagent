@@ -7,6 +7,7 @@ import { openDatabase } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import { createProjectRepository } from '../repositories/projectRepository.js';
 import { createTaskRepository } from '../repositories/taskRepository.js';
+import { createUsageRepository } from '../repositories/usageRepository.js';
 import type { AgentProvider, ProviderAvailability } from '../agents/contracts.js';
 
 process.env.DISCORD_TOKEN = 'test';
@@ -15,6 +16,7 @@ process.env.DISCORD_GUILD_ID = 'test';
 process.env.AUTHORIZED_ROLE_IDS = 'role';
 
 const { getTaskCoordinator } = await import('./taskCoordinatorService.js');
+const { getUsageAdmissionService } = await import('./usageAdmissionRegistry.js');
 const { startRuntime, stopRuntime } = await import('./runtime.js');
 
 const directories: string[] = [];
@@ -56,9 +58,11 @@ describe('runtime startup', () => {
     expect(getTaskCoordinator()).toBe(runtime.coordinator);
     expect(runtime.providers.require('claude').id).toBe('claude');
     expect(runtime.projects.listActive()).toEqual([]);
+    expect(getUsageAdmissionService()).toBe(runtime.usage);
 
     await stopRuntime(runtime);
     expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
+    expect(getUsageAdmissionService()).toBeUndefined();
   });
 
   it('cleans partial startup state when the injected provider is not Claude', async () => {
@@ -73,6 +77,56 @@ describe('runtime startup', () => {
     })).rejects.toThrow(/Claude provider/i);
 
     expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
+  });
+
+
+  it('uses an injected Codex provider without spawning the CLI and records authoritative windows', async () => {
+    const directory = tempDirectory();
+    const codex = { ...fakeProvider(), id: 'codex' as const };
+    let publishRateLimits: ((windows: Array<{ name: string; remaining?: number; utilization?: number }>) => void) | undefined;
+    const unsubscribe = vi.fn();
+    const auth = {
+      readRateLimits: vi.fn(async () => [{ name: 'primary', remaining: 42, utilization: 58 }]),
+      onRateLimitsUpdated: vi.fn((listener: typeof publishRateLimits) => { publishRateLimits = listener; return unsubscribe; }),
+      close: vi.fn(async () => undefined),
+    };
+    const runtime = await startRuntime({} as Client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      claudeProvider: fakeProvider(),
+      codexProvider: codex,
+      codexAuth: auth as never,
+      disableUsagePolling: true,
+      disablePrimaryAgent: true,
+    });
+    expect(runtime.providers.require('codex')).toBe(codex);
+    expect(runtime.usage.posture('codex')).toMatchObject({ available: 42, posture: 'cautious' });
+    publishRateLimits?.([{ name: 'primary', remaining: 8, utilization: 92 }]);
+    expect(runtime.usage.posture('codex')).toMatchObject({ available: 8, posture: 'preserve' });
+    await stopRuntime(runtime);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('releases stale pre-task usage holds during restart recovery', async () => {
+    const directory = tempDirectory();
+    const databasePath = join(directory, 'runtime.sqlite');
+    const db = openDatabase(databasePath);
+    runMigrations(db);
+    const usage = createUsageRepository(db);
+    usage.createHold({ provider: 'claude', taskClass: 'contained_feature', low: 6, high: 14, confidence: 'low' });
+    db.close();
+
+    const runtime = await startRuntime({} as Client, {
+      databasePath,
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      claudeProvider: fakeProvider(),
+      disableCodex: true,
+      disablePrimaryAgent: true,
+    });
+    expect(runtime.usage.reservations()).toEqual([]);
+    await stopRuntime(runtime);
   });
 
   it('marks nonterminal tasks interrupted and posts a recovery checkpoint without replaying them', async () => {

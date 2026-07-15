@@ -20,6 +20,7 @@ import type { EventRepository } from '../repositories/eventRepository.js';
 import type { ProjectRepository } from '../repositories/projectRepository.js';
 import type { TaskRepository } from '../repositories/taskRepository.js';
 import type { Project, TaskRecord } from '../types.js';
+import type { UsageAdmissionService } from '../services/usageAdmission.js';
 import {
   redactAgentEvent,
   redactErrorMessage,
@@ -67,6 +68,8 @@ export interface TaskCoordinator {
   cancelByThread(threadId: string): Promise<boolean>;
   closeTask(taskId: string): Promise<void>;
   recoverInterruptedTasks(): Promise<TaskRecord[]>;
+  estimateHandoff(threadId: string, targetProvider: AgentProviderId): Promise<import('../agents/contracts.js').HandoffEstimate>;
+  handoffFromThread(input: { sourceThread: AnyThreadChannel; targetProvider: AgentProviderId }): Promise<TaskRecord>;
 }
 
 export interface TaskCoordinatorDependencies {
@@ -78,6 +81,7 @@ export interface TaskCoordinatorDependencies {
   rendererFactory(thread: AnyThreadChannel): TaskRenderer;
   brokerFactory(thread: AnyThreadChannel): InteractionBroker;
   idFactory?: (prefix: string) => string;
+  usage?: UsageAdmissionService;
 }
 
 interface RunningGate {
@@ -91,6 +95,8 @@ export function createTaskCoordinator(
   dependencies: TaskCoordinatorDependencies,
 ): TaskCoordinator {
   const idFactory = dependencies.idFactory ?? (prefix => `${prefix}-${randomUUID()}`);
+  const activeReservations = new Map<string, string>();
+  const interruptionRequested = new Set<string>();
 
   async function validateProjectProvider(
     projectName: string,
@@ -114,6 +120,8 @@ export function createTaskCoordinator(
     prompt: string;
     thread: AnyThreadChannel;
     model?: string;
+    baseBranch?: string;
+    reservationId?: string;
   }): Promise<TaskRecord> {
     const taskId = idFactory('task');
 
@@ -123,7 +131,7 @@ export function createTaskCoordinator(
       taskId,
       threadId: input.thread.id,
       objective: input.prompt,
-      ...(input.project.baseBranch ? { baseBranch: input.project.baseBranch } : {}),
+      ...((input.baseBranch ?? input.project.baseBranch) ? { baseBranch: input.baseBranch ?? input.project.baseBranch } : {}),
     });
 
     try {
@@ -154,6 +162,26 @@ export function createTaskCoordinator(
       throw error;
     }
 
+    if (input.reservationId && dependencies.usage) {
+      try {
+        dependencies.usage.attach(input.reservationId, taskId);
+        activeReservations.set(taskId, input.reservationId);
+      } catch (error) {
+        dependencies.usage.release(input.reservationId);
+        const failed = dependencies.tasks.transition(taskId, ['created'], 'failed');
+        dependencies.tasks.saveResult(taskId, {
+          provider: failed.provider,
+          outcome: 'failed',
+          exitType: 'usage_reservation_attach_failed',
+          startedAt: Date.now(),
+          completedAt: Date.now(),
+          summary: 'The task was preserved but could not attach its usage reservation.',
+          error: { code: 'usage_reservation_attach_failed', message: redactErrorMessage(error), retryable: true },
+        });
+        throw error;
+      }
+    }
+
     dependencies.tasks.transition(taskId, ['created'], 'starting');
     const renderer = dependencies.rendererFactory(input.thread);
     const broker = dependencies.brokerFactory(input.thread);
@@ -168,6 +196,7 @@ export function createTaskCoordinator(
       renderer,
       broker,
       model: input.model ?? input.project.models?.[input.providerId],
+      reservationId: input.reservationId,
     });
   }
 
@@ -182,9 +211,10 @@ export function createTaskCoordinator(
     broker: InteractionBroker;
     model?: string;
     session?: ContinueTaskInput['session'];
+    reservationId?: string;
   }): Promise<TaskRecord> {
     const gate = runningGate();
-    const host = createHost(input.taskId, input.thread, input.renderer, input.broker, gate);
+    const host = createHost(input.taskId, input.provider, input.thread, input.renderer, input.broker, gate);
     const providerInput = {
       taskId: input.taskId,
       projectName: input.project.name,
@@ -202,7 +232,7 @@ export function createTaskCoordinator(
         : await input.provider.startTask(providerInput, host);
     } catch (error) {
       gate.resolve();
-      return failStartingTask(input.taskId, input.provider.id, input.renderer, error);
+      return failStartingTask(input.taskId, input.provider.id, input.renderer, error, input.reservationId);
     }
 
     if (!input.session) {
@@ -215,6 +245,7 @@ export function createTaskCoordinator(
         input.provider.id,
         input.renderer,
         new Error('Provider continuation returned a different session identity'),
+        input.reservationId,
       );
     }
 
@@ -237,11 +268,12 @@ export function createTaskCoordinator(
         error: { code: 'provider_completion_failed', message, retryable: true },
       };
     }
-    return finalizeTask(input.taskId, result, input.renderer);
+    return finalizeTask(input.taskId, result, input.renderer, input.reservationId);
   }
 
   function createHost(
     taskId: string,
+    provider: AgentProvider,
     thread: AnyThreadChannel,
     renderer: TaskRenderer,
     broker: InteractionBroker,
@@ -271,6 +303,29 @@ export function createTaskCoordinator(
         await renderer.handle(safeEvent).catch(error => {
           console.warn('[taskCoordinator] Failed to render task event:', redactErrorMessage(error));
         });
+
+        if (safeEvent.type === 'usage' && dependencies.usage) {
+          dependencies.usage.recordUsage(provider.id, safeEvent.usage);
+          const state = dependencies.usage.posture(provider.id);
+          if ((state.posture === 'preserve' || state.posture === 'exhausted')
+            && !interruptionRequested.has(taskId)) {
+            interruptionRequested.add(taskId);
+            const checkpoint = redactAgentEvent({
+              type: 'status',
+              phase: 'Capacity checkpoint',
+              detail: 'Provider capacity is critically constrained. The current turn is being interrupted once; the task session, branch, and worktree are preserved.',
+            });
+            dependencies.events.append(taskId, checkpoint, `usage-capacity-checkpoint:${activeReservations.get(taskId) ?? Date.now()}`);
+            await renderer.handle(checkpoint).catch(() => undefined);
+            void gate.promise.then(async () => {
+              const current = dependencies.tasks.findById(taskId);
+              if (!current || TERMINAL_STATUSES.has(current.status)) return;
+              await provider.cancelTask(current.providerSessionId ?? taskId);
+            }).catch(error => {
+              console.warn('[taskCoordinator] Failed to interrupt constrained provider turn:', redactErrorMessage(error));
+            });
+          }
+        }
       },
       requestApproval(request): Promise<ApprovalDecision> {
         const safeRequest = redactApprovalRequest(request);
@@ -288,6 +343,7 @@ export function createTaskCoordinator(
     provider: AgentProviderId,
     renderer: TaskRenderer,
     error: unknown,
+    reservationId?: string,
   ): Promise<TaskRecord> {
     const message = error instanceof Error ? error.message : String(error);
     const result: TaskResult = {
@@ -314,6 +370,9 @@ export function createTaskCoordinator(
       };
     const safeStored = redactTaskResult(stored);
     dependencies.tasks.saveResult(taskId, safeStored);
+    if (reservationId && dependencies.usage) dependencies.usage.complete(reservationId, safeStored);
+    activeReservations.delete(taskId);
+    interruptionRequested.delete(taskId);
     await finishRendererSafely(renderer, safeStored);
     return dependencies.tasks.findById(taskId)!;
   }
@@ -322,6 +381,7 @@ export function createTaskCoordinator(
     taskId: string,
     result: TaskResult,
     renderer: TaskRenderer,
+    reservationId?: string,
   ): Promise<TaskRecord> {
     const worktree = dependencies.tasks.getWorktree(taskId);
     const enriched: TaskResult = {
@@ -347,6 +407,9 @@ export function createTaskCoordinator(
       };
     const safeResult = redactTaskResult(storedResult);
     dependencies.tasks.saveResult(taskId, safeResult);
+    if (reservationId && dependencies.usage) dependencies.usage.complete(reservationId, safeResult);
+    activeReservations.delete(taskId);
+    interruptionRequested.delete(taskId);
     await finishRendererSafely(renderer, safeResult);
     return dependencies.tasks.findById(taskId)!;
   }
@@ -368,42 +431,72 @@ export function createTaskCoordinator(
     const provider = dependencies.providers.require(task.provider);
     const availability = await provider.checkAvailability();
     if (!availability.available) throw new Error(availability.reason ?? 'Provider unavailable');
+    const reservation = await dependencies.usage?.reserve({ provider: task.provider, prompt: input.prompt });
 
-    dependencies.tasks.reopenForContinuation(task.id);
-    const renderer = dependencies.rendererFactory(input.thread);
-    const broker = dependencies.brokerFactory(input.thread);
-    renderer.start(input.thread);
-    await executeTurn({
-      taskId: task.id,
-      project,
-      provider,
-      prompt: input.prompt,
-      thread: input.thread,
-      workingDirectory: worktree.worktreePath,
-      renderer,
-      broker,
-      model: input.model ?? project.models?.[task.provider],
-      session: {
-        provider: task.provider,
-        sessionId: task.providerSessionId,
-        createdAt: task.createdAt,
-      },
-    });
+    try {
+      dependencies.tasks.reopenForContinuation(task.id);
+      if (reservation && dependencies.usage) {
+        dependencies.usage.attach(reservation.id, task.id);
+        activeReservations.set(task.id, reservation.id);
+      }
+      const renderer = dependencies.rendererFactory(input.thread);
+      const broker = dependencies.brokerFactory(input.thread);
+      renderer.start(input.thread);
+      await executeTurn({
+        taskId: task.id,
+        project,
+        provider,
+        prompt: input.prompt,
+        thread: input.thread,
+        workingDirectory: worktree.worktreePath,
+        renderer,
+        broker,
+        model: input.model ?? project.models?.[task.provider],
+        reservationId: reservation?.id,
+        session: {
+          provider: task.provider,
+          sessionId: task.providerSessionId,
+          createdAt: task.createdAt,
+        },
+      });
+    } catch (error) {
+      if (reservation && dependencies.usage) {
+        try { dependencies.usage.release(reservation.id); } catch { /* already finalized */ }
+        activeReservations.delete(task.id);
+      }
+      throw error;
+    }
   }
 
   return {
     async startFromMessage(input: StartFromMessageInput): Promise<TaskRecord> {
       const validated = await validateProjectProvider(input.projectName, input.provider);
-      const thread = await input.message.startThread({
-        name: input.prompt.slice(0, 100),
-        autoArchiveDuration: 60,
-      });
-      return startNewTask({ ...validated, prompt: input.prompt, thread, model: input.model });
+      const reservation = await dependencies.usage?.reserve({ provider: validated.providerId, prompt: input.prompt });
+      try {
+        const thread = await input.message.startThread({
+          name: input.prompt.slice(0, 100),
+          autoArchiveDuration: 60,
+        });
+        return await startNewTask({ ...validated, prompt: input.prompt, thread, model: input.model, reservationId: reservation?.id });
+      } catch (error) {
+        if (reservation && dependencies.usage) {
+          try { dependencies.usage.release(reservation.id); } catch { /* already consumed or released */ }
+        }
+        throw error;
+      }
     },
 
     async startInExistingThread(input: StartInExistingThreadInput): Promise<TaskRecord> {
       const validated = await validateProjectProvider(input.projectName, input.provider);
-      return startNewTask({ ...validated, prompt: input.prompt, thread: input.thread, model: input.model });
+      const reservation = await dependencies.usage?.reserve({ provider: validated.providerId, prompt: input.prompt });
+      try {
+        return await startNewTask({ ...validated, prompt: input.prompt, thread: input.thread, model: input.model, reservationId: reservation?.id });
+      } catch (error) {
+        if (reservation && dependencies.usage) {
+          try { dependencies.usage.release(reservation.id); } catch { /* already consumed or released */ }
+        }
+        throw error;
+      }
     },
 
     async continueFromMessage(input: ContinueFromMessageInput): Promise<void> {
@@ -428,6 +521,11 @@ export function createTaskCoordinator(
       if (current && !TERMINAL_STATUSES.has(current.status)) {
         dependencies.tasks.transition(task.id, [current.status], 'cancelled');
       }
+      const reservationId = activeReservations.get(task.id);
+      if (reservationId && dependencies.usage) {
+        try { dependencies.usage.release(reservationId); } catch { /* already completed */ }
+        activeReservations.delete(task.id);
+      }
       return true;
     },
 
@@ -446,6 +544,64 @@ export function createTaskCoordinator(
         removeBranch: false,
       });
       dependencies.tasks.markWorktreeRemoved(taskId);
+    },
+
+    async estimateHandoff(threadId: string, targetProvider: AgentProviderId) {
+      const task = dependencies.tasks.findByThreadId(threadId);
+      if (!task) throw new Error('No task is associated with this Discord thread');
+      if (!TERMINAL_STATUSES.has(task.status)) throw new Error('Provider handoff requires a completed or interrupted source task');
+      if (task.provider === targetProvider) throw new Error('The target provider is already active in this task');
+      const events = dependencies.events.list(task.id);
+      const transcriptCharacters = events.reduce((total, stored) => total + JSON.stringify(stored.event).length, 0);
+      const changedFiles = new Set(events.flatMap(stored => stored.event.type === 'file_change' ? stored.event.paths : [])).size;
+      const summaryCharacters = dependencies.tasks.getResult(task.id)?.summary?.length ?? task.objective.length;
+      return dependencies.providers.require(targetProvider).estimateHandoff({
+        sourceProvider: task.provider, targetProvider, transcriptCharacters, summaryCharacters, changedFiles,
+      });
+    },
+
+    async handoffFromThread({ sourceThread, targetProvider }) {
+      const source = dependencies.tasks.findByThreadId(sourceThread.id);
+      if (!source) throw new Error('No task is associated with this Discord thread');
+      if (!TERMINAL_STATUSES.has(source.status)) throw new Error('Provider handoff requires a terminal source task');
+      if (source.provider === targetProvider) throw new Error('The target provider is already active in this task');
+      const sourceWorktree = dependencies.tasks.getWorktree(source.id);
+      if (!sourceWorktree || sourceWorktree.removedAt) throw new Error('The source worktree is unavailable');
+      const inspection = await dependencies.worktrees.inspect(sourceWorktree.worktreePath);
+      if (!inspection.exists || inspection.dirty) throw new Error('Commit or discard source worktree changes before provider handoff');
+      const project = dependencies.projects.findByName(source.projectName);
+      if (!project) throw new Error(`Project "${source.projectName}" not found`);
+      const provider = dependencies.providers.require(targetProvider);
+      const availability = await provider.checkAvailability();
+      if (!availability.available) throw new Error(availability.reason ?? `${targetProvider} is unavailable`);
+      const parent = sourceThread.parent;
+      if (!parent || !('threads' in parent) || !parent.threads || typeof parent.threads.create !== 'function') {
+        throw new Error('The source thread parent cannot create a sibling thread');
+      }
+      const result = dependencies.tasks.getResult(source.id);
+      const prompt = [
+        `Provider handoff from ${source.provider} task ${source.id}.`,
+        `Original objective: ${source.objective}`,
+        `Source branch: ${sourceWorktree.branchName}`,
+        result?.summary ? `Completed work: ${result.summary}` : undefined,
+        result?.verification?.length ? `Verification: ${result.verification.join('; ')}` : undefined,
+        result?.unresolved?.length ? `Unresolved: ${result.unresolved.join('; ')}` : undefined,
+        'Inspect the current repository state, continue the objective, and report verification and unresolved decisions.',
+      ].filter(Boolean).join('\n');
+      const reservation = await dependencies.usage?.reserve({ provider: targetProvider, prompt });
+      let sibling: AnyThreadChannel;
+      try {
+        sibling = await (parent.threads.create as (options: { name: string; autoArchiveDuration: 60 }) => Promise<AnyThreadChannel>)({ name: `${targetProvider}: ${source.objective}`.slice(0, 100), autoArchiveDuration: 60 });
+        const created = await startNewTask({ project, provider, providerId: targetProvider, prompt, thread: sibling, baseBranch: sourceWorktree.branchName, reservationId: reservation?.id });
+        await sourceThread.send({ content: `Provider handoff created: <#${sibling.id}> (${targetProvider}).` }).catch(() => undefined);
+        await sibling.send({ content: `Continues source task <#${sourceThread.id}> using ${targetProvider}.` }).catch(() => undefined);
+        return created;
+      } catch (error) {
+        if (reservation && dependencies.usage) {
+          try { dependencies.usage.release(reservation.id); } catch { /* already completed */ }
+        }
+        throw error;
+      }
     },
 
     recoverInterruptedTasks(): Promise<TaskRecord[]> {

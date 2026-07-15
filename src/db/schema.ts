@@ -209,4 +209,67 @@ export const SCHEMA_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 3,
+    name: 'support usage admission holds and calibration',
+    statements: [
+      `CREATE TABLE usage_reservations_new (
+        id TEXT PRIMARY KEY,
+        task_id TEXT UNIQUE REFERENCES tasks(id) ON DELETE SET NULL,
+        provider TEXT NOT NULL ${TASK_PROVIDER_CHECK},
+        task_class TEXT NOT NULL DEFAULT 'contained_feature',
+        estimated_low REAL NOT NULL CHECK (estimated_low >= 0),
+        estimated_high REAL NOT NULL CHECK (estimated_high >= estimated_low),
+        confidence TEXT NOT NULL CHECK (confidence IN ('low', 'medium', 'high')),
+        status TEXT NOT NULL CHECK (status IN ('active', 'released', 'consumed')),
+        actual_cost REAL,
+        created_at INTEGER NOT NULL,
+        released_at INTEGER
+      )`,
+      `INSERT INTO usage_reservations_new
+        (id, task_id, provider, estimated_low, estimated_high, confidence, status, created_at, released_at)
+        SELECT id, task_id, provider, estimated_low, estimated_high, confidence, status, created_at, released_at
+        FROM usage_reservations`,
+      `DROP TABLE usage_reservations`,
+      `ALTER TABLE usage_reservations_new RENAME TO usage_reservations`,
+      `CREATE INDEX usage_reservations_provider_status_idx ON usage_reservations(provider, status)`,
+      `CREATE TABLE usage_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL ${TASK_PROVIDER_CHECK},
+        task_class TEXT NOT NULL,
+        actual_cost REAL NOT NULL CHECK (actual_cost >= 0),
+        token_count INTEGER,
+        duration_ms INTEGER,
+        recorded_at INTEGER NOT NULL
+      )`,
+      `CREATE INDEX usage_observations_class_idx ON usage_observations(provider, task_class, recorded_at)`,
+    ],
+  },
+  {
+    version: 4,
+    name: 'allow repeated task usage reservations',
+    statements: [
+      `CREATE TABLE usage_reservations_v4 (
+        id TEXT PRIMARY KEY,
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        provider TEXT NOT NULL ${TASK_PROVIDER_CHECK},
+        task_class TEXT NOT NULL DEFAULT 'contained_feature',
+        estimated_low REAL NOT NULL CHECK (estimated_low >= 0),
+        estimated_high REAL NOT NULL CHECK (estimated_high >= estimated_low),
+        confidence TEXT NOT NULL CHECK (confidence IN ('low', 'medium', 'high')),
+        status TEXT NOT NULL CHECK (status IN ('active', 'released', 'consumed')),
+        actual_cost REAL,
+        created_at INTEGER NOT NULL,
+        released_at INTEGER
+      )`,
+      `INSERT INTO usage_reservations_v4
+        (id, task_id, provider, task_class, estimated_low, estimated_high, confidence, status, actual_cost, created_at, released_at)
+        SELECT id, task_id, provider, task_class, estimated_low, estimated_high, confidence, status, actual_cost, created_at, released_at
+        FROM usage_reservations`,
+      `DROP TABLE usage_reservations`,
+      `ALTER TABLE usage_reservations_v4 RENAME TO usage_reservations`,
+      `CREATE INDEX usage_reservations_provider_status_idx ON usage_reservations(provider, status)`,
+      `CREATE INDEX usage_reservations_task_status_idx ON usage_reservations(task_id, status, created_at)`,
+    ],
+  },
 ] as const;

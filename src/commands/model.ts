@@ -84,7 +84,7 @@ export async function handleModel(
 
   if (provider !== 'claude') {
     await interaction.reply({
-      content: 'Interactive Codex model selection will be added with the Codex App Server adapter in Phase 2. Use the `custom` option only after that provider is installed.',
+      content: `Current Codex model: \`${currentModel}\`. Set a Codex model with the \`custom\` option, or clear it with \`custom:__default__\`.`,
       ephemeral: true,
     });
     return;

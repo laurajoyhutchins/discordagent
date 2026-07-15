@@ -2,7 +2,7 @@
 
 ## Project overview
 
-Discord Agent is a provider-neutral Discord orchestration runtime derived from DiscordClaude. Phase 1 executes Claude Code through `ClaudeProvider`; later phases add Codex App Server and a persistent PM-style primary agent.
+Discord Agent is a provider-neutral Discord orchestration runtime derived from DiscordClaude. Claude executes through `ClaudeProvider`; Codex executes through the local App Server transport, authentication service, event adapter, and `CodexProvider`. A persistent PM-style primary agent coordinates both providers through durable task boundaries, journaled memory, native Discord decisions, and quiet usage admission.
 
 The generic runtime must not depend directly on the Anthropic SDK. Provider-specific behavior belongs under `src/agents/<provider>/` and emits normalized `AgentEvent` values.
 
@@ -42,7 +42,13 @@ Discord messages / commands
             ▼
       ProviderRegistry
             │
-            └── ClaudeProvider → Claude Agent SDK
+            ├── ClaudeProvider → Claude Agent SDK
+            └── CodexProvider → Codex App Server
+
+#agent-chat → PrimaryAgentService → bounded context + journal/memory
+                                  → TaskCoordinator for approved delegation
+
+UsageAdmissionService → provider windows + reservations + calibrated task costs
 ```
 
 `TaskCoordinator` owns lifecycle ordering. Handlers must not call provider SDKs directly.
@@ -81,7 +87,7 @@ Do not import Discord or provider SDK types into these contracts.
 
 ### Providers
 
-`ProviderRegistry` resolves provider implementations. Phase 1 registers only `ClaudeProvider`.
+`ProviderRegistry` resolves complete Claude and Codex implementations. Codex is registered only when the local App Server initializes successfully and authoritative account state is available.
 
 `ClaudeProvider` owns:
 
@@ -168,6 +174,7 @@ Roborev events are sent through the authenticated Discord bot client to `roborev
 | `src/agents/contracts.ts` | Provider-neutral domain contracts. |
 | `src/agents/providerRegistry.ts` | Provider registration and lookup. |
 | `src/agents/claude/` | Claude SDK adapter and event normalization. |
+| `src/agents/codex/` | App Server transport/protocol, authentication, event normalization, and Codex provider. |
 | `src/coordinator/` | Durable task lifecycle and restart recovery. |
 | `src/db/` | SQLite handle, schema, and migrations. |
 | `src/repositories/` | Project, task, event, and legacy-import persistence. |
@@ -178,7 +185,10 @@ Roborev events are sent through the authenticated Discord bot client to `roborev
 | `src/services/projectStore.ts` | Temporary reduced facade over `ProjectRepository`. |
 | `src/services/loopRunner.ts` | Non-overlapping recurring turns in one durable task. |
 | `src/services/roborevWatcher.ts` | Roborev CLI stream and bot-authenticated channel delivery. |
-| `src/services/usageTracker.ts` | Claude usage detail for `/usage`. |
+| `src/primary/` | Restricted PM model, bounded context assembly, journal/memory coordination, and delegation. |
+| `src/repositories/usageRepository.ts` | Provider windows, reservations, and task-cost observations. |
+| `src/services/usageAdmission.ts` | Admission decisions, calibration, posture, and graceful interruption. |
+| `src/services/usageTracker.ts` | Claude provider-local usage capture. |
 
 ## Adding a provider
 
@@ -217,6 +227,8 @@ npm run build
 git diff --check
 ```
 
-## Phase 1 limitations
+## Current boundary
 
-Codex is a recognized provider ID but is not executable. The primary-agent workspace, durable conversational memory, sibling provider handoffs, native polls, and usage-aware task admission are later phases. Do not simulate those capabilities in Phase 1 or silently fall back to Claude.
+The first complete private-workspace release includes Claude and Codex providers, guided Codex authentication, provider-fixed task threads, confirmed sibling handoffs, the persistent PM-style primary agent, journal/FTS retrieval, provenance-controlled memory, native polls, usage reservations, calibrated admission, and preserve-mode checkpointing.
+
+Never silently switch providers, replay a partially executed turn, reveal provider credentials, allow the primary model to acquire coding tools, or start work that the admission service judges unlikely to finish and verify safely.

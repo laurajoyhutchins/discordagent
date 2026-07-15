@@ -30,6 +30,7 @@ describe('/provider', () => {
     await handleProvider(command, {
       getProjectByChannel: () => project,
       updateProjectProvider: vi.fn(),
+      checkProvider: vi.fn(async () => ({ available: true })),
     });
 
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
@@ -44,6 +45,7 @@ describe('/provider', () => {
     await handleProvider(command, {
       getProjectByChannel: () => ({ ...project, defaultProvider: 'codex' }),
       updateProjectProvider: update,
+      checkProvider: vi.fn(async () => ({ available: true })),
     });
 
     expect(update).toHaveBeenCalledWith('factory-floor', 'claude');
@@ -52,19 +54,31 @@ describe('/provider', () => {
     }));
   });
 
-  it('refuses Codex until Phase 2 without mutating the project', async () => {
+  it('persists Codex when the runtime reports it ready', async () => {
     const update = vi.fn();
     const command = interaction({ provider: 'codex' });
     await handleProvider(command, {
       getProjectByChannel: () => project,
       updateProjectProvider: update,
+      checkProvider: vi.fn(async () => ({ available: true })),
     });
 
-    expect(update).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith('factory-floor', 'codex');
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringMatching(/Phase 2/i),
-      ephemeral: true,
+      content: expect.stringMatching(/Codex/i),
     }));
+  });
+
+  it('does not mutate the project when Codex authentication is required', async () => {
+    const update = vi.fn();
+    const command = interaction({ provider: 'codex' });
+    await handleProvider(command, {
+      getProjectByChannel: () => project,
+      updateProjectProvider: update,
+      checkProvider: vi.fn(async () => ({ available: false, authenticationRequired: true, reason: 'Sign in with /codex-auth login' })),
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('/codex-auth login') }));
   });
 
   it('rejects provider changes from a task thread', async () => {
@@ -73,6 +87,7 @@ describe('/provider', () => {
     await handleProvider(command, {
       getProjectByChannel: () => project,
       updateProjectProvider: update,
+      checkProvider: vi.fn(async () => ({ available: true })),
     });
 
     expect(update).not.toHaveBeenCalled();
@@ -87,6 +102,7 @@ describe('/provider', () => {
     await handleProvider(command, {
       getProjectByChannel: () => undefined,
       updateProjectProvider: vi.fn(),
+      checkProvider: vi.fn(async () => ({ available: true })),
     });
 
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({

@@ -88,3 +88,15 @@ export async function deleteProjectChannels(
   }
   await deleteChannel(categoryId);
 }
+
+export async function ensurePrimaryAgentChannel(guild: Guild, authorizedRoleIds: readonly string[]): Promise<import('discord.js').TextChannel> {
+  const existing = guild.channels.cache.find(channel => channel.type === ChannelType.GuildText && channel.name === 'agent-chat');
+  if (existing?.type === ChannelType.GuildText) return existing;
+  const botMember = guild.members.me!;
+  const permissionOverwrites: OverwriteResolvable[] = [
+    { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: botMember.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+    ...authorizedRoleIds.map(id => ({ id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] })),
+  ];
+  return guild.channels.create({ name: 'agent-chat', type: ChannelType.GuildText, topic: 'Primary project-owner agent', permissionOverwrites });
+}

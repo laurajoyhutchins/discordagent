@@ -44,6 +44,10 @@ export const commands = [
     .setDescription('Stop the running loop in this channel'),
 
   new SlashCommandBuilder()
+    .setName('agents')
+    .setDescription('Show active agent tasks and reserved capacity'),
+
+  new SlashCommandBuilder()
     .setName('usage')
     .setDescription('Show provider rate limit usage and task stats'),
 
@@ -57,9 +61,18 @@ export const commands = [
         .setRequired(false)
         .addChoices(
           { name: 'Claude', value: 'claude' },
-          { name: 'Codex (available in Phase 2)', value: 'codex' },
+          { name: 'Codex', value: 'codex' },
         )
     ),
+
+
+
+  new SlashCommandBuilder()
+    .setName('codex-auth')
+    .setDescription('Manage local Codex authentication')
+    .addSubcommand(command => command.setName('status').setDescription('Check Codex authentication state'))
+    .addSubcommand(command => command.setName('login').setDescription('Start private device-code sign-in'))
+    .addSubcommand(command => command.setName('logout').setDescription('Log out Codex after confirmation')),
 
   new SlashCommandBuilder()
     .setName('model')

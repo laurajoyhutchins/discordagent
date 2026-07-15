@@ -17,12 +17,17 @@ import {
 import { getTaskCoordinator } from '../services/taskCoordinatorService.js';
 import { isAuthorized } from '../utils/permissions.js';
 import { redactSensitiveText } from '../utils/redaction.js';
+import { getPrimaryAgentService } from '../services/primaryAgentServiceRegistry.js';
+import { getProviderRegistry, maybeGetPendingTaskService } from '../services/agentRuntimeService.js';
+import { UsageAdmissionError } from '../services/usageAdmission.js';
 
 export interface MessageHandlerDependencies {
-  coordinator: Pick<TaskCoordinator, 'startFromMessage' | 'continueFromMessage'>;
+  coordinator: Pick<TaskCoordinator, 'startFromMessage' | 'continueFromMessage' | 'estimateHandoff' | 'handoffFromThread'>;
   getProjectByChannel(channelId: string): Project | undefined;
   updateProjectModel(name: string, model: string, provider?: AgentProviderId): void;
   updateProjectProvider(name: string, provider: AgentProviderId): void;
+  checkProvider?(provider: AgentProviderId): Promise<{ available: boolean; reason?: string; authenticationRequired?: boolean }>;
+  deferPendingTask?(input: { userId: string; projectName: string; prompt: string; message: Message; model?: string }): void;
   isAuthorized(member: GuildMember | null | undefined): boolean;
   defaultClaudeModel: string;
   startLoop: typeof startLoop;
@@ -37,6 +42,8 @@ function defaultDependencies(): MessageHandlerDependencies {
     getProjectByChannel,
     updateProjectModel,
     updateProjectProvider,
+    checkProvider: provider => getProviderRegistry().require(provider).checkAvailability(),
+    deferPendingTask: input => { maybeGetPendingTaskService()?.defer(input); },
     isAuthorized,
     defaultClaudeModel: process.env.CLAUDE_MODEL ?? '',
     startLoop,
@@ -60,8 +67,12 @@ function logPickup(message: Message, prompt: string, lagMs: number): void {
 }
 
 function errorMessage(error: unknown): string {
+  if (error instanceof UsageAdmissionError) {
+    return redactSensitiveText(`${error.message} ${error.recommendation}`);
+  }
   return redactSensitiveText(error instanceof Error ? error.message : String(error));
 }
+
 
 export async function handleMessage(
   message: Message,
@@ -70,6 +81,9 @@ export async function handleMessage(
   if (message.author.bot || !message.guild) return;
   const prompt = message.content.trim();
   if (!prompt) return;
+
+  const primary = getPrimaryAgentService();
+  if (!injected && primary && message.channelId === primary.channelId) { await primary.handleMessage(message); return; }
 
   const dependencies = injected ?? defaultDependencies();
   const lagMs = Date.now() - message.createdTimestamp;
@@ -101,7 +115,30 @@ export async function handleMessage(
     }
 
     if (lower.startsWith('/provider')) {
-      await message.reply('A task thread keeps the provider it started with. Change the project default in the main project channel.');
+      const target = lower.split(/\s+/)[1] as AgentProviderId | undefined;
+      if (target !== 'claude' && target !== 'codex') {
+        await message.reply('Use `/provider claude` or `/provider codex`. A confirmed handoff creates a sibling thread.');
+        return;
+      }
+      try {
+        const estimate = await dependencies.coordinator.estimateHandoff(message.channel.id, target);
+        const confirmation = await message.reply({
+          content: `Switching providers creates a fresh **${target}** session in a sibling thread. Estimated handoff context: ~${estimate.estimatedInputTokens.toLocaleString()} input tokens (${estimate.confidence} confidence). This excludes future tool output.`,
+          components: [{ type: 1, components: [
+            { type: 2, custom_id: `handoff_confirm:${target}`, label: 'Create sibling task', style: 3 },
+            { type: 2, custom_id: 'handoff_cancel', label: 'Cancel', style: 2 },
+          ] }],
+        });
+        const decision = await confirmation.awaitMessageComponent({ time: 60_000, filter: candidate => candidate.user.id === message.author.id });
+        if (decision.customId === 'handoff_cancel') {
+          await decision.update({ content: 'Provider handoff cancelled. The original task is unchanged.', components: [] });
+          return;
+        }
+        await decision.update({ content: `Creating the ${target} sibling task…`, components: [] });
+        await dependencies.coordinator.handoffFromThread({ sourceThread: message.channel, targetProvider: target });
+      } catch (error) {
+        await message.reply(`Unable to hand off this task: ${errorMessage(error)}`);
+      }
       return;
     }
 
@@ -146,6 +183,21 @@ export async function handleMessage(
     ?? project.models?.[project.defaultProvider]
     ?? (project.defaultProvider === 'claude' ? dependencies.defaultClaudeModel : undefined);
 
+  if (project.defaultProvider === 'codex' && dependencies.checkProvider) {
+    const availability = await dependencies.checkProvider('codex');
+    if (!availability.available && availability.authenticationRequired) {
+      dependencies.deferPendingTask?.({
+        userId: message.author.id,
+        projectName: project.name,
+        prompt: actualPrompt,
+        message,
+        ...(resolvedModel ? { model: resolvedModel } : {}),
+      });
+      await message.reply('🔐 Codex sign-in is required. Your task has been held for 30 minutes without creating a thread or worktree. Run `/codex-auth login`; after verification you can explicitly **Start task** or discard it.');
+      return;
+    }
+  }
+
   try {
     await dependencies.coordinator.startFromMessage({
       projectName: project.name,
@@ -173,16 +225,19 @@ async function handleBotCommand(
       await message.reply(`Default provider for **${project.name}**: \`${project.defaultProvider}\`.`);
       return true;
     }
-    if (requested === 'codex') {
-      await message.reply('Codex App Server support arrives in Phase 2. The project provider was not changed.');
-      return true;
-    }
-    if (requested !== 'claude') {
+    if (requested !== 'claude' && requested !== 'codex') {
       await message.reply('Provider must be `claude` or `codex`.');
       return true;
     }
-    dependencies.updateProjectProvider(project.name, 'claude');
-    await message.reply(`Default provider for **${project.name}** set to **Claude**.`);
+    const availability = dependencies.checkProvider
+      ? await dependencies.checkProvider(requested)
+      : { available: requested === 'claude', reason: requested === 'codex' ? 'Codex is unavailable in this runtime.' : undefined };
+    if (!availability.available) {
+      await message.reply(availability.reason ?? `${requested} is unavailable on this host.`);
+      return true;
+    }
+    dependencies.updateProjectProvider(project.name, requested);
+    await message.reply(`Default provider for **${project.name}** set to **${requested === 'codex' ? 'Codex' : 'Claude'}**.`);
     return true;
   }
 

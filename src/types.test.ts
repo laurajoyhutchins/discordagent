@@ -46,8 +46,9 @@ describe('project normalization', () => {
 
 describe('durable task types', () => {
   it('keep provider identity and worktree identity explicit', () => {
-    expectTypeOf<Project['defaultProvider']>().toEqualTypeOf<'claude' | 'codex'>();
-    expectTypeOf<TaskRecord['provider']>().toEqualTypeOf<'claude' | 'codex'>();
+    expectTypeOf<Project['defaultProvider']>().toEqualTypeOf<'claude' | 'codex' | 'opencode'>();
+    expectTypeOf<TaskRecord['provider']>().toEqualTypeOf<'claude' | 'codex' | 'opencode'>();
+    expectTypeOf<NonNullable<Project['models']>['opencode']>().toEqualTypeOf<string | undefined>();
     expectTypeOf<WorktreeRecord['taskId']>().toEqualTypeOf<string>();
   });
 });

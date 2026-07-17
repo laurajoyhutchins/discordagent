@@ -9,6 +9,13 @@ import { startRuntime, stopRuntime, type RuntimeServices } from './services/runt
 import { stopAllLoops } from './services/loopRunner.js';
 import { commands } from './commands/definitions.js';
 import { redactErrorMessage } from './utils/redaction.js';
+import { FactoryFloorClient } from './factoryFloor/client.js';
+import { FactoryFloorBridgeService } from './factoryFloor/bridgeService.js';
+import { createFactoryFloorRunRepository } from './repositories/factoryFloorRunRepository.js';
+import {
+  clearFactoryFloorBridgeService,
+  setFactoryFloorBridgeService,
+} from './services/factoryFloorBridgeRegistry.js';
 
 // ── Single-instance lock ─────────────────────────────────────────────
 // Multiple bot processes sharing one token cause duplicate message
@@ -33,6 +40,7 @@ lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
 });
 
 let runtime: RuntimeServices | null = null;
+let factoryFloorBridge: FactoryFloorBridgeService | null = null;
 
 const client = new Client({
   intents: [
@@ -49,7 +57,24 @@ client.once('clientReady', async () => {
 
   try {
     runtime = await startRuntime(client);
+    if (config.factoryFloorEnabled) {
+      const api = new FactoryFloorClient({
+        baseUrl: config.factoryFloorBaseUrl,
+        operatorToken: config.factoryFloorOperatorToken,
+        timeoutMs: config.factoryFloorRequestTimeoutMs,
+      });
+      factoryFloorBridge = new FactoryFloorBridgeService(
+        api,
+        createFactoryFloorRunRepository(runtime.database),
+        client,
+        { pollIntervalMs: config.factoryFloorPollIntervalMs },
+      );
+      setFactoryFloorBridgeService(factoryFloorBridge);
+      await factoryFloorBridge.start();
+      console.log(`Factory Floor bridge enabled for ${config.factoryFloorBaseUrl}.`);
+    }
   } catch (error) {
+    clearFactoryFloorBridgeService();
     console.error('Failed to initialize Discord Agent runtime:', redactErrorMessage(error));
     process.exit(1);
     return;
@@ -77,7 +102,6 @@ client.once('clientReady', async () => {
     console.error('Failed to start roborev watcher:', redactErrorMessage(err));
   });
 });
-
 
 client.on('error', (err) => {
   console.error('Discord client error:', redactErrorMessage(err));
@@ -148,6 +172,8 @@ async function shutdown(): Promise<void> {
   console.log('Shutting down...');
   stopAllLoops();
   stopRoborevWatcher();
+  clearFactoryFloorBridgeService();
+  factoryFloorBridge = null;
   if (runtime) await stopRuntime(runtime);
   client.destroy();
   process.exit(0);

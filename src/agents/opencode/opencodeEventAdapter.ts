@@ -75,7 +75,7 @@ export function permissionOutcome(decision: ApprovalDecision, options: readonly 
     return optionId && kind ? [{ optionId, kind }] : [];
   });
 
-  const desired = decision === 'allow' ? ['allow_once', 'reject_once'] : ['reject_once'];
+  const desired = decision === 'allow' ? ['allow_once'] : ['reject_once'];
   const selected = desired.map(kind => candidates.find(option => option.kind === kind)).find(Boolean);
   return selected
     ? { outcome: 'selected', optionId: selected.optionId }

@@ -19,16 +19,20 @@ function binding(status: FactoryFloorRunBinding['status'] = 'running'): FactoryF
   };
 }
 
+function completedStatus() {
+  return {
+    runId: 'run-1',
+    status: 'completed' as const,
+    counts: { queued: 0, active: 0, completed: 1, failed: 0, cancelled: 0 },
+    terminalResultSummary: 'completed',
+  };
+}
+
 function setup() {
   let current = binding();
   const edit = vi.fn(async () => undefined);
   const api = {
-    getRun: vi.fn(async () => ({
-      runId: 'run-1',
-      status: 'completed' as const,
-      counts: { queued: 0, active: 0, completed: 1, failed: 0, cancelled: 0 },
-      terminalResultSummary: 'completed',
-    })),
+    getRun: vi.fn(async () => completedStatus()),
     getStatus: vi.fn(),
     submitTask: vi.fn(),
     cancelRun: vi.fn(async () => ({})),
@@ -86,5 +90,19 @@ describe('FactoryFloorBridgeService', () => {
       reason: 'Cancelled by Discord user user-1.',
     });
     expect(context.api.getRun).toHaveBeenCalledWith('discord:user-1', 'run-1');
+  });
+
+  it('shares one in-flight refresh cycle instead of overlapping polls', async () => {
+    const context = setup();
+    let resolve!: (value: ReturnType<typeof completedStatus>) => void;
+    context.api.getRun.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+
+    const first = context.service.refreshActive();
+    const second = context.service.refreshActive();
+    expect(second).toBe(first);
+    expect(context.api.getRun).toHaveBeenCalledTimes(1);
+
+    resolve(completedStatus());
+    await Promise.all([first, second]);
   });
 });

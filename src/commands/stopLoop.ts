@@ -1,4 +1,4 @@
-import { ChatInputCommandInteraction } from 'discord.js';
+import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { getProjectByChannel } from '../services/projectStore.js';
 import { stopLoop, getLoopChannelForThread } from '../services/loopRunner.js';
 import { isAuthorized } from '../utils/permissions.js';
@@ -8,7 +8,7 @@ export async function handleStopLoop(interaction: ChatInputCommandInteraction): 
   const member = await interaction.guild?.members.fetch(interaction.user.id)
     .catch((e) => { console.warn('[stop-loop] member fetch failed:', redactErrorMessage(e)); return null; }) ?? null;
   if (!isAuthorized(member)) {
-    await interaction.reply({ content: 'You are not authorized.', ephemeral: true });
+    await interaction.reply({ content: 'You are not authorized.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -37,7 +37,7 @@ export async function handleStopLoop(interaction: ChatInputCommandInteraction): 
   }
 
   if (!targetChannelId) {
-    await interaction.reply({ content: 'This command can only be used in a project channel or loop thread.', ephemeral: true });
+    await interaction.reply({ content: 'This command can only be used in a project channel or loop thread.', flags: MessageFlags.Ephemeral });
     return;
   }
 

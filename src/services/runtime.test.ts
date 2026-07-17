@@ -6,6 +6,7 @@ import type { Client, TextChannel } from 'discord.js';
 import { openDatabase } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import { createProjectRepository } from '../repositories/projectRepository.js';
+import { createSettingsRepository } from '../repositories/settingsRepository.js';
 import { createTaskRepository } from '../repositories/taskRepository.js';
 import { createUsageRepository } from '../repositories/usageRepository.js';
 import type { AgentProvider, ProviderAvailability } from '../agents/contracts.js';
@@ -14,6 +15,8 @@ process.env.DISCORD_TOKEN = 'test';
 process.env.DISCORD_CLIENT_ID = 'test';
 process.env.DISCORD_GUILD_ID = 'test';
 process.env.AUTHORIZED_ROLE_IDS = 'role';
+process.env.AUTHORIZED_USER_ID = 'owner';
+process.env.CLAUDE_ENABLED = 'true';
 
 const { getTaskCoordinator } = await import('./taskCoordinatorService.js');
 const { getUsageAdmissionService } = await import('./usageAdmissionRegistry.js');
@@ -30,10 +33,10 @@ function tempDirectory(): string {
   return directory;
 }
 
-function fakeProvider(): AgentProvider {
+function fakeProvider(id: AgentProvider['id'] = 'claude', availability: ProviderAvailability = { available: true }): AgentProvider {
   return {
-    id: 'claude',
-    checkAvailability: vi.fn(async (): Promise<ProviderAvailability> => ({ available: true })),
+    id,
+    checkAvailability: vi.fn(async (): Promise<ProviderAvailability> => availability),
     startTask: vi.fn(),
     continueTask: vi.fn(),
     cancelTask: vi.fn(async () => undefined),
@@ -45,6 +48,23 @@ function fakeProvider(): AgentProvider {
   } as AgentProvider;
 }
 
+function onboardingClient(send: ReturnType<typeof vi.fn>): Client {
+  const agentChannel = {
+    id: 'agent-chat',
+    messages: { fetch: vi.fn(async () => null) },
+    send,
+  };
+  const guild = {
+    id: 'guild-1',
+    members: { me: { id: 'bot-1' } },
+    channels: {
+      cache: { find: () => undefined },
+      create: vi.fn(async () => agentChannel),
+    },
+  };
+  return { guilds: { fetch: vi.fn(async () => guild) } } as unknown as Client;
+}
+
 describe('runtime startup', () => {
   it('installs a durable coordinator and registered Claude provider before handlers run', async () => {
     const directory = tempDirectory();
@@ -53,16 +73,134 @@ describe('runtime startup', () => {
       legacyPath: join(directory, 'missing-projects.json'),
       worktreesBaseDir: join(directory, 'worktrees'),
       claudeProvider: fakeProvider(),
+      disablePrimaryAgent: true,
     });
 
     expect(getTaskCoordinator()).toBe(runtime.coordinator);
     expect(runtime.providers.require('claude').id).toBe('claude');
+    expect(runtime.settings.getDefaultProvider()).toBeUndefined();
     expect(runtime.projects.listActive()).toEqual([]);
     expect(getUsageAdmissionService()).toBe(runtime.usage);
 
     await stopRuntime(runtime);
     expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
     expect(getUsageAdmissionService()).toBeUndefined();
+  });
+
+  it('starts with Codex as the only registered provider when Claude is disabled', async () => {
+    const directory = tempDirectory();
+    const codex = { ...fakeProvider(), id: 'codex' as const };
+    const runtime = await startRuntime({} as Client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      codexProvider: codex,
+      disableClaude: true,
+      disablePrimaryAgent: true,
+    });
+
+    expect(runtime.providers.list()).toEqual(['codex']);
+
+    await stopRuntime(runtime);
+  });
+
+  it('registers an injected OpenCode provider after its availability probe', async () => {
+    const directory = tempDirectory();
+    const opencode = fakeProvider('opencode');
+    const runtime = await startRuntime({} as Client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      openCodeProvider: opencode,
+      disableClaude: true,
+      disableCodex: true,
+      disablePrimaryAgent: true,
+    });
+
+    expect(runtime.providers.require('opencode')).toBe(opencode);
+    expect(opencode.checkAvailability).toHaveBeenCalledOnce();
+
+    await stopRuntime(runtime);
+  });
+
+  it('omits an injected OpenCode provider when its availability probe fails', async () => {
+    const directory = tempDirectory();
+    const opencode = fakeProvider('opencode', { available: false, reason: 'OpenCode ACP unavailable: missing CLI token=secret' });
+    const runtime = await startRuntime({} as Client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      openCodeProvider: opencode,
+      disableClaude: true,
+      disableCodex: true,
+      disablePrimaryAgent: true,
+    });
+
+    expect(runtime.providers.list()).not.toContain('opencode');
+    expect(opencode.checkAvailability).toHaveBeenCalledOnce();
+
+    await stopRuntime(runtime);
+  });
+
+  it('does not register an injected OpenCode provider when OpenCode is disabled', async () => {
+    const directory = tempDirectory();
+    const opencode = fakeProvider('opencode');
+    const runtime = await startRuntime({} as Client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      openCodeProvider: opencode,
+      disableOpenCode: true,
+      disableClaude: true,
+      disableCodex: true,
+      disablePrimaryAgent: true,
+    });
+
+    expect(runtime.providers.list()).not.toContain('opencode');
+    expect(opencode.checkAvailability).not.toHaveBeenCalled();
+
+    await stopRuntime(runtime);
+  });
+
+  it('posts provider onboarding in the PM channel before any provider is selected', async () => {
+    const directory = tempDirectory();
+    const send = vi.fn(async () => ({ id: 'setup-message' }));
+    const runtime = await startRuntime(onboardingClient(send), {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      claudeProvider: fakeProvider(),
+      disableCodex: true,
+    });
+
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/provider setup required/i) }));
+    expect(runtime.primaryAgent).toBeUndefined();
+
+    await stopRuntime(runtime);
+  });
+
+  it('clears an unavailable saved PM provider and returns to onboarding', async () => {
+    const directory = tempDirectory();
+    const databasePath = join(directory, 'runtime.sqlite');
+    const db = openDatabase(databasePath);
+    runMigrations(db);
+    createSettingsRepository(db).setDefaultProvider('codex');
+    db.close();
+    const send = vi.fn(async () => ({ id: 'setup-message' }));
+
+    const runtime = await startRuntime(onboardingClient(send), {
+      databasePath,
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      claudeProvider: fakeProvider(),
+      disableCodex: true,
+    });
+
+    expect(runtime.settings.getDefaultProvider()).toBeUndefined();
+    expect(runtime.primaryAgent).toBeUndefined();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/provider setup required/i) }));
+
+    await stopRuntime(runtime);
   });
 
   it('cleans partial startup state when the injected provider is not Claude', async () => {
@@ -78,7 +216,6 @@ describe('runtime startup', () => {
 
     expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
   });
-
 
   it('uses an injected Codex provider without spawning the CLI and records authoritative windows', async () => {
     const directory = tempDirectory();
@@ -176,6 +313,7 @@ describe('runtime startup', () => {
       legacyPath: join(directory, 'missing-projects.json'),
       worktreesBaseDir: join(directory, 'worktrees'),
       claudeProvider: provider,
+      disablePrimaryAgent: true,
     });
 
     expect(runtime.tasks.findById('task-1')?.status).toBe('interrupted');

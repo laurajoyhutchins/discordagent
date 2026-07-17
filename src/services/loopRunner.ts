@@ -8,6 +8,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ButtonInteraction,
+  MessageFlags,
 } from 'discord.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
 import { getTaskCoordinator } from './taskCoordinatorService.js';
@@ -297,7 +298,7 @@ export async function stopLoop(channelId: string, message: Message): Promise<voi
 export async function stopLoopFromButton(channelId: string, interaction: ButtonInteraction): Promise<void> {
   const loop = activeLoops.get(channelId);
   if (!loop) {
-    await interaction.reply({ content: 'No loop is running in this channel.', ephemeral: true });
+    await interaction.reply({ content: 'No loop is running in this channel.', flags: MessageFlags.Ephemeral });
     return;
   }
 

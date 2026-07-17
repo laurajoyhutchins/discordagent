@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { Message } from 'discord.js';
 import { createPrimaryAgentService } from './primaryAgentService.js';
 
 function base(overrides: Record<string, unknown> = {}) {
@@ -74,5 +75,34 @@ describe('primary agent service', () => {
     expect(update).toHaveBeenCalledWith({ content: 'Decision recorded: **Full**', components: [] });
     expect(respond).toHaveBeenLastCalledWith(expect.objectContaining({ message: expect.stringContaining('Full') }));
     expect(reply).toHaveBeenCalledWith('We will use the full scope.');
+  });
+
+  it('renders structured provider failures as an error card instead of raw JSON', async () => {
+    const rawError = JSON.stringify({
+      type: 'error',
+      status: 400,
+      error: { type: 'invalid_request_error', message: 'The selected model is unavailable.' },
+    });
+    const reply = vi.fn(async () => undefined);
+    const input = {
+      author: { bot: false, id: 'owner-1' },
+      channelId: 'agent-chat-1', content: 'Hello', createdTimestamp: 1, reply,
+    } as unknown as Message;
+    const service = createPrimaryAgentService({
+      channelId: 'agent-chat-1', ownerId: 'owner-1',
+      model: { respond: vi.fn(async () => ({ reply: `I could not complete the coordination turn: ${rawError}` })) },
+      context: { assemble: vi.fn(() => 'context') } as never,
+      messages: { append: vi.fn() } as never, memories: { put: vi.fn() } as never,
+      projects: {} as never, coordinator: {} as never, fetchProjectChannel: vi.fn(),
+    });
+
+    await service.handleMessage(input);
+
+    const calls = reply.mock.calls as unknown as Array<[unknown]>;
+    const payload = calls[0]?.[0] as { embeds: Array<{ toJSON(): Record<string, unknown> }> };
+    const embed = payload.embeds[0].toJSON();
+    expect(payload).toHaveProperty('embeds');
+    expect(embed.description).toContain('The selected model is unavailable.');
+    expect(embed.description).not.toContain('{"type":"error"');
   });
 });

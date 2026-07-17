@@ -72,4 +72,16 @@ describe('host preflight', () => {
     expect(checks.find(check => check.name === 'Roborev CLI')?.status).toBe('warn');
     expect(checks.filter(check => check.status === 'fail')).toEqual([]);
   });
+
+  it('treats Claude as optional when its CLI is unavailable', () => {
+    const checks = evaluateHostPreflight(validEnvironment, dependencies({
+      runCommand(command) {
+        if (command === 'claude') return { ok: false, detail: 'command not found' };
+        return { ok: true, detail: 'available' };
+      },
+    }));
+
+    expect(checks.find(check => check.name === 'Claude CLI')?.status).toBe('warn');
+    expect(checks.filter(check => check.status === 'fail')).toEqual([]);
+  });
 });

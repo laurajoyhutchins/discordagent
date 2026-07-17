@@ -5,6 +5,7 @@ import {
 } from 'discord.js';
 import type { AgentEvent, TaskResult } from '../agents/contracts.js';
 import { chunkText } from '../utils/chunker.js';
+import { buildErrorEmbed, isStructuredErrorMessage } from './errorCard.js';
 
 const DEFAULT_EDIT_INTERVAL_MS = 1_500;
 const MESSAGE_LIMIT = 1_800;
@@ -128,11 +129,15 @@ export class DiscordTaskRenderer implements TaskRenderer {
     await this.flushFinalText();
 
     const presentation = terminalPresentation(result);
-    const embed = new EmbedBuilder()
-      .setTitle(presentation.title)
-      .setTimestamp(new Date(result.completedAt));
+    const errorText = result.error?.message ?? result.summary;
+    const structuredError = result.outcome === 'failed' && Boolean(errorText && isStructuredErrorMessage(errorText));
+    const embed = structuredError
+      ? buildErrorEmbed(errorText, 'Task failed')
+      : new EmbedBuilder()
+        .setTitle(presentation.title)
+        .setTimestamp(new Date(result.completedAt));
 
-    if (result.summary) embed.setDescription(truncate(result.summary, 4_000));
+    if (result.summary && !structuredError) embed.setDescription(truncate(result.summary, 4_000));
     if (result.branchName) {
       embed.addFields({ name: 'Branch', value: `\`${truncate(result.branchName, 900)}\``, inline: false });
     }
@@ -150,7 +155,7 @@ export class DiscordTaskRenderer implements TaskRenderer {
         inline: false,
       });
     }
-    if (result.error && !result.summary) {
+    if (result.error && !result.summary && !structuredError) {
       embed.setDescription(truncate(result.error.message, 4_000));
     }
 

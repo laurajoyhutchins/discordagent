@@ -14,6 +14,10 @@ export class ProviderRegistry {
     this.providers.set(provider.id, provider);
   }
 
+  list(): AgentProviderId[] {
+    return [...this.providers.keys()];
+  }
+
   require(id: AgentProviderId): AgentProvider {
     const provider = this.providers.get(id);
     if (!provider) throw new Error(`Agent provider "${id}" is not registered`);

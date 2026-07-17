@@ -1,4 +1,4 @@
-export const AGENT_PROVIDER_IDS = ['claude', 'codex'] as const;
+export const AGENT_PROVIDER_IDS = ['claude', 'codex', 'opencode'] as const;
 export type AgentProviderId = (typeof AGENT_PROVIDER_IDS)[number];
 
 export const TASK_STATUSES = [

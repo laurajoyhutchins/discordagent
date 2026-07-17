@@ -18,8 +18,9 @@ import { getTaskCoordinator } from '../services/taskCoordinatorService.js';
 import { isAuthorized } from '../utils/permissions.js';
 import { redactSensitiveText } from '../utils/redaction.js';
 import { getPrimaryAgentService } from '../services/primaryAgentServiceRegistry.js';
-import { getProviderRegistry, maybeGetPendingTaskService } from '../services/agentRuntimeService.js';
+import { getProviderRegistry, maybeGetPendingTaskService, maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
 import { UsageAdmissionError } from '../services/usageAdmission.js';
+import { buildErrorEmbed } from '../discord/errorCard.js';
 
 export interface MessageHandlerDependencies {
   coordinator: Pick<TaskCoordinator, 'startFromMessage' | 'continueFromMessage' | 'estimateHandoff' | 'handoffFromThread'>;
@@ -66,11 +67,11 @@ function logPickup(message: Message, prompt: string, lagMs: number): void {
   console.log(`[msg] "${redactSensitiveText(prompt).slice(0, 50)}" from ${message.author.tag} | gateway lag ${lagMs}ms${flag}`);
 }
 
-function errorMessage(error: unknown): string {
+function errorReply(error: unknown, title: string): { embeds: ReturnType<typeof buildErrorEmbed>[] } {
   if (error instanceof UsageAdmissionError) {
-    return redactSensitiveText(`${error.message} ${error.recommendation}`);
+    return { embeds: [buildErrorEmbed(new Error(`${error.message} ${error.recommendation}`), title)] };
   }
-  return redactSensitiveText(error instanceof Error ? error.message : String(error));
+  return { embeds: [buildErrorEmbed(error, title)] };
 }
 
 
@@ -84,6 +85,14 @@ export async function handleMessage(
 
   const primary = getPrimaryAgentService();
   if (!injected && primary && message.channelId === primary.channelId) { await primary.handleMessage(message); return; }
+  if (!injected && !primary && 'name' in message.channel && message.channel.name === 'agent-chat') {
+    const onboarding = maybeGetProviderOnboardingService();
+    if (onboarding) {
+      await onboarding.ensurePrompt();
+      await message.reply('Choose a provider using the setup buttons above. The selected provider will power this PM chat and become the default for new projects.');
+      return;
+    }
+  }
 
   const dependencies = injected ?? defaultDependencies();
   const lagMs = Date.now() - message.createdTimestamp;
@@ -137,7 +146,7 @@ export async function handleMessage(
         await decision.update({ content: `Creating the ${target} sibling task…`, components: [] });
         await dependencies.coordinator.handoffFromThread({ sourceThread: message.channel, targetProvider: target });
       } catch (error) {
-        await message.reply(`Unable to hand off this task: ${errorMessage(error)}`);
+        await message.reply(errorReply(error, 'Unable to hand off task'));
       }
       return;
     }
@@ -158,7 +167,7 @@ export async function handleMessage(
         ...(parsed.model ? { model: parsed.model } : {}),
       });
     } catch (error) {
-      await message.reply(`Unable to continue this task: ${errorMessage(error)}`);
+      await message.reply(errorReply(error, 'Unable to continue task'));
     }
     return;
   }
@@ -207,7 +216,7 @@ export async function handleMessage(
       ...(resolvedModel ? { model: resolvedModel } : {}),
     });
   } catch (error) {
-    await message.reply(`Unable to start this task: ${errorMessage(error)}`);
+    await message.reply(errorReply(error, 'Unable to start task'));
   }
 }
 

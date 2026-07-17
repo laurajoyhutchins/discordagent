@@ -2,7 +2,7 @@
 
 Discord Agent is a private, local-first Discord workspace for running coding agents against repositories on the machine hosting the bot. It is based on [Nicolai Lolansen's DiscordClaude](https://github.com/NicolaiLolansen/DiscordClaude) and retains the upstream MIT license and attribution.
 
-Discord Agent provides a provider-neutral runtime with executable Claude and Codex providers. Codex runs through the local App Server protocol with guided device-code authentication, streamed events, approvals, questions, cancellation, quota state, and confirmed sibling-thread handoffs.
+Discord Agent provides a provider-neutral runtime with executable Claude, Codex, and optional OpenCode task providers. Codex runs through the local App Server protocol, while OpenCode runs through the local `opencode acp` CLI with ACP streaming, approvals, session continuation, and cancellation.
 
 ## What the runtime provides
 
@@ -20,6 +20,8 @@ Discord Agent provides a provider-neutral runtime with executable Claude and Cod
 - **Durable memory and retrieval** — the primary agent uses a SQLite journal, FTS5 retrieval, provenance-controlled memory, and bounded context assembly.
 - **Discord-native decisions** — confirmations, select menus, and native polls collect user choices without turning routine conversation into command syntax.
 - **Quiet usage admission** — provider windows, calibrated task estimates, and active reservations are managed internally; `/usage` and `/agents` expose details on demand, while normal conversation surfaces only material constraints.
+
+OpenCode is an optional local task provider. Install the OpenCode CLI and run `opencode auth login` on the bot host before selecting it in a project channel. Discord Agent invokes only `opencode acp`, uses ACP streaming and explicit Discord approvals, and persists the ACP session for continuation. It does not automatically fall back to Claude or Codex when OpenCode is unavailable or fails.
 
 ## Safety model
 
@@ -41,10 +43,10 @@ Discord Agent is intended for a private server with trusted users and repositori
 - Node.js 22 or newer
 - Git
 - A private Discord server where you can install a bot
-- Claude Code installed and authenticated on the bot host
-- Codex CLI installed when Codex tasks are desired
+- At least one provider installed and authenticated on the bot host
+- Claude Code, Codex CLI, and OpenCode CLI are optional; install and authenticate at least one provider on the bot host
 
-Run Claude once locally to complete authentication. Codex can be authenticated privately from Discord with `/codex-auth login`, or locally with `codex login --device-auth`.
+Run the provider you intend to use once locally to complete authentication. Codex can also be authenticated privately from Discord with `/codex-auth login`, or locally with `codex login --device-auth`. For OpenCode, install the OpenCode CLI and run `opencode auth login` on the bot host. OpenCode is invoked only through `opencode acp`; the bot does not implement a batch or automatic fallback transport.
 
 ## Installation
 
@@ -71,6 +73,8 @@ npm run register
 npm run dev
 ```
 
+On the first start, open the private `#agent-chat` channel and choose an available provider. That selection powers the PM chat and becomes the default for new projects. If Codex is selected, complete `/codex-auth login` first when the setup prompt asks for it. Claude, Codex, and OpenCode are optional at runtime; set `CLAUDE_ENABLED=false` for a Codex-only host.
+
 For production-style execution:
 
 ```bash
@@ -84,13 +88,15 @@ The bot requires the message-content and server-members privileged intents. It n
 
 ## Registering a project
 
-Run this in the configured guild:
+OpenCode is intentionally excluded from PM provider onboarding. Select Claude or Codex for `#agent-chat`, then choose OpenCode in a project channel after its local ACP availability check succeeds.
+
+Choose the global provider in `#agent-chat` before registering a project. Then run this in the configured guild:
 
 ```text
 /add-project name:factory-floor path:/absolute/path/to/factory-floor
 ```
 
-The bot creates a category named for the project and a private `#agent` channel. When Roborev is enabled, it also creates `#roborev`.
+The bot creates a category named for the project and a private `#agent` channel. The project inherits the global provider at creation time; use `/provider` in the project channel to override it later. When Roborev is enabled, it also creates `#roborev`.
 
 Send a normal message in `#agent` to create a task. Discord Agent will:
 
@@ -109,7 +115,7 @@ Send a normal message in `#agent` to create a task. Discord Agent will:
 | `/add-project` | Register a local project and create its channels. |
 | `/list-projects` | List active projects, providers, models, and channels. |
 | `/remove-project` | Soft-archive the project record and delete its Discord channels. Historical tasks remain in SQLite. |
-| `/provider [claude\|codex]` | Show or change the project's default provider after an authoritative availability check. In a task thread, proposing the other provider creates a confirmed sibling handoff. |
+| `/provider [claude\|codex\|opencode]` | Show or change the global PM provider in `#agent-chat`, or the project's default provider in a project channel, after an authoritative availability check. OpenCode is task-only and cannot become the PM provider. In a task thread, proposing another provider creates a confirmed sibling handoff. |
 | `/model [model] [custom]` | Set the model override for the project's current provider. |
 | `/cancel` | In a task thread, cancel that durable task while preserving its worktree. |
 | `/loop <prompt> [interval]` | Start a recurring task in one thread/session/worktree. |
@@ -142,6 +148,12 @@ Codex runs through a singleton local App Server process using newline-delimited 
 When sign-in is required, the original request is held in memory for up to 30 minutes without creating a thread or worktree. `/codex-auth login` shows the OpenAI device URL and one-time code only in an ephemeral owner interaction. The bot performs a fresh account read after completion and requires an explicit **Start task** or **Discard** action. API keys and secret tool inputs are never requested through Discord.
 
 A provider change inside a completed task thread is a confirmed sibling handoff, not an in-place session conversion. The new task receives a fresh provider session and isolated worktree based on the committed source-task branch. The handoff transfers a bounded structured summary rather than the complete transcript.
+
+### OpenCode
+
+OpenCode runs through the local `opencode acp` CLI and the official ACP client transport. It streams normalized text, plans, commands, file changes, usage, and status events, and maps ACP permission requests to explicit Discord approvals. A task persists its ACP session identity before completion is awaited so replies can continue the same OpenCode session when the server advertises loading or resuming.
+
+OpenCode is available for project task channels and confirmed task-thread handoffs only. PM-style `#agent-chat` support is deferred until a restricted primary adapter exists. The runtime never silently switches providers or starts a fallback batch command.
 
 ## Git worktrees
 
@@ -204,12 +216,17 @@ When enabled, the bot starts `roborev stream`, matches events to registered repo
 | `NOTIFY_USER_ID` | no | empty | User to mention after task completion. |
 | `AUTHORIZED_USER_ID` | primary/Codex auth | `NOTIFY_USER_ID` | Exact owner allowed to use `#agent-chat` and manage Codex login. |
 | `AUTHORIZED_USER_ID` | Codex auth | `NOTIFY_USER_ID` | Exact human owner allowed to manage Codex authentication. |
-| `CODEX_CLI_PATH` | no | `codex` | Codex CLI executable used to launch App Server. |
+| `CODEX_CLI_PATH` | no | `codex` (`codex.cmd` on Windows when installed through Volta) | Codex CLI executable used to launch App Server. |
 | `CODEX_MODEL` | no | provider default | Default Codex model. |
 | `CODEX_ENABLED` | no | `true` | Enable local Codex App Server startup. |
-| `PRIMARY_AGENT_MODEL` | no | Claude default | Model used by the restricted PM-style coordinator. |
+| `OPENCODE_CLI_PATH` | no | `opencode` | OpenCode CLI executable used to launch ACP. |
+| `OPENCODE_MODEL` | no | provider default | Default OpenCode model. |
+| `OPENCODE_TIMEOUT_MS` | no | `900000` | OpenCode ACP turn timeout. |
+| `OPENCODE_ENABLED` | no | `true` | Keep OpenCode available as a selectable task provider when its ACP probe succeeds. |
+| `PRIMARY_AGENT_MODEL` | no | provider default | Optional model used by the restricted PM-style coordinator. |
 | `PRIMARY_USAGE_RESERVE` | no | `10` | Capacity percentage points preserved for coordination and recovery. |
 | `CLAUDE_TIMEOUT_MS` | no | `900000` | Provider turn timeout. |
+| `CLAUDE_ENABLED` | no | `true` | Keep Claude available as a selectable provider; set `false` on Codex-only hosts. |
 | `CLAUDE_MODEL` | no | SDK default | Default Claude model. |
 | `PROJECTS_BASE_DIR` | no | unrestricted | Root beneath which projects may be registered. |
 | `ALLOW_NON_GIT` | no | `false` | Legacy registration switch. Agent task execution still requires a Git repository for worktree isolation. |

@@ -1,4 +1,4 @@
-import { ChatInputCommandInteraction } from 'discord.js';
+import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { getProjectByChannel } from '../services/projectStore.js';
 import { parseDuration, startLoop } from '../services/loopRunner.js';
 import { isAuthorized } from '../utils/permissions.js';
@@ -10,13 +10,13 @@ export async function handleLoop(interaction: ChatInputCommandInteraction): Prom
   const member = await interaction.guild?.members.fetch(interaction.user.id)
     .catch((e) => { console.warn('[loop] member fetch failed:', redactErrorMessage(e)); return null; }) ?? null;
   if (!isAuthorized(member)) {
-    await interaction.reply({ content: 'You are not authorized.', ephemeral: true });
+    await interaction.reply({ content: 'You are not authorized.', flags: MessageFlags.Ephemeral });
     return;
   }
 
   const project = getProjectByChannel(interaction.channelId);
   if (!project || interaction.channelId !== project.agentChannelId) {
-    await interaction.reply({ content: 'This command can only be used in a project #agent channel.', ephemeral: true });
+    await interaction.reply({ content: 'This command can only be used in a project #agent channel.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -29,7 +29,7 @@ export async function handleLoop(interaction: ChatInputCommandInteraction): Prom
     if (parsed === null) {
       await interaction.reply({
         content: 'Invalid interval. Use formats like `5m`, `1h`, `30s`, `2h30m`.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }

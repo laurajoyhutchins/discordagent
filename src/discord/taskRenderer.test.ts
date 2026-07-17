@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AnyThreadChannel } from 'discord.js';
+import { MessageFlags, type AnyThreadChannel } from 'discord.js';
 import type {
   AgentEvent,
   ApprovalRequest,
@@ -185,6 +185,29 @@ describe('DiscordTaskRenderer', () => {
     expect(text).not.toContain('999999');
     expect(text).not.toMatch(/Claude|Codex/);
   });
+
+  it('renders structured terminal failures as an error card instead of raw JSON', async () => {
+    const fake = new FakeThread();
+    const renderer = new DiscordTaskRenderer({ editIntervalMs: 0 });
+    renderer.start(thread(fake));
+    const rawError = JSON.stringify({
+      type: 'error',
+      status: 400,
+      error: { type: 'invalid_request_error', message: 'The selected model is unavailable.' },
+    });
+
+    await renderer.finish({
+      provider: 'codex', outcome: 'failed', exitType: 'error', startedAt: 1, completedAt: 2,
+      error: { code: 'provider_error', message: rawError, retryable: false },
+    });
+
+    const payload = fake.sent.at(-1)?.payload as { embeds: Array<{ toJSON(): Record<string, unknown> }> };
+    const embed = payload.embeds[0].toJSON();
+    const rendered = JSON.stringify(embed);
+    expect(rendered).toContain('The selected model is unavailable.');
+    expect(embed.description).not.toContain('{"type":"error"');
+    expect(rendered).not.toContain('invalid_request_error\\"');
+  });
 });
 
 describe('DiscordInteractionBroker', () => {
@@ -232,7 +255,7 @@ describe('DiscordInteractionBroker', () => {
 
     await expect(promise).resolves.toBe('allow');
     expect(unauthorized.replies).toEqual([
-      expect.objectContaining({ content: 'You are not authorized.', ephemeral: true }),
+      expect.objectContaining({ content: 'You are not authorized.', flags: MessageFlags.Ephemeral }),
     ]);
     expect(authorized.deferred).toBe(true);
   });

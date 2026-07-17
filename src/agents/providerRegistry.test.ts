@@ -51,4 +51,11 @@ describe('ProviderRegistry', () => {
       authenticationRequired: true,
     });
   });
+
+  it('lists only the providers that are registered', () => {
+    const registry = new ProviderRegistry();
+    registry.register(provider('codex'));
+
+    expect(registry.list()).toEqual(['codex']);
+  });
 });

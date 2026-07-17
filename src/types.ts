@@ -3,6 +3,7 @@ import type { AgentProviderId, TaskResult, TaskStatus } from './agents/contracts
 export interface ProjectModels {
   claude?: string;
   codex?: string;
+  opencode?: string;
 }
 
 export interface Project {

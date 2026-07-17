@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
+  AGENT_PROVIDER_IDS,
   AGENT_EVENT_TYPES,
   TASK_STATUSES,
   isAgentEvent,
@@ -17,6 +18,11 @@ describe('agent provider identifiers', () => {
     expect(isAgentProviderId('codex')).toBe(true);
     expect(isAgentProviderId('openai')).toBe(false);
     expect(isAgentProviderId(undefined)).toBe(false);
+  });
+
+  it('accepts OpenCode as a provider identifier', () => {
+    expect(isAgentProviderId('opencode')).toBe(true);
+    expect(AGENT_PROVIDER_IDS).toContain('opencode');
   });
 
   it('keeps provider sessions scoped to a supported provider', () => {

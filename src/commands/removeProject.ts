@@ -1,4 +1,4 @@
-import { ChatInputCommandInteraction } from 'discord.js';
+import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { removeProject } from '../services/projectStore.js';
 import { deleteProjectChannels } from '../services/channelManager.js';
 
@@ -7,7 +7,7 @@ export async function handleRemoveProject(interaction: ChatInputCommandInteracti
 
   const project = removeProject(name);
   if (!project) {
-    await interaction.reply({ content: `Project "${name}" not found.`, ephemeral: true });
+    await interaction.reply({ content: `Project "${name}" not found.`, flags: MessageFlags.Ephemeral });
     return;
   }
 

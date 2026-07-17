@@ -132,9 +132,28 @@ describe('messageHandler coordinator routing', () => {
 
     await handleMessage(input, dependencies(taskCoordinator));
 
-    const reply = String(input.reply.mock.calls[0]?.[0]);
+    const reply = JSON.stringify(input.reply.mock.calls[0]?.[0]);
     expect(reply).toContain('[REDACTED]');
     expect(reply).not.toContain('reply-secret');
+  });
+
+  it('renders structured coordinator errors as an embed instead of raw JSON', async () => {
+    const taskCoordinator = coordinator();
+    const rawError = JSON.stringify({
+      type: 'error',
+      status: 400,
+      error: { type: 'invalid_request_error', message: 'The selected model is unavailable.' },
+    });
+    taskCoordinator.startFromMessage.mockRejectedValueOnce(new Error(rawError));
+    const input = message({});
+
+    await handleMessage(input, dependencies(taskCoordinator));
+
+    const payload = input.reply.mock.calls[0]?.[0] as { embeds: Array<{ toJSON(): Record<string, unknown> }> };
+    const rendered = JSON.stringify(payload.embeds[0].toJSON());
+    expect(payload).toHaveProperty('embeds');
+    expect(rendered).toContain('The selected model is unavailable.');
+    expect(rendered).not.toContain(rawError);
   });
 
   it('ignores messages outside registered project channels', async () => {

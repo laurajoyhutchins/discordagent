@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatInputCommandInteraction } from 'discord.js';
+import { MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
 import { ProviderRegistry } from '../agents/providerRegistry.js';
 import { setAgentRuntimeServices, clearAgentRuntimeServices } from '../services/agentRuntimeService.js';
 import { setUsageAdmissionService, clearUsageAdmissionService } from '../services/usageAdmissionRegistry.js';
@@ -16,7 +16,9 @@ function interaction() {
     reply: vi.fn(async () => undefined),
     deferReply: vi.fn(async () => undefined),
     editReply: vi.fn(async () => undefined),
-  } as unknown as ChatInputCommandInteraction;
+  } as unknown as ChatInputCommandInteraction & {
+    editReply: ReturnType<typeof vi.fn>;
+  };
 }
 
 describe('inspection commands', () => {
@@ -28,7 +30,7 @@ describe('inspection commands', () => {
     } as never);
     const value = interaction();
     await handleAgents(value);
-    expect(value.reply).toHaveBeenCalledWith(expect.objectContaining({ embeds: expect.any(Array), ephemeral: true }));
+    expect(value.reply).toHaveBeenCalledWith(expect.objectContaining({ embeds: expect.any(Array), flags: MessageFlags.Ephemeral }));
   });
 
   it('shows detailed provider posture only on demand', async () => {
@@ -38,7 +40,24 @@ describe('inspection commands', () => {
     } as never);
     const value = interaction();
     await handleUsage(value);
-    expect(value.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(value.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(value.editReply).toHaveBeenCalledWith(expect.objectContaining({ embeds: expect.any(Array) }));
+    const reply = value.editReply.mock.calls[0][0] as { embeds: Array<{ data: { fields: Array<{ name: string }> } }> };
+    expect(reply.embeds[0].data.fields.map(field => field.name)).toContain('OpenCode');
+  });
+
+  it('labels OpenCode in active reservation details', async () => {
+    setUsageAdmissionService({
+      posture: vi.fn(() => ({ posture: 'healthy', available: 30, reserved: 10 })),
+      reservations: vi.fn((provider?: string) => provider
+        ? []
+        : [{ id: 'r', taskId: 'task-123456', provider: 'opencode', taskClass: 'contained_feature', low: 6, high: 14, confidence: 'low', status: 'active', createdAt: 1 }]),
+    } as never);
+    const value = interaction();
+    await handleUsage(value);
+
+    const reply = value.editReply.mock.calls[0][0] as { embeds: Array<{ data: { fields: Array<{ name: string; value: string }> } }> };
+    const reservations = reply.embeds[0].data.fields.find(field => field.name === 'Active reservations');
+    expect(reservations?.value).toMatch(/^OpenCode ·/);
   });
 });

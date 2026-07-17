@@ -5,6 +5,7 @@ import {
   ButtonStyle,
   ComponentType,
   EmbedBuilder,
+  MessageFlags,
   StringSelectMenuBuilder,
   type AnyThreadChannel,
   type GuildMember,
@@ -75,7 +76,7 @@ export class DiscordInteractionBroker implements InteractionBroker {
 
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
       if (!await this.authorize(member)) {
-        await interaction.reply({ content: 'You are not authorized.', ephemeral: true }).catch(() => undefined);
+        await interaction.reply({ content: 'You are not authorized.', flags: MessageFlags.Ephemeral }).catch(() => undefined);
         continue;
       }
 
@@ -147,7 +148,7 @@ export class DiscordInteractionBroker implements InteractionBroker {
       if (!interaction) break;
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
       if (!await this.authorize(member)) {
-        await interaction.reply({ content: 'You are not authorized.', ephemeral: true }).catch(() => undefined);
+        await interaction.reply({ content: 'You are not authorized.', flags: MessageFlags.Ephemeral }).catch(() => undefined);
         continue;
       }
       if (interaction.customId !== selectId) continue;
@@ -180,7 +181,7 @@ export class DiscordInteractionBroker implements InteractionBroker {
       if (!interaction) break;
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
       if (!await this.authorize(member)) {
-        await interaction.reply({ content: 'You are not authorized.', ephemeral: true }).catch(() => undefined);
+        await interaction.reply({ content: 'You are not authorized.', flags: MessageFlags.Ephemeral }).catch(() => undefined);
         continue;
       }
       const index = ids.indexOf(interaction.customId);

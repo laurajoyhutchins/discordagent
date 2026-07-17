@@ -1,4 +1,4 @@
-import type { ChatInputCommandInteraction } from 'discord.js';
+import { MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
 import type { Project } from '../types.js';
 import { getProjectByChannel } from '../services/projectStore.js';
@@ -46,7 +46,7 @@ export async function handleCancel(
     if (parts.length === 0) {
       await interaction.reply({
         content: 'No active task or loop in this thread.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     } else {
       await interaction.reply(parts.join('\n'));
@@ -58,7 +58,7 @@ export async function handleCancel(
   if (!project || channelId !== project.agentChannelId) {
     await interaction.reply({
       content: 'This command can only be used in a project channel or task thread.',
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }

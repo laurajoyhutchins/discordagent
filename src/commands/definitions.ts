@@ -54,7 +54,7 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName('provider')
-    .setDescription('Show or change the default agent provider for this project')
+    .setDescription('Show or change the default agent provider globally or for this project')
     .addStringOption(opt =>
       opt.setName('provider')
         .setDescription('Provider for new task threads')
@@ -62,6 +62,7 @@ export const commands = [
         .addChoices(
           { name: 'Claude', value: 'claude' },
           { name: 'Codex', value: 'codex' },
+          { name: 'OpenCode', value: 'opencode' },
         )
     ),
 
@@ -79,14 +80,8 @@ export const commands = [
     .setDescription("Pick the model for this project's active provider")
     .addStringOption(opt =>
       opt.setName('model')
-        .setDescription('Choose a model')
+        .setDescription('Provider-scoped model alias or exact model ID')
         .setRequired(false)
-        .addChoices(
-          { name: 'Claude Sonnet — balanced speed & capability (recommended)', value: 'sonnet' },
-          { name: 'Claude Opus — most powerful reasoning', value: 'opus' },
-          { name: 'Claude Haiku — fastest, lightweight tasks', value: 'haiku' },
-          { name: 'Default (env/SDK)', value: '__default__' },
-        )
     )
     .addStringOption(opt =>
       opt.setName('custom').setDescription('Set a custom model name directly (alias or exact model ID)').setRequired(false)

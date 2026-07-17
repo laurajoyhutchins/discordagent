@@ -1,4 +1,4 @@
-import { EmbedBuilder, type ChatInputCommandInteraction } from 'discord.js';
+import { EmbedBuilder, MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
 import { getTaskRepository } from '../services/agentRuntimeService.js';
 import { getUsageAdmissionService } from '../services/usageAdmissionRegistry.js';
 
@@ -6,7 +6,7 @@ export async function handleAgents(interaction: ChatInputCommandInteraction): Pr
   const tasks = getTaskRepository().listActive();
   const usage = getUsageAdmissionService();
   if (tasks.length === 0) {
-    await interaction.reply({ content: 'No agent tasks are currently active.', ephemeral: true });
+    await interaction.reply({ content: 'No agent tasks are currently active.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -26,5 +26,5 @@ export async function handleAgents(interaction: ChatInputCommandInteraction): Pr
     });
   }
 
-  await interaction.reply({ embeds: [embed], ephemeral: true });
+  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
 }

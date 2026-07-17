@@ -1,6 +1,6 @@
 # Discord Agent Runtime Architecture
 
-Discord Agent is a private, local-first Discord workspace with one persistent PM-style primary agent and isolated Claude or Codex task agents. Generic orchestration depends only on provider-neutral contracts.
+Discord Agent is a private, local-first Discord workspace with one persistent PM-style primary agent and isolated Claude, Codex, or OpenCode task agents. Generic orchestration depends only on provider-neutral contracts.
 
 ## Runtime topology
 
@@ -15,8 +15,9 @@ project #agent / task thread
   → UsageAdmissionService
   → WorktreeManager + SQLite task/worktree/session records
   → ProviderRegistry
-      ├── ClaudeProvider → Claude Agent SDK
-      └── CodexProvider → local Codex App Server JSON-RPC
+      ├── ClaudeProvider   → Claude Agent SDK
+      ├── CodexProvider    → local Codex App Server JSON-RPC
+      └── OpenCodeProvider → local `opencode acp` (ACP v1)
   → normalized events → SQLite + DiscordTaskRenderer
 ```
 
@@ -42,6 +43,10 @@ Admission happens before Discord or Git side effects. A rejected task creates ne
 `ClaudeProvider` uses user-level Claude settings only. Project/local settings remain excluded.
 
 `CodexProvider` uses one local App Server transport. It supports initialization, account state, device-code login, thread start/resume, streamed items, approvals, user questions, rate-limit windows, bounded overload retry, interruption, and deterministic shutdown. Requests blocked by authentication are held in memory for up to 30 minutes and require an explicit post-login Start action before Discord or Git side effects occur. Credentials and one-time codes never enter SQLite.
+
+`OpenCodeProvider` is an optional project/task provider backed by the local `opencode acp` CLI and the official ACP client transport. It performs an ACP v1 availability probe, streams normalized text, plans, commands, file changes, usage, and status events, and maps ACP permission requests to explicit Discord approvals. The task session identity is persisted before awaiting prompt completion; continuations load or resume that same session when the advertised capability permits it. OpenCode has no filesystem or terminal callbacks supplied by Discord Agent, and it never receives automatic approval.
+
+OpenCode is intentionally task-only: it is selectable for project defaults and confirmed task-thread handoffs, but it is excluded from PM-style `#agent-chat` onboarding and activation until a restricted primary adapter exists. The runtime does not silently fall back to another provider when the OpenCode CLI is missing, unauthenticated, unavailable, or fails; the task reports the provider-specific failure for an explicit user decision.
 
 A provider switch is a confirmed sibling handoff. The system estimates target input context, requires confirmation, creates a fresh target session and isolated worktree based on the clean committed source branch, and cross-links the threads.
 

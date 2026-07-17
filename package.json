@@ -14,7 +14,8 @@
     "check": "npm test && npm run build",
     "smoke:host": "tsx src/smoke/hostPreflight.ts",
     "smoke:discord": "tsx src/smoke/discordConnectivity.ts",
-    "smoke": "npm run smoke:host && npm run smoke:discord"
+    "smoke:factory-floor": "tsx src/smoke/factoryFloorConnectivity.ts",
+    "smoke": "npm run smoke:host && npm run smoke:discord && npm run smoke:factory-floor"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.87",

@@ -40,7 +40,6 @@ lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
 });
 
 let runtime: RuntimeServices | null = null;
-let factoryFloorBridge: FactoryFloorBridgeService | null = null;
 
 const client = new Client({
   intents: [
@@ -57,27 +56,35 @@ client.once('clientReady', async () => {
 
   try {
     runtime = await startRuntime(client);
-    if (config.factoryFloorEnabled) {
+  } catch (error) {
+    console.error('Failed to initialize Discord Agent runtime:', redactErrorMessage(error));
+    process.exit(1);
+    return;
+  }
+
+  if (config.factoryFloorEnabled) {
+    try {
       const api = new FactoryFloorClient({
         baseUrl: config.factoryFloorBaseUrl,
         operatorToken: config.factoryFloorOperatorToken,
         timeoutMs: config.factoryFloorRequestTimeoutMs,
       });
-      factoryFloorBridge = new FactoryFloorBridgeService(
+      const bridge = new FactoryFloorBridgeService(
         api,
         createFactoryFloorRunRepository(runtime.database),
         client,
         { pollIntervalMs: config.factoryFloorPollIntervalMs },
       );
-      setFactoryFloorBridgeService(factoryFloorBridge);
-      await factoryFloorBridge.start();
+      setFactoryFloorBridgeService(bridge);
+      await bridge.start();
       console.log(`Factory Floor bridge enabled for ${config.factoryFloorBaseUrl}.`);
+    } catch (error) {
+      clearFactoryFloorBridgeService();
+      console.error(
+        'Factory Floor bridge unavailable; continuing without it:',
+        redactErrorMessage(error),
+      );
     }
-  } catch (error) {
-    clearFactoryFloorBridgeService();
-    console.error('Failed to initialize Discord Agent runtime:', redactErrorMessage(error));
-    process.exit(1);
-    return;
   }
 
   // Do not accept work until the durable coordinator and recovery pass are ready.
@@ -173,7 +180,6 @@ async function shutdown(): Promise<void> {
   stopAllLoops();
   stopRoborevWatcher();
   clearFactoryFloorBridgeService();
-  factoryFloorBridge = null;
   if (runtime) await stopRuntime(runtime);
   client.destroy();
   process.exit(0);

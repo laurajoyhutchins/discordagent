@@ -30,4 +30,15 @@ jobs:
         run: npm test
 
       - name: Build
-        run: npm run build
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee typescript-build.log
+
+      - name: Upload TypeScript diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typescript-build-diagnostics
+          path: typescript-build.log
+          if-no-files-found: ignore

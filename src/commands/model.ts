@@ -8,6 +8,7 @@ import {
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import type { AgentProviderId } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { Project } from '../types.js';
 import {
   getProjectByChannel,
@@ -31,14 +32,20 @@ const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
 export interface ModelCommandDependencies {
   getProjectByChannel(channelId: string): Project | undefined;
   updateProjectModel(name: string, model: string, provider?: AgentProviderId): void;
-  defaultClaudeModel: string;
+  defaultModels?: Partial<Record<AgentProviderId, string>>;
+  /** @deprecated Use defaultModels for provider-neutral command dependencies. */
+  defaultClaudeModel?: string;
 }
 
 function defaultDependencies(): ModelCommandDependencies {
   return {
     getProjectByChannel,
     updateProjectModel,
-    defaultClaudeModel: process.env.CLAUDE_MODEL ?? '',
+    defaultModels: {
+      claude: process.env.CLAUDE_MODEL ?? '',
+      codex: process.env.CODEX_MODEL ?? '',
+      opencode: process.env.OPENCODE_MODEL ?? '',
+    },
   };
 }
 
@@ -62,10 +69,12 @@ export async function handleModel(
   }
 
   const provider = project.defaultProvider;
+  const label = providerLabel(provider);
   const pickedModel = interaction.options.getString('model');
   const customValue = interaction.options.getString('custom');
   const directValue = pickedModel || customValue;
   const currentModel = project.models?.[provider]
+    || dependencies.defaultModels?.[provider]
     || (provider === 'claude' ? dependencies.defaultClaudeModel : '')
     || 'provider default';
 
@@ -77,7 +86,7 @@ export async function handleModel(
       embeds: [new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('✅ Model Updated')
-        .setDescription(`${provider} model for **${project.name}** set to \`${display}\`.`)
+        .setDescription(`${label} model for **${project.name}** set to \`${display}\`.`)
         .setTimestamp()],
     });
     return;
@@ -85,7 +94,7 @@ export async function handleModel(
 
   if (provider !== 'claude') {
     await interaction.reply({
-      content: `Current Codex model: \`${currentModel}\`. Set a Codex model with the \`custom\` option, or clear it with \`custom:__default__\`.`,
+      content: `Current ${label} model: \`${currentModel}\`. Set a ${label} model with the \`custom\` option, or clear it with \`custom:__default__\`.`,
       flags: MessageFlags.Ephemeral,
     });
     return;

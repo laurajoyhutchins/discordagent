@@ -1,4 +1,6 @@
 import { EmbedBuilder, MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
+import { AGENT_PROVIDER_IDS } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import { getUsageAdmissionService } from '../services/usageAdmissionRegistry.js';
 
 export async function handleUsage(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -18,7 +20,7 @@ export async function handleUsage(interaction: ChatInputCommandInteraction): Pro
     .setTitle('Provider Usage and Reservations')
     .setTimestamp();
 
-  for (const provider of ['claude', 'codex'] as const) {
+  for (const provider of AGENT_PROVIDER_IDS) {
     const state = service.posture(provider);
     const active = service.reservations(provider);
     const lines = [
@@ -26,7 +28,7 @@ export async function handleUsage(interaction: ChatInputCommandInteraction): Pro
       state.available === undefined ? '**Available:** not reported yet' : `**Available:** ${state.available.toFixed(1)}%`,
       `**Reserved:** ${state.reserved.toFixed(1)}% across ${active.length} task${active.length === 1 ? '' : 's'}`,
     ];
-    embed.addFields({ name: provider === 'claude' ? 'Claude' : 'Codex', value: lines.join('\n'), inline: true });
+    embed.addFields({ name: providerLabel(provider), value: lines.join('\n'), inline: true });
   }
 
   const reservations = service.reservations();

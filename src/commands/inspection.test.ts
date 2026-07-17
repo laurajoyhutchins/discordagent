@@ -16,7 +16,9 @@ function interaction() {
     reply: vi.fn(async () => undefined),
     deferReply: vi.fn(async () => undefined),
     editReply: vi.fn(async () => undefined),
-  } as unknown as ChatInputCommandInteraction;
+  } as unknown as ChatInputCommandInteraction & {
+    editReply: ReturnType<typeof vi.fn>;
+  };
 }
 
 describe('inspection commands', () => {
@@ -40,5 +42,7 @@ describe('inspection commands', () => {
     await handleUsage(value);
     expect(value.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(value.editReply).toHaveBeenCalledWith(expect.objectContaining({ embeds: expect.any(Array) }));
+    const reply = value.editReply.mock.calls[0][0] as { embeds: Array<{ data: { fields: Array<{ name: string }> } }> };
+    expect(reply.embeds[0].data.fields.map(field => field.name)).toContain('OpenCode');
   });
 });

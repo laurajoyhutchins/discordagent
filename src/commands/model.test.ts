@@ -54,4 +54,36 @@ describe('/model provider scoping', () => {
       flags: MessageFlags.Ephemeral,
     }));
   });
+
+  it('stores an OpenCode model override under models.opencode', async () => {
+    const update = vi.fn();
+    const command = interaction({ custom: 'opencode/big-model' });
+
+    await handleModel(command, {
+      getProjectByChannel: () => ({ ...project, defaultProvider: 'opencode', models: { opencode: 'opencode/old-model' } }),
+      updateProjectModel: update,
+      defaultClaudeModel: '',
+      defaultModels: { opencode: 'opencode/default-model' },
+    });
+
+    expect(update).toHaveBeenCalledWith('factory-floor', 'opencode/big-model', 'opencode');
+  });
+
+  it('uses the provider-scoped OpenCode default when no project override exists', async () => {
+    const command = interaction({});
+
+    await handleModel(command, {
+      getProjectByChannel: () => ({ ...project, defaultProvider: 'opencode' }),
+      updateProjectModel: vi.fn(),
+      defaultClaudeModel: '',
+      defaultModels: { opencode: 'opencode/default-model' },
+    });
+
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('opencode/default-model'),
+    }));
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/OpenCode model/i),
+    }));
+  });
 });

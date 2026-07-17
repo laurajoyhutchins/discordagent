@@ -8,6 +8,7 @@ import type { PrimaryModel, PrimaryTaskProposal } from './primaryModel.js';
 import type { ContextAssembler } from './contextAssembler.js';
 import { redactSensitiveText } from '../utils/redaction.js';
 import { UsageAdmissionError } from '../services/usageAdmission.js';
+import { buildErrorEmbed, isStructuredErrorMessage } from '../discord/errorCard.js';
 
 export interface PrimaryAgentService {
   readonly channelId: string;
@@ -48,6 +49,9 @@ ${error.recommendation}`);
       const context = deps.context.assemble({ channelId: message.channelId, query: message.content });
       const response = await deps.model.respond({ context, message: message.content });
       const replyText = redactSensitiveText(response.reply);
+      const replyPayload = isStructuredErrorMessage(replyText)
+        ? { embeds: [buildErrorEmbed(replyText, 'Coordination error')] }
+        : replyText;
       deps.messages.append({ id: randomUUID(), channelId: message.channelId, authorId: 'primary-agent', role: 'assistant', content: replyText, createdAt: Date.now() });
       const allowedMemoryNamespaces = new Set(['user', 'goals', 'projects', 'decisions']);
       for (const write of response.memoryWrites ?? []) {
@@ -55,6 +59,10 @@ ${error.recommendation}`);
         if (!quote || !message.content.toLowerCase().includes(quote.toLowerCase())) continue;
         if (!allowedMemoryNamespaces.has(write.namespace)) continue;
         deps.memories.put({ namespace: write.namespace, key: write.key, value: write.value, sourceType: 'direct_user', sourceId: message.id, confidence: write.confidence ?? 0.9, readOnly: false });
+      }
+      if (typeof replyPayload !== 'string') {
+        await message.reply(replyPayload);
+        return;
       }
       const explicit = /\b(go ahead|do it|start|proceed|implement|take care of it)\b/i.test(message.content);
       if (response.taskProposal && explicit && !response.decision) {
@@ -109,7 +117,7 @@ ${error.recommendation}`);
         }
         return;
       }
-      await message.reply(replyText);
+      await message.reply(replyPayload);
     },
   };
 }

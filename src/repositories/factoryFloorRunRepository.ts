@@ -127,6 +127,9 @@ export function createFactoryFloorRunRepository(
     },
 
     updateStatus(runId, status, lastError) {
+      const current = requireRun(runId);
+      if (current.terminal_at !== null && !TERMINAL.has(status)) return map(current);
+
       const now = Date.now();
       db.raw.prepare(`
         UPDATE factory_floor_runs
@@ -136,7 +139,7 @@ export function createFactoryFloorRunRepository(
         status,
         lastError ?? null,
         now,
-        TERMINAL.has(status) ? now : null,
+        current.terminal_at ?? (TERMINAL.has(status) ? now : null),
         runId,
       );
       return map(requireRun(runId));

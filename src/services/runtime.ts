@@ -190,14 +190,17 @@ export async function startRuntime(
       const context = createContextAssembler({ projects, tasks, messages, memories, usage });
       const createPrimaryModel = (provider: AgentProviderId): PrimaryModel | undefined => {
         if (options.primaryModel) return options.primaryModel;
+        const configuredModel = settings.getModel(provider);
+        const configuredReasoning = settings.getReasoningEffort(provider);
         if (provider === 'claude' && providers.list().includes('claude')) {
-          return new ClaudePrimaryModel({ model: config.primaryAgentModel });
+          return new ClaudePrimaryModel({ model: configuredModel ?? config.primaryAgentModel });
         }
         if (provider === 'codex' && codexTransport && codexAuth) {
           return new CodexPrimaryModel({
             transport: codexTransport,
             auth: codexAuth,
-            model: config.primaryAgentModel || config.defaultCodexModel,
+            model: (configuredModel ?? config.primaryAgentModel) || config.defaultCodexModel,
+            ...(configuredReasoning ? { reasoningEffort: configuredReasoning } : {}),
           });
         }
         return undefined;

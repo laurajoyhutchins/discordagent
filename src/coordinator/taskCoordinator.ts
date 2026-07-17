@@ -8,6 +8,7 @@ import type {
   ApprovalDecision,
   ContinueTaskInput,
   ProviderRun,
+  ReasoningEffort,
   TaskOutcome,
   TaskResult,
   UserAnswer,
@@ -36,6 +37,7 @@ export interface StartFromMessageInput {
   message: Message;
   provider?: AgentProviderId;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface StartInExistingThreadInput {
@@ -44,6 +46,7 @@ export interface StartInExistingThreadInput {
   thread: AnyThreadChannel;
   provider?: AgentProviderId;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface ContinueFromMessageInput {
@@ -51,6 +54,7 @@ export interface ContinueFromMessageInput {
   message: Message;
   provider?: AgentProviderId;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface ContinueInThreadInput {
@@ -58,6 +62,7 @@ export interface ContinueInThreadInput {
   thread: AnyThreadChannel;
   provider?: AgentProviderId;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface TaskCoordinator {
@@ -120,6 +125,7 @@ export function createTaskCoordinator(
     prompt: string;
     thread: AnyThreadChannel;
     model?: string;
+    reasoningEffort?: ReasoningEffort;
     baseBranch?: string;
     reservationId?: string;
   }): Promise<TaskRecord> {
@@ -196,6 +202,7 @@ export function createTaskCoordinator(
       renderer,
       broker,
       model: input.model ?? input.project.models?.[input.providerId],
+      reasoningEffort: input.reasoningEffort ?? input.project.reasoningEfforts?.[input.providerId],
       reservationId: input.reservationId,
     });
   }
@@ -210,6 +217,7 @@ export function createTaskCoordinator(
     renderer: TaskRenderer;
     broker: InteractionBroker;
     model?: string;
+    reasoningEffort?: ReasoningEffort;
     session?: ContinueTaskInput['session'];
     reservationId?: string;
   }): Promise<TaskRecord> {
@@ -223,6 +231,7 @@ export function createTaskCoordinator(
       threadId: input.thread.id,
       prompt: input.prompt,
       ...(input.model ? { model: input.model } : {}),
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     };
 
     let run: ProviderRun;
@@ -452,6 +461,7 @@ export function createTaskCoordinator(
         renderer,
         broker,
         model: input.model ?? project.models?.[task.provider],
+        reasoningEffort: input.reasoningEffort ?? project.reasoningEfforts?.[task.provider],
         reservationId: reservation?.id,
         session: {
           provider: task.provider,
@@ -477,7 +487,7 @@ export function createTaskCoordinator(
           name: input.prompt.slice(0, 100),
           autoArchiveDuration: 60,
         });
-        return await startNewTask({ ...validated, prompt: input.prompt, thread, model: input.model, reservationId: reservation?.id });
+        return await startNewTask({ ...validated, prompt: input.prompt, thread, model: input.model, reasoningEffort: input.reasoningEffort, reservationId: reservation?.id });
       } catch (error) {
         if (reservation && dependencies.usage) {
           try { dependencies.usage.release(reservation.id); } catch { /* already consumed or released */ }
@@ -490,7 +500,7 @@ export function createTaskCoordinator(
       const validated = await validateProjectProvider(input.projectName, input.provider);
       const reservation = await dependencies.usage?.reserve({ provider: validated.providerId, prompt: input.prompt });
       try {
-        return await startNewTask({ ...validated, prompt: input.prompt, thread: input.thread, model: input.model, reservationId: reservation?.id });
+        return await startNewTask({ ...validated, prompt: input.prompt, thread: input.thread, model: input.model, reasoningEffort: input.reasoningEffort, reservationId: reservation?.id });
       } catch (error) {
         if (reservation && dependencies.usage) {
           try { dependencies.usage.release(reservation.id); } catch { /* already consumed or released */ }
@@ -505,6 +515,7 @@ export function createTaskCoordinator(
         thread: input.message.channel as AnyThreadChannel,
         ...(input.provider ? { provider: input.provider } : {}),
         ...(input.model ? { model: input.model } : {}),
+        ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       });
     },
 

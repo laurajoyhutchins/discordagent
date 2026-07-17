@@ -90,6 +90,28 @@ describe('TaskRepository', () => {
     expect(db.raw.prepare('SELECT 1 FROM tasks WHERE id = ?').get('task-two')).toBeUndefined();
   });
 
+  it('persists the effective task settings snapshot', () => {
+    const { tasks } = setup();
+    const created = tasks.createWithWorktree(transaction('settings-task', {
+      settings: { model: 'gpt-5-codex', reasoningEffort: 'high' },
+    }));
+
+    expect(created.settings).toEqual({ model: 'gpt-5-codex', reasoningEffort: 'high' });
+    expect(tasks.findById('settings-task')?.settings).toEqual({
+      model: 'gpt-5-codex',
+      reasoningEffort: 'high',
+    });
+  });
+
+  it('fails closed when a stored settings snapshot is malformed', () => {
+    const { db, tasks } = setup();
+    tasks.createWithWorktree(transaction('malformed-settings'));
+    db.raw.prepare('UPDATE tasks SET settings_json = ? WHERE id = ?')
+      .run('{"model":{"unexpected":"value"}}', 'malformed-settings');
+
+    expect(tasks.findById('malformed-settings')?.settings).toEqual({});
+  });
+
   it('keeps provider identity immutable and attaches one matching provider session', () => {
     const { tasks } = setup();
     tasks.createWithWorktree(transaction('session-task'));
@@ -221,6 +243,26 @@ describe('TaskRepository', () => {
 
     tasks.markWorktreeRemoved('continuation', 1234);
     expect(tasks.getWorktree('continuation')).toMatchObject({ removedAt: 1234 });
+  });
+
+  it('preserves the task settings snapshot when reopening for continuation', () => {
+    const { tasks } = setup();
+    tasks.createWithWorktree(transaction('settings-continuation', {
+      settings: { model: 'gpt-5-codex', reasoningEffort: 'high' },
+    }));
+    tasks.attachProviderSession('settings-continuation', {
+      provider: 'claude', sessionId: 'settings-session', createdAt: 10,
+    });
+    tasks.transition('settings-continuation', ['created'], 'starting');
+    tasks.transition('settings-continuation', ['starting'], 'running');
+    tasks.transition('settings-continuation', ['running'], 'completed');
+    tasks.saveResult('settings-continuation', {
+      provider: 'claude', outcome: 'completed', exitType: 'success', startedAt: 10, completedAt: 20,
+    });
+
+    expect(tasks.reopenForContinuation('settings-continuation').settings).toEqual({
+      model: 'gpt-5-codex', reasoningEffort: 'high',
+    });
   });
 
 });

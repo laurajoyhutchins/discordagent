@@ -16,6 +16,7 @@ describe('CodexPrimaryModel', () => {
       auth: { readAccount: vi.fn(async () => ({ authenticated: true })) } as never,
       workingDirectory: 'C:/Users/Laura/Documents/discordagent',
       model: 'gpt-5.4',
+      reasoningEffort: 'xhigh',
     });
 
     const responsePromise = model.respond({ context: 'No active projects.', message: 'What should I do first?' });
@@ -25,7 +26,7 @@ describe('CodexPrimaryModel', () => {
       cwd: 'C:/Users/Laura/Documents/discordagent',
       model: 'gpt-5.4',
       approvalPolicy: 'never',
-      sandbox: 'readOnly',
+      sandbox: 'read-only',
       serviceName: 'discord-agent-primary',
     });
     expect(transport.request).toHaveBeenNthCalledWith(2, 'turn/start', {
@@ -33,6 +34,7 @@ describe('CodexPrimaryModel', () => {
       input: [{ type: 'text', text: expect.stringContaining('What should I do first?') }],
       cwd: 'C:/Users/Laura/Documents/discordagent',
       model: 'gpt-5.4',
+      effort: 'xhigh',
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'readOnly', networkAccess: false },
     });
@@ -58,6 +60,27 @@ describe('CodexPrimaryModel', () => {
 
     await expect(model.respond({ context: '', message: 'Hello' })).resolves.toEqual({
       reply: 'Codex sign-in is required. Run /codex-auth login, then try again.',
+    });
+  });
+
+  it('returns an actionable compatibility response when the App Server rejects the model', async () => {
+    const transport = new FakeTransport();
+    transport.request = vi.fn(async (method: string) => {
+      if (method === 'thread/start') return { thread: { id: 'primary-thread-1' } };
+      queueMicrotask(() => transport.emit('notification', 'error', {
+        threadId: 'primary-thread-1',
+        error: { message: "The 'gpt-5.6-luna' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again." },
+      }));
+      return { turn: { id: 'primary-turn-1' } };
+    });
+    const model = new CodexPrimaryModel({
+      transport: transport as never,
+      auth: { readAccount: vi.fn(async () => ({ authenticated: true })) } as never,
+      model: 'gpt-5.6-luna',
+    });
+
+    await expect(model.respond({ context: '', message: 'Hello' })).resolves.toEqual({
+      reply: 'Codex CLI compatibility error: model `gpt-5.6-luna` requires a newer Codex version. Upgrade Codex CLI, then restart the bot.',
     });
   });
 });

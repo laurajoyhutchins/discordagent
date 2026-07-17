@@ -7,12 +7,19 @@ import {
   StringSelectMenuOptionBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import type { AgentProviderId } from '../agents/contracts.js';
+import { REASONING_EFFORTS, type AgentProviderId, type ReasoningEffort } from '../agents/contracts.js';
 import type { Project } from '../types.js';
 import {
+  getDefaultModel,
+  getDefaultProvider,
+  getDefaultReasoning,
   getProjectByChannel,
+  updateDefaultModel,
+  updateDefaultReasoning,
   updateProjectModel,
+  updateProjectReasoning,
 } from '../services/projectStore.js';
+import { activatePrimaryProvider } from '../services/agentRuntimeService.js';
 
 interface ModelOption {
   label: string;
@@ -31,14 +38,30 @@ const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
 export interface ModelCommandDependencies {
   getProjectByChannel(channelId: string): Project | undefined;
   updateProjectModel(name: string, model: string, provider?: AgentProviderId): void;
+  updateProjectReasoning(name: string, effort?: ReasoningEffort, provider?: AgentProviderId): void;
+  getDefaultProvider?(): AgentProviderId | undefined;
+  getDefaultModel?(provider: AgentProviderId): string | undefined;
+  getDefaultReasoning?(provider: AgentProviderId): ReasoningEffort | undefined;
+  updateDefaultModel?(model: string, provider: AgentProviderId): void;
+  updateDefaultReasoning?(effort: ReasoningEffort | undefined, provider: AgentProviderId): void;
+  activateDefaultProvider?(provider: AgentProviderId): Promise<void>;
   defaultClaudeModel: string;
+  defaultCodexModel?: string;
 }
 
 function defaultDependencies(): ModelCommandDependencies {
   return {
     getProjectByChannel,
     updateProjectModel,
+    updateProjectReasoning,
+    getDefaultProvider,
+    getDefaultModel,
+    getDefaultReasoning,
+    updateDefaultModel,
+    updateDefaultReasoning,
+    activateDefaultProvider: activatePrimaryProvider,
     defaultClaudeModel: process.env.CLAUDE_MODEL ?? '',
+    defaultCodexModel: process.env.CODEX_MODEL ?? '',
   };
 }
 
@@ -55,29 +78,108 @@ export async function handleModel(
     return;
   }
 
+  const pickedModel = interaction.options.getString('model');
+  const customValue = interaction.options.getString('custom');
+  const thinkingValue = interaction.options.getString('thinking');
+  const directValue = pickedModel || customValue;
+
   const project = dependencies.getProjectByChannel(interaction.channelId);
+  const channelName = interaction.channel && 'name' in interaction.channel ? interaction.channel.name : undefined;
+  if (!project && channelName === 'agent-chat') {
+    const provider = dependencies.getDefaultProvider?.();
+    if (!provider) {
+      await interaction.reply({ content: 'No global provider is selected yet. Choose one in the setup prompt first.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const currentModel = dependencies.getDefaultModel?.(provider)
+      || (provider === 'claude' ? dependencies.defaultClaudeModel : dependencies.defaultCodexModel)
+      || 'provider default';
+    const currentReasoning = dependencies.getDefaultReasoning?.(provider) || 'provider/model default';
+    if (thinkingValue && provider !== 'codex') {
+      await interaction.reply({ content: 'Thinking depth is currently available for the Codex PM. Claude keeps its provider-managed thinking behavior.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (thinkingValue && thinkingValue !== '__default__'
+      && !REASONING_EFFORTS.includes(thinkingValue as ReasoningEffort)) {
+      await interaction.reply({ content: `Unknown thinking depth: \`${thinkingValue}\`.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (directValue || thinkingValue) {
+      const modelToSet = directValue ? (directValue === '__default__' ? '' : directValue) : undefined;
+      const reasoningToSet = thinkingValue && thinkingValue !== '__default__'
+        ? thinkingValue as ReasoningEffort
+        : undefined;
+      const setDefaultModel = dependencies.updateDefaultModel;
+      const setDefaultReasoning = dependencies.updateDefaultReasoning;
+      const activateProvider = dependencies.activateDefaultProvider;
+      if ((directValue && !setDefaultModel)
+        || (thinkingValue && !setDefaultReasoning)
+        || !activateProvider) {
+        await interaction.reply({ content: 'Global model settings are unavailable until the runtime is fully initialized.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (directValue) setDefaultModel!(modelToSet ?? '', provider);
+      if (thinkingValue) setDefaultReasoning!(reasoningToSet, provider);
+      await activateProvider!(provider);
+      const changes = [
+        directValue ? `model set to \`${modelToSet || 'provider default'}\`` : undefined,
+        thinkingValue ? `thinking depth set to \`${reasoningToSet || 'provider/model default'}\`` : undefined,
+      ].filter((value): value is string => Boolean(value));
+      await interaction.reply({
+        content: `Global ${provider} PM settings updated: ${changes.join('; ')}.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    await interaction.reply({
+      content: `Global ${provider} PM model: \`${currentModel}\`. Thinking depth: \`${currentReasoning}\`.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
   if (!project || interaction.channelId !== project.agentChannelId) {
-    await interaction.reply({ content: 'This command can only be used in a project channel.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: 'This command can only be used in a project channel or #agent-chat.', flags: MessageFlags.Ephemeral });
     return;
   }
 
   const provider = project.defaultProvider;
-  const pickedModel = interaction.options.getString('model');
-  const customValue = interaction.options.getString('custom');
-  const directValue = pickedModel || customValue;
+  const currentReasoning = project.reasoningEfforts?.[provider] || 'provider/model default';
+
+  if (thinkingValue && provider !== 'codex') {
+    await interaction.reply({
+      content: 'Thinking depth is currently available for Codex task projects. Claude keeps its provider-managed thinking behavior.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (thinkingValue && thinkingValue !== '__default__'
+    && !REASONING_EFFORTS.includes(thinkingValue as ReasoningEffort)) {
+    await interaction.reply({ content: `Unknown thinking depth: \`${thinkingValue}\`.`, flags: MessageFlags.Ephemeral });
+    return;
+  }
+
   const currentModel = project.models?.[provider]
     || (provider === 'claude' ? dependencies.defaultClaudeModel : '')
     || 'provider default';
 
-  if (directValue) {
-    const modelToSet = directValue === '__default__' ? '' : directValue;
-    dependencies.updateProjectModel(project.name, modelToSet, provider);
-    const display = modelToSet || 'provider default';
+  if (directValue || thinkingValue) {
+    const modelToSet = directValue ? (directValue === '__default__' ? '' : directValue) : undefined;
+    const reasoningToSet = thinkingValue && thinkingValue !== '__default__'
+      ? thinkingValue as ReasoningEffort
+      : undefined;
+    if (directValue) dependencies.updateProjectModel(project.name, modelToSet ?? '', provider);
+    if (thinkingValue) dependencies.updateProjectReasoning(project.name, reasoningToSet, provider);
+    const changes = [
+      directValue ? `model set to \`${modelToSet || 'provider default'}\`` : undefined,
+      thinkingValue ? `thinking depth set to \`${reasoningToSet || 'provider/model default'}\`` : undefined,
+    ].filter((value): value is string => Boolean(value));
     await interaction.reply({
       embeds: [new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('✅ Model Updated')
-        .setDescription(`${provider} model for **${project.name}** set to \`${display}\`.`)
+        .setDescription(`${provider} settings for **${project.name}**: ${changes.join('; ')}.`)
         .setTimestamp()],
     });
     return;
@@ -85,7 +187,7 @@ export async function handleModel(
 
   if (provider !== 'claude') {
     await interaction.reply({
-      content: `Current Codex model: \`${currentModel}\`. Set a Codex model with the \`custom\` option, or clear it with \`custom:__default__\`.`,
+      content: `Current Codex model: \`${currentModel}\`.\nThinking depth: \`${currentReasoning}\`.\nSet the model with \`custom\` and the thinking depth with \`thinking\`.`,
       flags: MessageFlags.Ephemeral,
     });
     return;

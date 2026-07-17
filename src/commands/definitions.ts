@@ -76,7 +76,7 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName('model')
-    .setDescription("Pick the model for this project's active provider")
+    .setDescription("Set this project's model and thinking depth")
     .addStringOption(opt =>
       opt.setName('model')
         .setDescription('Choose a model')
@@ -85,10 +85,26 @@ export const commands = [
           { name: 'Claude Sonnet — balanced speed & capability (recommended)', value: 'sonnet' },
           { name: 'Claude Opus — most powerful reasoning', value: 'opus' },
           { name: 'Claude Haiku — fastest, lightweight tasks', value: 'haiku' },
+          { name: 'Codex GPT-5.6 Luna', value: 'gpt-5.6-luna' },
+          { name: 'Codex GPT-5.4', value: 'gpt-5.4' },
           { name: 'Default (env/SDK)', value: '__default__' },
         )
     )
     .addStringOption(opt =>
       opt.setName('custom').setDescription('Set a custom model name directly (alias or exact model ID)').setRequired(false)
+    )
+    .addStringOption(opt =>
+      opt.setName('thinking')
+        .setDescription('Codex reasoning effort for new and continued task turns')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Default (model/provider)', value: '__default__' },
+          { name: 'None', value: 'none' },
+          { name: 'Low', value: 'low' },
+          { name: 'Medium', value: 'medium' },
+          { name: 'High', value: 'high' },
+          { name: 'Extra high', value: 'xhigh' },
+          { name: 'Maximum', value: 'max' },
+        )
     ),
 ];

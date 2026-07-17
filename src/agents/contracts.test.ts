@@ -8,7 +8,9 @@ import {
   type AgentEvent,
   type AgentProvider,
   type AgentProviderId,
+  type AgentTaskSettings,
   type ProviderSession,
+  type StartTaskInput,
 } from './contracts.js';
 
 describe('agent provider identifiers', () => {
@@ -102,5 +104,28 @@ describe('normalized agent events', () => {
     expectTypeOf<ReturnType<AgentProvider['startTask']>>().toEqualTypeOf<
       Promise<import('./contracts.js').ProviderRun>
     >();
+  });
+
+  it('supports provider-neutral task settings while retaining legacy fields', () => {
+    const settings = {
+      model: 'gpt-5-codex',
+      reasoningEffort: 'high',
+      timeoutMs: 60_000,
+      mcpProfile: 'browser',
+      approvalProfile: 'default',
+    } satisfies AgentTaskSettings;
+    const input = {
+      taskId: 'task-1',
+      projectName: 'project',
+      workingDirectory: '/repo',
+      channelId: 'channel',
+      threadId: 'thread',
+      prompt: 'hello',
+      model: 'gpt-5-codex',
+      reasoningEffort: 'high',
+      settings,
+    } satisfies StartTaskInput;
+
+    expect(input.settings).toEqual(settings);
   });
 });

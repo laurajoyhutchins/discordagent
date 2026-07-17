@@ -283,4 +283,25 @@ export const SCHEMA_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 6,
+    name: 'add project reasoning-effort settings',
+    statements: [
+      `ALTER TABLE projects ADD COLUMN reasoning_efforts_json TEXT NOT NULL DEFAULT '{}'`,
+    ],
+  },
+  {
+    version: 7,
+    name: 'add project settings and task snapshots',
+    statements: [
+      `ALTER TABLE tasks ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'`,
+      `CREATE TABLE project_settings (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (project_id, key)
+      )`,
+    ],
+  },
 ] as const;

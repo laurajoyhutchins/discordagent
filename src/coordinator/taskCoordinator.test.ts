@@ -193,7 +193,7 @@ function setup(order: string[] = []) {
     idFactory: prefix => `${prefix}-${++id}`,
   });
   return {
-    coordinator, tasks: baseTasks, events, provider, renderers, broker,
+    coordinator, projects: baseProjects, tasks: baseTasks, events, provider, renderers, broker,
     worktree, worktrees, removeCount: () => removeCount, removedInputs,
   };
 }
@@ -264,6 +264,26 @@ describe('TaskCoordinator', () => {
     })).rejects.toThrow(/offline/i);
     expect(message.startCount).toBe(0);
     expect(order).toEqual(['project', 'availability']);
+  });
+
+  it('inherits the project reasoning effort when starting a task', async () => {
+    const context = setup();
+    context.projects.updateReasoning('factory-floor', 'claude', 'high');
+    let startedInput: StartTaskInput | undefined;
+    context.provider.startImpl = async (input) => {
+      startedInput = input;
+      return {
+        session: { provider: 'claude', sessionId: 'reasoning-session', createdAt: 11 },
+        completion: Promise.resolve(completed('reasoning-session')),
+      };
+    };
+
+    await context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Use the configured reasoning depth',
+      message: new FakeMessage(new FakeThread('thread-reasoning')) as unknown as Message,
+    });
+
+    expect(startedInput?.reasoningEffort).toBe('high');
   });
 
   it('moves into waiting_for_user for approvals and returns to running without losing the session', async () => {

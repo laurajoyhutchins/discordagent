@@ -120,6 +120,7 @@ export class CodexProvider implements AgentProvider {
         input: [{ type: 'text', text: input.prompt }],
         cwd: input.workingDirectory,
         ...(model ? { model } : {}),
+        ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}),
         approvalPolicy: 'onRequest',
         sandboxPolicy: {
           type: 'workspaceWrite',

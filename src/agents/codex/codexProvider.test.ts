@@ -18,7 +18,7 @@ function createHost(overrides: Partial<AgentRunHost> = {}): AgentRunHost {
   };
 }
 
-const startInput = { taskId: 'task', projectName: 'p', workingDirectory: '/repo', channelId: 'c', threadId: 'd', prompt: 'hello', model: 'gpt-5.4' };
+const startInput = { taskId: 'task', projectName: 'p', workingDirectory: '/repo', channelId: 'c', threadId: 'd', prompt: 'hello', model: 'gpt-5.4', reasoningEffort: 'xhigh' as const };
 
 describe('CodexProvider', () => {
   it('uses documented thread and turn policy values and returns the session before completion', async () => {
@@ -32,6 +32,7 @@ describe('CodexProvider', () => {
     });
     expect(transport.request).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1', input: [{ type: 'text', text: 'hello' }], cwd: '/repo', model: 'gpt-5.4',
+      effort: 'xhigh',
       approvalPolicy: 'onRequest', sandboxPolicy: { type: 'workspaceWrite', writableRoots: ['/repo'], networkAccess: false },
     });
     transport.emit('notification', 'item/agentMessage/delta', { threadId: 'thread-1', delta: 'hi' });

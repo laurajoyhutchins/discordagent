@@ -1,7 +1,9 @@
 import { tmpdir } from 'node:os';
 import type { PrimaryModel, PrimaryResponse } from '../../primary/primaryModel.js';
 import { buildPrimaryPrompt, parsePrimaryResponse } from '../../primary/primaryModel.js';
+import type { ReasoningEffort } from '../contracts.js';
 import { redactErrorMessage } from '../../utils/redaction.js';
+import { classifyCodexAppServerError, CodexCliCompatibilityError } from './appServerTransport.js';
 import type { AppServerTransport } from './appServerTransport.js';
 import type { CodexAuthService } from './codexAuthService.js';
 import { isRecord } from './protocol.js';
@@ -11,6 +13,7 @@ export interface CodexPrimaryModelOptions {
   auth: CodexAuthService;
   workingDirectory?: string;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   timeoutMs?: number;
 }
 
@@ -35,20 +38,25 @@ export class CodexPrimaryModel implements PrimaryModel {
         cwd: this.workingDirectory,
         ...(model ? { model } : {}),
         approvalPolicy: 'never',
-        sandbox: 'readOnly',
+        sandbox: 'read-only',
         serviceName: 'discord-agent-primary',
       });
       const threadId = extractId(thread, 'thread');
       if (!threadId) throw new Error('Codex App Server did not return a primary thread identifier');
 
-      const responseText = await this.runTurn(threadId, buildPrimaryPrompt(input), model);
+      const responseText = await this.runTurn(threadId, buildPrimaryPrompt(input), model, this.options.reasoningEffort);
       return parsePrimaryResponse(responseText);
     } catch (error) {
+      if (error instanceof CodexCliCompatibilityError) {
+        return {
+          reply: `Codex CLI compatibility error: model \`${error.model}\` requires a newer Codex version. Upgrade Codex CLI, then restart the bot.`,
+        };
+      }
       return { reply: `I could not complete the coordination turn: ${redactErrorMessage(error)}` };
     }
   }
 
-  private async runTurn(threadId: string, prompt: string, model?: string): Promise<string> {
+  private async runTurn(threadId: string, prompt: string, model?: string, reasoningEffort?: ReasoningEffort): Promise<string> {
     let text = '';
     let timer: NodeJS.Timeout | undefined;
     let settled = false;
@@ -79,8 +87,8 @@ export class CodexPrimaryModel implements PrimaryModel {
           return;
         }
         if (method === 'error') {
-          const error = isRecord(params.error) ? params.error : params;
-          finish(() => reject(new Error(String(error.message ?? 'Codex primary turn failed'))));
+          const message = notificationErrorMessage(params);
+          finish(() => reject(classifyCodexAppServerError(400, message, 'turn/start')));
         }
       };
       this.options.transport.on('notification', onNotification);
@@ -96,6 +104,7 @@ export class CodexPrimaryModel implements PrimaryModel {
         input: [{ type: 'text', text: prompt }],
         cwd: this.workingDirectory,
         ...(model ? { model } : {}),
+        ...(reasoningEffort ? { effort: reasoningEffort } : {}),
         approvalPolicy: 'never',
         sandboxPolicy: { type: 'readOnly', networkAccess: false },
       });
@@ -105,6 +114,13 @@ export class CodexPrimaryModel implements PrimaryModel {
       throw error;
     }
   }
+}
+
+function notificationErrorMessage(params: Record<string, unknown>): string {
+  const error = isRecord(params.error) ? params.error : params;
+  if (typeof error.message === 'string') return error.message;
+  if (isRecord(error.error) && typeof error.error.message === 'string') return error.error.message;
+  return 'Codex primary turn failed';
 }
 
 function extractId(value: unknown, nested: 'thread'): string | undefined {

@@ -112,7 +112,7 @@ Send a normal message in `#agent` to create a task. Discord Agent will:
 | `/list-projects` | List active projects, providers, models, and channels. |
 | `/remove-project` | Soft-archive the project record and delete its Discord channels. Historical tasks remain in SQLite. |
 | `/provider [claude\|codex]` | Show or change the global provider in `#agent-chat`, or the project's default provider in a project channel, after an authoritative availability check. In a task thread, proposing the other provider creates a confirmed sibling handoff. |
-| `/model [model] [custom]` | Set the model override for the project's current provider. |
+| `/model [model] [custom] [thinking]` | In `#agent-chat`, set the global PM model and Codex thinking depth; in a project channel, set that project's provider settings. Use `custom` for an exact model ID such as `gpt-5.6-luna`; `thinking` accepts `default`, `none`, `low`, `medium`, `high`, `xhigh`, or `max`. |
 | `/cancel` | In a task thread, cancel that durable task while preserving its worktree. |
 | `/loop <prompt> [interval]` | Start a recurring task in one thread/session/worktree. |
 | `/stop-loop` | Stop the loop associated with the project or loop thread. |
@@ -138,6 +138,8 @@ Model precedence is:
 Claude continues to respect `~/.claude/settings.json`. Project-level `.claude/settings.json` and `.claude/settings.local.json` are deliberately ignored.
 
 ### Codex
+
+In `#agent-chat`, `/model` changes the global PM model and Codex reasoning effort; in a project channel it changes future task turns. The selected effort is stored per provider and sent as App Server `effort` on each new or continued turn; existing task threads keep the provider/session context they started with.
 
 Codex runs through a singleton local App Server process using newline-delimited JSON requests, responses, notifications, and server-initiated approval/input requests. A Codex task persists the returned thread identifier before awaiting turn completion, streams normalized plans/commands/file changes/diffs/usage, and maps Discord decisions back to App Server approval values.
 
@@ -167,7 +169,7 @@ Operational state is stored in SQLite at `DATABASE_PATH`. By default, developmen
 
 SQLite stores:
 
-- projects and provider-scoped model settings;
+- projects, provider-scoped model settings, and provider-scoped reasoning-effort settings;
 - tasks and immutable provider identities;
 - worktrees and branches;
 - provider session identifiers;

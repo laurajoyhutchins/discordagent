@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AgentProviderId,
+  AgentTaskSettings,
   ProviderSession,
   TaskResult,
   TaskStatus,
 } from '../agents/contracts.js';
 import type { DatabaseHandle } from '../db/database.js';
-import type { TaskRecord, WorktreeRecord } from '../types.js';
+import { parseAgentTaskSettings, parseStoredAgentTaskSettings, type TaskRecord, type WorktreeRecord } from '../types.js';
 
 export interface CreateTaskWorktreeInput {
   id: string;
@@ -24,6 +25,7 @@ export interface CreateTaskTransaction {
   threadId: string;
   objective: string;
   worktree: CreateTaskWorktreeInput;
+  settings?: AgentTaskSettings;
   createdAt?: number;
 }
 
@@ -68,6 +70,7 @@ interface TaskRow {
   started_at: number | null;
   completed_at: number | null;
   provider_session_id: string | null;
+  settings_json: string;
 }
 
 const TASK_SELECT = `
@@ -84,6 +87,7 @@ const TASK_SELECT = `
     t.started_at,
     t.completed_at,
     ps.session_id AS provider_session_id
+    ,t.settings_json
   FROM tasks t
   JOIN projects p ON p.id = t.project_id
   LEFT JOIN provider_sessions ps ON ps.task_id = t.id
@@ -108,6 +112,7 @@ const LEGAL_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
 };
 
 function toTaskRecord(row: TaskRow): TaskRecord {
+  const settings = parseStoredAgentTaskSettings(row.settings_json);
   return {
     id: row.id,
     projectName: row.project_name,
@@ -121,6 +126,7 @@ function toTaskRecord(row: TaskRow): TaskRecord {
     ...(row.started_at === null ? {} : { startedAt: row.started_at }),
     ...(row.completed_at === null ? {} : { completedAt: row.completed_at }),
     ...(row.provider_session_id === null ? {} : { providerSessionId: row.provider_session_id }),
+    ...(settings === undefined ? {} : { settings }),
   };
 }
 
@@ -162,7 +168,8 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
           INSERT INTO tasks (
             id, project_id, provider, status, channel_id, thread_id,
             objective, created_at, updated_at
-          ) VALUES (?, ?, ?, 'created', ?, ?, ?, ?, ?)
+            , settings_json
+          ) VALUES (?, ?, ?, 'created', ?, ?, ?, ?, ?, ?)
         `).run(
           input.taskId,
           project.id,
@@ -172,6 +179,7 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
           input.objective,
           now,
           now,
+          JSON.stringify(parseAgentTaskSettings(input.settings) ?? {}),
         );
 
         db.raw.prepare(`

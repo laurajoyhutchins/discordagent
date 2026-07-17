@@ -1,6 +1,17 @@
 export const AGENT_PROVIDER_IDS = ['claude', 'codex'] as const;
 export type AgentProviderId = (typeof AGENT_PROVIDER_IDS)[number];
 
+export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export interface AgentTaskSettings {
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  timeoutMs?: number;
+  mcpProfile?: string;
+  approvalProfile?: string;
+}
+
 export const TASK_STATUSES = [
   'created',
   'starting',
@@ -135,6 +146,8 @@ export interface StartTaskInput {
   threadId: string;
   prompt: string;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
+  settings?: AgentTaskSettings;
 }
 
 export interface ContinueTaskInput extends StartTaskInput {

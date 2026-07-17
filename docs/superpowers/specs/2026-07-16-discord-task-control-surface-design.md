@@ -1,7 +1,7 @@
 # Discord Task Control Surface Design
 
 **Date:** 2026-07-16
-**Status:** Approved by implementation request
+**Status:** Implemented
 **Target:** `laurajoyhutchins/discordagent`
 
 ## Purpose
@@ -119,4 +119,4 @@ Unit tests cover:
 - coordinator lifecycle calls to the optional control surface;
 - provider-neutral architecture boundaries.
 
-The full GitHub Actions workflow remains the authoritative integration check because this environment cannot build the native `better-sqlite3` binding without network access.
+GitHub Actions remains the authoritative integration check for the merge checkout and native SQLite dependency.

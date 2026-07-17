@@ -57,12 +57,12 @@ describe('adaptSessionUpdate', () => {
     }]);
 
     expect(adaptSessionUpdate({ update: {
-      sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'Run tests', status: 'completed',
+      sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'Run tests', kind: 'execute', status: 'completed',
       rawOutput: 'done',
     } })).toEqual([{ type: 'command', command: 'Run tests', state: 'completed', output: '"done"' }]);
 
     expect(adaptSessionUpdate({ update: {
-      sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'Run tests', status: 'failed',
+      sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'Run tests', kind: 'execute', status: 'failed',
     } })).toEqual([{ type: 'command', command: 'Run tests', state: 'failed' }]);
   });
 
@@ -71,17 +71,24 @@ describe('adaptSessionUpdate', () => {
       sessionUpdate: 'tool_call', toolCallId: 'edit-1', title: 'Edit file', kind: 'edit', status: 'completed',
       locations: [{ path: 'src/index.ts' }],
     } })).toEqual([
-      { type: 'command', command: 'Edit file', state: 'completed' },
-      { type: 'file_change', paths: ['src/index.ts'] },
+      { type: 'file_change', paths: ['src/index.ts'], summary: 'Edit file (completed)' },
     ]);
 
     expect(adaptSessionUpdate({ update: {
       sessionUpdate: 'tool_call_update', toolCallId: 'move-1', title: 'Move file', kind: 'move', status: 'in_progress',
       locations: [{ path: 'src/old.ts' }, { path: 'src/new.ts' }],
     } })).toEqual([
-      { type: 'command', command: 'Move file', state: 'running' },
-      { type: 'file_change', paths: ['src/old.ts', 'src/new.ts'] },
+      { type: 'file_change', paths: ['src/old.ts', 'src/new.ts'], summary: 'Move file (running)' },
     ]);
+
+    const [status] = adaptSessionUpdate({ update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'search-1', title: 'Search files', kind: 'search', status: 'failed',
+      rawInput: { pattern: 'API_KEY=secret' }, rawOutput: { error: 'password=hidden' },
+    } });
+    expect(status).toMatchObject({ type: 'status', phase: 'tool:search:failed' });
+    expect(status).toHaveProperty('detail');
+    expect(JSON.stringify(status)).not.toContain('secret');
+    expect(JSON.stringify(status)).not.toContain('hidden');
   });
 
   it('normalizes usage updates and ignores unknown or malformed updates', () => {
@@ -129,14 +136,27 @@ describe('OpenCode ACP permissions', () => {
   it('cancels when the ACP request has no compatible options', () => {
     expect(permissionOutcome('allow', [])).toEqual({ outcome: 'cancelled' });
   });
+
+  it('never escalates an allow decision to a persistent option', () => {
+    expect(permissionOutcome('allow', [
+      { optionId: 'allow-always', name: 'Allow always', kind: 'allow_always' },
+    ])).toEqual({ outcome: 'cancelled' });
+    expect(permissionOutcome('allow', [
+      { optionId: 'allow-always', name: 'Allow always', kind: 'allow_always' },
+      { optionId: 'reject-once', name: 'Reject once', kind: 'reject_once' },
+    ])).toEqual({ outcome: 'selected', optionId: 'reject-once' });
+    expect(permissionOutcome('deny', [
+      { optionId: 'reject-always', name: 'Reject always', kind: 'reject_always' },
+    ])).toEqual({ outcome: 'cancelled' });
+  });
 });
 
 describe('taskResultFromPrompt', () => {
   it('normalizes completion, usage, and timestamps from the ACP prompt result', () => {
     expect(taskResultFromPrompt({
       provider: 'opencode',
-      startedAt: '2026-07-17T12:00:00.000Z',
-      completedAt: '2026-07-17T12:00:02.000Z',
+      startedAt: 1234.5,
+      completedAt: 5678.25,
       sessionId: 'session-1',
       promptResult: {
         stopReason: 'end_turn',
@@ -147,8 +167,8 @@ describe('taskResultFromPrompt', () => {
       provider: 'opencode',
       outcome: 'completed',
       exitType: 'end_turn',
-      startedAt: Date.parse('2026-07-17T12:00:00.000Z'),
-      completedAt: Date.parse('2026-07-17T12:00:02.000Z'),
+      startedAt: 1234.5,
+      completedAt: 5678.25,
       sessionId: 'session-1',
       summary: 'Completed API_KEY=[REDACTED]',
       usage: { inputTokens: 10, outputTokens: 4, cachedInputTokens: 2, totalTokens: 14 },
@@ -157,11 +177,11 @@ describe('taskResultFromPrompt', () => {
 
   it('maps cancellation and refusal without leaking malformed prompt data', () => {
     expect(taskResultFromPrompt({
-      provider: 'opencode', startedAt: 'bad', completedAt: 'also bad', sessionId: 'session-1',
+      provider: 'opencode', startedAt: 0, completedAt: 1, sessionId: 'session-1',
       promptResult: { stopReason: 'cancelled', password: 'secret' }, text: '',
-    })).toMatchObject({ outcome: 'cancelled', exitType: 'cancelled', startedAt: 0, completedAt: 0 });
+    })).toMatchObject({ outcome: 'cancelled', exitType: 'cancelled', startedAt: 0, completedAt: 1 });
     expect(taskResultFromPrompt({
-      provider: 'opencode', startedAt: 'bad', completedAt: 'also bad', sessionId: 'session-1',
+      provider: 'opencode', startedAt: 2, completedAt: 3, sessionId: 'session-1',
       promptResult: { stopReason: 'refusal' }, text: 'refused',
     })).toMatchObject({
       outcome: 'failed', exitType: 'refusal', error: { code: 'opencode_refusal', message: 'refused', retryable: false },

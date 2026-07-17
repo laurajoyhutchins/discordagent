@@ -50,9 +50,7 @@ export function permissionOutcome(decision: ApprovalDecision, options: readonly 
     return optionId && kind ? [{ optionId, kind }] : [];
   });
 
-  const desired = decision === 'allow'
-    ? ['allow_once', 'allow_always']
-    : ['reject_once', 'reject_always'];
+  const desired = decision === 'allow' ? ['allow_once', 'reject_once'] : ['reject_once'];
   const selected = desired.map(kind => candidates.find(option => option.kind === kind)).find(Boolean);
   return selected
     ? { outcome: 'selected', optionId: selected.optionId }
@@ -61,8 +59,8 @@ export function permissionOutcome(decision: ApprovalDecision, options: readonly 
 
 export function taskResultFromPrompt(input: {
   provider: 'opencode';
-  startedAt: string;
-  completedAt: string;
+  startedAt: number;
+  completedAt: number;
   sessionId: string;
   promptResult: unknown;
   text: string;
@@ -79,8 +77,8 @@ export function taskResultFromPrompt(input: {
     provider: input.provider,
     outcome,
     exitType: stopReason,
-    startedAt: parseTimestamp(input.startedAt),
-    completedAt: parseTimestamp(input.completedAt),
+    startedAt: input.startedAt,
+    completedAt: input.completedAt,
     sessionId: input.sessionId,
     ...(summary ? { summary } : {}),
     ...(normalizePromptUsage(promptResult.usage) ? { usage: normalizePromptUsage(promptResult.usage) } : {}),
@@ -145,19 +143,39 @@ function planEvent(value: unknown): AgentEvent[] {
 function toolEvents(update: RecordValue, fallback: ToolState): AgentEvent[] {
   const title = stringValue(update.title) ?? 'OpenCode tool call';
   const state = toolState(update.status, fallback);
-  const commandInput = commandInputText(update.rawInput);
-  const command = commandInput ? `${title} ${commandInput}` : title;
-  const output = serialized(update.rawOutput);
-  const commandEvent: AgentEvent = {
-    type: 'command',
-    command,
-    state,
-    ...(output ? { output } : {}),
-  };
-  const paths = toolPaths(update);
-  return paths.length > 0
-    ? [commandEvent, { type: 'file_change', paths }]
-    : [commandEvent];
+  const kind = stringValue(update.kind);
+  if (kind === 'execute') {
+    const commandInput = commandInputText(update.rawInput);
+    const command = commandInput ? `${title} ${commandInput}` : title;
+    const output = serialized(update.rawOutput);
+    return [{
+      type: 'command',
+      command,
+      state,
+      ...(output ? { output } : {}),
+    }];
+  }
+
+  const detail = toolDetail(update);
+  if (kind === 'edit' || kind === 'delete' || kind === 'move') {
+    return [{
+      type: 'file_change',
+      paths: toolPaths(update),
+      summary: redactSensitiveText(`${title} (${state})${detail ? `\n${detail}` : ''}`),
+    }];
+  }
+
+  return [{
+    type: 'status',
+    phase: `tool:${kind ?? 'unknown'}:${state}`,
+    ...(detail ? { detail } : {}),
+  }];
+}
+
+function toolDetail(update: RecordValue): string | undefined {
+  return [serialized(update.rawInput), serialized(update.rawOutput)]
+    .filter((value): value is string => Boolean(value))
+    .join('\n') || undefined;
 }
 
 function usageEvent(update: RecordValue): AgentEvent[] {
@@ -252,11 +270,6 @@ function normalizePromptUsage(value: unknown): ProviderUsage | undefined {
     ...(totalTokens === undefined ? {} : { totalTokens }),
   };
   return Object.keys(usage).length > 0 ? usage : undefined;
-}
-
-function parseTimestamp(value: string): number {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function isRecord(value: unknown): value is RecordValue {

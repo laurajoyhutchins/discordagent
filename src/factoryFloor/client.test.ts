@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { FactoryFloorApiError, FactoryFloorClient } from './client.js';
+import { FactoryFloorClient } from './client.js';
 
 describe('FactoryFloorClient', () => {
   it('sends scoped operator credentials and audit identity', async () => {
@@ -44,7 +44,7 @@ describe('FactoryFloorClient', () => {
       clientRequestId: 'interaction-2',
       decision: 'approve',
       reason: 'Approved.',
-    })).rejects.toMatchObject<FactoryFloorApiError>({
+    })).rejects.toMatchObject({
       status: 409,
       code: 'approval_not_pending',
     });

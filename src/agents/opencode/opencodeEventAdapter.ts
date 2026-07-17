@@ -1,0 +1,272 @@
+import type {
+  AgentEvent,
+  ApprovalDecision,
+  ApprovalRequest,
+  PlanItem,
+  ProviderUsage,
+  TaskResult,
+  ToolState,
+} from '../contracts.js';
+import {
+  redactAgentEvent,
+  redactApprovalRequest,
+  redactSensitiveText,
+  redactTaskResult,
+  safeStringify,
+} from '../../utils/redaction.js';
+
+type RecordValue = Record<string, unknown>;
+
+export function adaptSessionUpdate(params: unknown): AgentEvent[] {
+  const root = isRecord(params) ? params : undefined;
+  const update = root && isRecord(root.update) ? root.update : root;
+  if (!update) return [];
+
+  const events = adaptUpdate(update);
+  return events.map(redactAgentEvent);
+}
+
+export function approvalRequestFromAcp(params: unknown): ApprovalRequest {
+  const root = isRecord(params) ? params : {};
+  const toolCall = isRecord(root.toolCall) ? root.toolCall : {};
+  const kind = approvalKind(toolCall.kind);
+  const title = stringValue(toolCall.title) ?? 'OpenCode tool request';
+  const details = toolDetails(toolCall);
+  const request: ApprovalRequest = {
+    id: stringValue(toolCall.toolCallId) ?? stringValue(root.sessionId) ?? 'opencode-permission',
+    kind,
+    title,
+    details,
+    ...(kind === 'command' || kind === 'file_change' ? { risk: 'high' as const } : { risk: 'medium' as const }),
+  };
+  return redactApprovalRequest(request);
+}
+
+export function permissionOutcome(decision: ApprovalDecision, options: readonly unknown[]): unknown {
+  const candidates = options.flatMap(option => {
+    if (!isRecord(option)) return [];
+    const optionId = stringValue(option.optionId);
+    const kind = stringValue(option.kind);
+    return optionId && kind ? [{ optionId, kind }] : [];
+  });
+
+  const desired = decision === 'allow'
+    ? ['allow_once', 'allow_always']
+    : ['reject_once', 'reject_always'];
+  const selected = desired.map(kind => candidates.find(option => option.kind === kind)).find(Boolean);
+  return selected
+    ? { outcome: 'selected', optionId: selected.optionId }
+    : { outcome: 'cancelled' };
+}
+
+export function taskResultFromPrompt(input: {
+  provider: 'opencode';
+  startedAt: string;
+  completedAt: string;
+  sessionId: string;
+  promptResult: unknown;
+  text: string;
+}): TaskResult {
+  const promptResult = isRecord(input.promptResult) ? input.promptResult : {};
+  const stopReason = stringValue(promptResult.stopReason) ?? 'unknown';
+  const outcome = stopReason === 'cancelled'
+    ? 'cancelled'
+    : stopReason === 'refusal'
+      ? 'failed'
+      : 'completed';
+  const summary = input.text.length > 0 ? redactSensitiveText(input.text) : undefined;
+  const result: TaskResult = {
+    provider: input.provider,
+    outcome,
+    exitType: stopReason,
+    startedAt: parseTimestamp(input.startedAt),
+    completedAt: parseTimestamp(input.completedAt),
+    sessionId: input.sessionId,
+    ...(summary ? { summary } : {}),
+    ...(normalizePromptUsage(promptResult.usage) ? { usage: normalizePromptUsage(promptResult.usage) } : {}),
+    ...(outcome === 'failed'
+      ? {
+          error: {
+            code: 'opencode_refusal',
+            message: summary ?? 'OpenCode refused the prompt',
+            retryable: false,
+          },
+        }
+      : {}),
+  };
+  return redactTaskResult(result);
+}
+
+function adaptUpdate(update: RecordValue): AgentEvent[] {
+  switch (update.sessionUpdate) {
+    case 'agent_message_chunk':
+      return textChunk(update);
+    case 'agent_thought_chunk':
+    case 'user_message_chunk':
+      return [];
+    case 'plan':
+      return planEvent(update.entries);
+    case 'plan_update': {
+      const plan = isRecord(update.plan) ? update.plan : {};
+      return planEvent(plan.entries);
+    }
+    case 'tool_call':
+      return toolEvents(update, 'requested');
+    case 'tool_call_update':
+      return toolEvents(update, 'running');
+    case 'usage_update':
+      return usageEvent(update);
+    default:
+      return [];
+  }
+}
+
+function textChunk(update: RecordValue): AgentEvent[] {
+  const content = isRecord(update.content) ? update.content : {};
+  const text = stringValue(content.text);
+  return content.type === 'text' && text ? [{ type: 'text_delta', text }] : [];
+}
+
+function planEvent(value: unknown): AgentEvent[] {
+  if (!Array.isArray(value)) return [];
+  const items: PlanItem[] = value.flatMap((entry, index) => {
+    if (!isRecord(entry)) return [];
+    const text = stringValue(entry.content);
+    if (!text) return [];
+    return [{
+      id: String(index),
+      text,
+      status: planStatus(entry.status),
+    }];
+  });
+  return [{ type: 'plan', items }];
+}
+
+function toolEvents(update: RecordValue, fallback: ToolState): AgentEvent[] {
+  const title = stringValue(update.title) ?? 'OpenCode tool call';
+  const state = toolState(update.status, fallback);
+  const commandInput = commandInputText(update.rawInput);
+  const command = commandInput ? `${title} ${commandInput}` : title;
+  const output = serialized(update.rawOutput);
+  const commandEvent: AgentEvent = {
+    type: 'command',
+    command,
+    state,
+    ...(output ? { output } : {}),
+  };
+  const paths = toolPaths(update);
+  return paths.length > 0
+    ? [commandEvent, { type: 'file_change', paths }]
+    : [commandEvent];
+}
+
+function usageEvent(update: RecordValue): AgentEvent[] {
+  const used = finiteNumber(update.used);
+  const size = finiteNumber(update.size);
+  if (used === undefined) return [];
+  const usage: ProviderUsage = {
+    totalTokens: used,
+    ...(size !== undefined && size > 0 ? { utilization: used / size } : {}),
+  };
+  return [{ type: 'usage', usage }];
+}
+
+function toolPaths(update: RecordValue): string[] {
+  const kind = stringValue(update.kind);
+  if (!['edit', 'delete', 'move'].includes(kind ?? '')) return [];
+  if (!Array.isArray(update.locations)) return [];
+  return update.locations.flatMap(location => {
+    if (!isRecord(location)) return [];
+    const path = stringValue(location.path);
+    return path ? [path] : [];
+  });
+}
+
+function toolDetails(toolCall: RecordValue): string {
+  const input = isRecord(toolCall.rawInput) ? toolCall.rawInput : undefined;
+  const command = stringValue(input?.command ?? input?.cmd);
+  if (command) return redactSensitiveText(command);
+  const path = stringValue(input?.path ?? input?.file_path);
+  if (path) return redactSensitiveText(path);
+  const serializedInput = serialized(toolCall.rawInput);
+  const serializedOutput = serialized(toolCall.rawOutput);
+  return [serializedInput, serializedOutput].filter((value): value is string => Boolean(value)).join('\n')
+    || 'OpenCode requested permission to use a tool';
+}
+
+function commandInputText(input: unknown): string | undefined {
+  if (input === undefined) return undefined;
+  if (isRecord(input)) {
+    const command = stringValue(input.command ?? input.cmd);
+    if (command) return redactSensitiveText(command);
+  }
+  return serialized(input);
+}
+
+function serialized(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  return safeStringify(value);
+}
+
+function approvalKind(value: unknown): ApprovalRequest['kind'] {
+  if (value === 'execute') return 'command';
+  if (value === 'edit' || value === 'delete' || value === 'move') return 'file_change';
+  return 'tool';
+}
+
+function toolState(value: unknown, fallback: ToolState): ToolState {
+  switch (value) {
+    case 'pending':
+      return 'requested';
+    case 'in_progress':
+      return 'running';
+    case 'completed':
+      return 'completed';
+    case 'failed':
+      return 'failed';
+    default:
+      return fallback;
+  }
+}
+
+function planStatus(value: unknown): PlanItem['status'] {
+  if (value === 'in_progress') return 'in_progress';
+  if (value === 'completed') return 'completed';
+  if (value === 'blocked') return 'blocked';
+  return 'pending';
+}
+
+function normalizePromptUsage(value: unknown): ProviderUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const inputTokens = finiteNumber(value.inputTokens);
+  const outputTokens = finiteNumber(value.outputTokens);
+  const cachedInputTokens = finiteNumber(value.cachedReadTokens);
+  const totalTokens = finiteNumber(value.totalTokens)
+    ?? (inputTokens !== undefined || outputTokens !== undefined
+      ? (inputTokens ?? 0) + (outputTokens ?? 0)
+      : undefined);
+  const usage: ProviderUsage = {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+  };
+  return Object.keys(usage).length > 0 ? usage : undefined;
+}
+
+function parseTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function isRecord(value: unknown): value is RecordValue {
+  return typeof value === 'object' && value !== null;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}

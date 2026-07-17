@@ -1,0 +1,40 @@
+name: Apply Recovery Thread Guard
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/generic-discord-task-controls'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - name: Apply verified recovery guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/services/runtime.ts')
+          text = path.read_text()
+          old = "    if (channel.isThread()) {\n"
+          new = "    if (typeof channel.isThread === 'function' && channel.isThread()) {\n"
+          if text.count(old) != 1:
+              raise SystemExit('expected recovery thread check not found exactly once')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          rm .github/workflows/apply-recovery-thread-guard.yml
+          git add -A
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: guard recovery thread detection'
+          git push origin "HEAD:${{ github.head_ref }}"

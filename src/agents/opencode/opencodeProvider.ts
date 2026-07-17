@@ -164,7 +164,8 @@ export class OpenCodeProvider implements AgentProvider {
 
       const sessionId = persistedSession?.sessionId ?? extractSessionId(sessionResponse);
       if (!sessionId) throw new Error('OpenCode ACP did not return a non-empty session identifier');
-      const session = persistedSession ?? { provider: this.id, sessionId, createdAt: this.now() };
+      const startedAt = this.now();
+      const session = persistedSession ?? { provider: this.id, sessionId, createdAt: startedAt };
       if (model) await this.applyModel(connection, sessionId, model, sessionResponse);
 
       const adapter = createOpenCodeEventAdapter();
@@ -174,7 +175,7 @@ export class OpenCodeProvider implements AgentProvider {
         host,
         adapter,
         text: '',
-        startedAt: session.createdAt,
+        startedAt,
         cancelled: false,
       };
       this.active.set(sessionId, context);

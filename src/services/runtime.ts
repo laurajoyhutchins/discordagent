@@ -285,7 +285,7 @@ async function notifyRecoveredTasks(
     await channel.send({ content }).catch(error => {
       console.warn(`[runtime] Failed to post recovery checkpoint for task ${task.id}:`, redactErrorMessage(error));
     });
-    if (channel.isThread()) {
+    if (typeof channel.isThread === 'function' && channel.isThread()) {
       await controlSurface.update(channel, task, tasks.getResult(task.id)).catch(error => {
         console.warn(`[runtime] Failed to refresh task controls for task ${task.id}:`, redactErrorMessage(error));
       });

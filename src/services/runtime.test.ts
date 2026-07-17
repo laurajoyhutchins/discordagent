@@ -14,6 +14,7 @@ process.env.DISCORD_TOKEN = 'test';
 process.env.DISCORD_CLIENT_ID = 'test';
 process.env.DISCORD_GUILD_ID = 'test';
 process.env.AUTHORIZED_ROLE_IDS = 'role';
+process.env.CLAUDE_ENABLED = 'true';
 
 const { getTaskCoordinator } = await import('./taskCoordinatorService.js');
 const { getUsageAdmissionService } = await import('./usageAdmissionRegistry.js');
@@ -53,16 +54,66 @@ describe('runtime startup', () => {
       legacyPath: join(directory, 'missing-projects.json'),
       worktreesBaseDir: join(directory, 'worktrees'),
       claudeProvider: fakeProvider(),
+      disablePrimaryAgent: true,
     });
 
     expect(getTaskCoordinator()).toBe(runtime.coordinator);
     expect(runtime.providers.require('claude').id).toBe('claude');
+    expect(runtime.settings.getDefaultProvider()).toBeUndefined();
     expect(runtime.projects.listActive()).toEqual([]);
     expect(getUsageAdmissionService()).toBe(runtime.usage);
 
     await stopRuntime(runtime);
     expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
     expect(getUsageAdmissionService()).toBeUndefined();
+  });
+
+  it('starts with Codex as the only registered provider when Claude is disabled', async () => {
+    const directory = tempDirectory();
+    const codex = { ...fakeProvider(), id: 'codex' as const };
+    const runtime = await startRuntime({} as Client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      codexProvider: codex,
+      disableClaude: true,
+      disablePrimaryAgent: true,
+    });
+
+    expect(runtime.providers.list()).toEqual(['codex']);
+
+    await stopRuntime(runtime);
+  });
+
+  it('posts provider onboarding in the PM channel before any provider is selected', async () => {
+    const directory = tempDirectory();
+    const send = vi.fn(async () => ({ id: 'setup-message' }));
+    const agentChannel = {
+      id: 'agent-chat',
+      messages: { fetch: vi.fn(async () => null) },
+      send,
+    };
+    const guild = {
+      id: 'guild-1',
+      members: { me: { id: 'bot-1' } },
+      channels: {
+        cache: { find: () => undefined },
+        create: vi.fn(async () => agentChannel),
+      },
+    };
+    const client = { guilds: { fetch: vi.fn(async () => guild) } } as unknown as Client;
+    const runtime = await startRuntime(client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      claudeProvider: fakeProvider(),
+      disableCodex: true,
+    });
+
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/provider setup required/i) }));
+    expect(runtime.primaryAgent).toBeUndefined();
+
+    await stopRuntime(runtime);
   });
 
   it('cleans partial startup state when the injected provider is not Claude', async () => {
@@ -176,6 +227,7 @@ describe('runtime startup', () => {
       legacyPath: join(directory, 'missing-projects.json'),
       worktreesBaseDir: join(directory, 'worktrees'),
       claudeProvider: provider,
+      disablePrimaryAgent: true,
     });
 
     expect(runtime.tasks.findById('task-1')?.status).toBe('interrupted');

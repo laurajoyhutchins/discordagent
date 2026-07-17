@@ -54,7 +54,7 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName('provider')
-    .setDescription('Show or change the default agent provider for this project')
+    .setDescription('Show or change the default agent provider globally or for this project')
     .addStringOption(opt =>
       opt.setName('provider')
         .setDescription('Provider for new task threads')

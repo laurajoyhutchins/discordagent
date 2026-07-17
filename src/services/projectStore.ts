@@ -9,6 +9,10 @@ import {
   type ProjectRepository,
 } from '../repositories/projectRepository.js';
 import {
+  createSettingsRepository,
+  type SettingsRepository,
+} from '../repositories/settingsRepository.js';
+import {
   normalizeProject,
   type Project,
 } from '../types.js';
@@ -27,6 +31,7 @@ interface EphemeralProjectState {
 
 let database: DatabaseHandle | null = null;
 let projects: ProjectRepository | null = null;
+let settings: SettingsRepository | null = null;
 const ephemeralState = new Map<string, EphemeralProjectState>();
 
 function projectKey(name: string): string {
@@ -42,10 +47,12 @@ export function initializeProjectStore(paths: ProjectStorePaths = {}): void {
   const legacyPath = paths.legacyPath ?? DEFAULT_LEGACY_PATH;
   importLegacyProjects(database, legacyPath);
   projects = createProjectRepository(database);
+  settings = createSettingsRepository(database);
 }
 
 export function closeProjectStore(): void {
   projects = null;
+  settings = null;
   ephemeralState.clear();
   database?.close();
   database = null;
@@ -63,6 +70,19 @@ export function getProjectRepository(): ProjectRepository {
 export function getProjectDatabase(): DatabaseHandle {
   if (!database) initializeProjectStore();
   return database!;
+}
+
+export function getSettingsRepository(): SettingsRepository {
+  if (!settings) initializeProjectStore();
+  return settings!;
+}
+
+export function getDefaultProvider(): AgentProviderId | undefined {
+  return getSettingsRepository().getDefaultProvider();
+}
+
+export function updateDefaultProvider(provider: AgentProviderId): void {
+  getSettingsRepository().setDefaultProvider(provider);
 }
 
 function withEphemeral(project: Project | undefined): Project | undefined {

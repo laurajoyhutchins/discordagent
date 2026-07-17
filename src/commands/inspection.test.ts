@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatInputCommandInteraction } from 'discord.js';
+import { MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
 import { ProviderRegistry } from '../agents/providerRegistry.js';
 import { setAgentRuntimeServices, clearAgentRuntimeServices } from '../services/agentRuntimeService.js';
 import { setUsageAdmissionService, clearUsageAdmissionService } from '../services/usageAdmissionRegistry.js';
@@ -28,7 +28,7 @@ describe('inspection commands', () => {
     } as never);
     const value = interaction();
     await handleAgents(value);
-    expect(value.reply).toHaveBeenCalledWith(expect.objectContaining({ embeds: expect.any(Array), ephemeral: true }));
+    expect(value.reply).toHaveBeenCalledWith(expect.objectContaining({ embeds: expect.any(Array), flags: MessageFlags.Ephemeral }));
   });
 
   it('shows detailed provider posture only on demand', async () => {
@@ -38,7 +38,7 @@ describe('inspection commands', () => {
     } as never);
     const value = interaction();
     await handleUsage(value);
-    expect(value.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(value.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(value.editReply).toHaveBeenCalledWith(expect.objectContaining({ embeds: expect.any(Array) }));
   });
 });

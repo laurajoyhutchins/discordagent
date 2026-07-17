@@ -1,11 +1,11 @@
-import { ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
 import { getAllProjects } from '../services/projectStore.js';
 import { getLoop, formatDuration } from '../services/loopRunner.js';
 
 export async function handleListProjects(interaction: ChatInputCommandInteraction): Promise<void> {
   const projects = getAllProjects();
   if (projects.length === 0) {
-    await interaction.reply({ content: 'No projects registered. Use `/add-project` to add one.', ephemeral: true });
+    await interaction.reply({ content: 'No projects registered. Use `/add-project` to add one.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -24,5 +24,5 @@ export async function handleListProjects(interaction: ChatInputCommandInteractio
     if (project.roborevChannelId) value += `\n**Roborev:** <#${project.roborevChannelId}>`;
     embed.addFields({ name: project.name, value });
   }
-  await interaction.reply({ embeds: [embed], ephemeral: true });
+  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
 }

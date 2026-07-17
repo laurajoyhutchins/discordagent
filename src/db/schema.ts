@@ -272,4 +272,15 @@ export const SCHEMA_MIGRATIONS: readonly Migration[] = [
       `CREATE INDEX usage_reservations_task_status_idx ON usage_reservations(task_id, status, created_at)`,
     ],
   },
+  {
+    version: 5,
+    name: 'add global runtime settings',
+    statements: [
+      `CREATE TABLE runtime_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+    ],
+  },
 ] as const;

@@ -1,8 +1,9 @@
-import { ChatInputCommandInteraction } from 'discord.js';
+import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { existsSync, statSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { addProject, getProject } from '../services/projectStore.js';
+import type { AgentProviderId } from '../agents/contracts.js';
+import { addProject, getDefaultProvider, getProject } from '../services/projectStore.js';
 import { createProjectChannels } from '../services/channelManager.js';
 import { config } from '../config.js';
 
@@ -36,10 +37,19 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   const name = interaction.options.getString('name', true).toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const path = interaction.options.getString('path', true);
   const roborevOption = interaction.options.getBoolean('roborev'); // null if not provided
+  const defaultProvider: AgentProviderId | undefined = getDefaultProvider();
+
+  if (!defaultProvider) {
+    await interaction.reply({
+      content: 'Choose a provider in **#agent-chat** first. The selected global provider will be inherited by this project.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
 
   // Validate path exists and is a directory
   if (!existsSync(path) || !statSync(path).isDirectory()) {
-    await interaction.reply({ content: `Path \`${path}\` does not exist or is not a directory.`, ephemeral: true });
+    await interaction.reply({ content: `Path \`${path}\` does not exist or is not a directory.`, flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -48,7 +58,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   try {
     resolvedPath = realpathSync(path);
   } catch {
-    await interaction.reply({ content: 'The provided path could not be resolved (broken symlink or inaccessible).', ephemeral: true });
+    await interaction.reply({ content: 'The provided path could not be resolved (broken symlink or inaccessible).', flags: MessageFlags.Ephemeral });
     return;
   }
   if (config.projectsBaseDir) {
@@ -56,13 +66,13 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     try {
       resolvedBase = realpathSync(config.projectsBaseDir);
     } catch {
-      await interaction.reply({ content: 'Server misconfiguration: PROJECTS_BASE_DIR could not be resolved.', ephemeral: true });
+      await interaction.reply({ content: 'Server misconfiguration: PROJECTS_BASE_DIR could not be resolved.', flags: MessageFlags.Ephemeral });
       return;
     }
     if (!resolvedPath.startsWith(resolvedBase + '/') && resolvedPath !== resolvedBase) {
       await interaction.reply({
         content: `Path must be within the allowed base directory: \`${config.projectsBaseDir}\``,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -73,14 +83,14 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   if (!isGitRepo && !config.allowNonGit) {
     await interaction.reply({
       content: `Path is not a git repository (no .git directory).\n\nTo allow non-git directories, set \`ALLOW_NON_GIT=true\` in your \`.env\` file. See the README for details on the risks.`,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   // Check for duplicate
   if (getProject(name)) {
-    await interaction.reply({ content: `Project "${name}" already exists. Remove it first.`, ephemeral: true });
+    await interaction.reply({ content: `Project "${name}" already exists. Remove it first.`, flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -104,7 +114,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     addProject({
       name,
       workingDirectory: resolvedPath,
-      defaultProvider: 'claude',
+      defaultProvider,
       ...channels,
     });
 

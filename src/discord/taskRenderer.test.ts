@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AnyThreadChannel } from 'discord.js';
+import { MessageFlags, type AnyThreadChannel } from 'discord.js';
 import type {
   AgentEvent,
   ApprovalRequest,
@@ -232,7 +232,7 @@ describe('DiscordInteractionBroker', () => {
 
     await expect(promise).resolves.toBe('allow');
     expect(unauthorized.replies).toEqual([
-      expect.objectContaining({ content: 'You are not authorized.', ephemeral: true }),
+      expect.objectContaining({ content: 'You are not authorized.', flags: MessageFlags.Ephemeral }),
     ]);
     expect(authorized.deferred).toBe(true);
   });

@@ -1,5 +1,5 @@
 import {
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, type ButtonInteraction,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags, type ButtonInteraction,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import type { CodexAuthService } from '../agents/codex/codexAuthService.js';
@@ -22,7 +22,7 @@ function owner(userId: string, deps: CodexAuthDependencies): boolean {
 export async function handleCodexAuth(interaction: ChatInputCommandInteraction, injected?: CodexAuthDependencies): Promise<void> {
   const deps = injected ?? defaults();
   if (!owner(interaction.user.id, deps)) {
-    await interaction.reply({ content: 'Only the configured owner may manage Codex authentication.', ephemeral: true });
+    await interaction.reply({ content: 'Only the configured owner may manage Codex authentication.', flags: MessageFlags.Ephemeral });
     return;
   }
   const action = interaction.options.getSubcommand();
@@ -31,13 +31,13 @@ export async function handleCodexAuth(interaction: ChatInputCommandInteraction, 
       const state = await deps.auth.readAccount();
       await interaction.reply({ content: state.authenticated
         ? `✅ Codex is authenticated${state.planType ? ` (${state.planType})` : ''}.`
-        : '🔐 Codex authentication is required. Use `/codex-auth login`.', ephemeral: true });
+        : '🔐 Codex authentication is required. Use `/codex-auth login`.', flags: MessageFlags.Ephemeral });
       return;
     }
     if (action === 'login') {
       const state = await deps.auth.readAccount();
       if (state.authenticated) {
-        await interaction.reply({ content: '✅ Codex is already authenticated.', ephemeral: true });
+        await interaction.reply({ content: '✅ Codex is already authenticated.', flags: MessageFlags.Ephemeral });
         return;
       }
       const login = await deps.auth.startDeviceLogin();
@@ -47,18 +47,18 @@ export async function handleCodexAuth(interaction: ChatInputCommandInteraction, 
       );
       await interaction.reply({
         content: [`🔐 **Codex sign-in**`, `Open: ${login.verificationUrl}`, `Enter one-time code: \`${login.userCode}\``, '', 'Return here and select **Check again**. Do not paste credentials into Discord.'].join('\n'),
-        components: [row], ephemeral: true,
+        components: [row], flags: MessageFlags.Ephemeral,
       });
       return;
     }
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId('codex_auth_logout_confirm').setLabel('Confirm logout').setStyle(ButtonStyle.Danger),
     );
-    await interaction.reply({ content: 'Log out the local Codex account?', components: [row], ephemeral: true });
+    await interaction.reply({ content: 'Log out the local Codex account?', components: [row], flags: MessageFlags.Ephemeral });
   } catch (error) {
     await interaction.reply({
       content: `Unable to manage Codex authentication: ${redactErrorMessage(error)}\nOn the bot host, run \`codex login --device-auth\`, then use \`/codex-auth status\`.`,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     }).catch(() => undefined);
   }
 }
@@ -67,7 +67,7 @@ export async function handleCodexAuthButton(interaction: ButtonInteraction, inje
   if (!interaction.customId.startsWith('codex_auth_')) return false;
   const deps = injected ?? defaults();
   if (!owner(interaction.user.id, deps)) {
-    await interaction.reply({ content: 'Only the configured owner may manage Codex authentication.', ephemeral: true });
+    await interaction.reply({ content: 'Only the configured owner may manage Codex authentication.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (interaction.customId === 'codex_auth_check') {
@@ -93,9 +93,9 @@ export async function handleCodexAuthButton(interaction: ButtonInteraction, inje
     await interaction.update({ content: 'Starting the pending Codex task…', components: [] });
     try {
       await deps.pendingTasks?.start(interaction.user.id);
-      await interaction.followUp({ content: '✅ Pending Codex task started in its project thread.', ephemeral: true });
+      await interaction.followUp({ content: '✅ Pending Codex task started in its project thread.', flags: MessageFlags.Ephemeral });
     } catch (error) {
-      await interaction.followUp({ content: `Unable to start the pending task: ${redactErrorMessage(error)}`, ephemeral: true });
+      await interaction.followUp({ content: `Unable to start the pending task: ${redactErrorMessage(error)}`, flags: MessageFlags.Ephemeral });
     }
   } else if (interaction.customId === 'codex_auth_discard_pending') {
     deps.pendingTasks?.discard(interaction.user.id);

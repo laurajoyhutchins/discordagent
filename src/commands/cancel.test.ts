@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatInputCommandInteraction } from 'discord.js';
+import { MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
 import type { Project } from '../types.js';
 import { handleCancel } from './cancel.js';
@@ -53,7 +53,7 @@ describe('/cancel', () => {
 
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringMatching(/no active task or loop/i),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     }));
   });
 

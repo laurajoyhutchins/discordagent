@@ -3,6 +3,7 @@ import { accessSync, constants, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { buildProcessInvocation } from '../utils/processInvocation.js';
 import { openDatabase } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 
@@ -69,7 +70,8 @@ export function createHostPreflightDependencies(): HostPreflightDependencies {
   return {
     nodeVersion: process.versions.node,
     runCommand(command, args) {
-      const result = spawnSync(command, [...args], {
+      const invocation = buildProcessInvocation(command, args);
+      const result = spawnSync(invocation.command, [...invocation.args], {
         encoding: 'utf8',
         shell: false,
         timeout: 15_000,
@@ -166,7 +168,7 @@ export function evaluateHostPreflight(
 
   for (const [name, command, args, required] of [
     ['Git CLI', 'git', ['--version'], true],
-    ['Claude CLI', 'claude', ['--version'], true],
+    ['Claude CLI', 'claude', ['--version'], false],
     ['Codex CLI', env.CODEX_CLI_PATH?.trim() || 'codex', ['--version'], env.CODEX_ENABLED !== 'false'],
     ['Roborev CLI', env.ROBOREV_CLI_PATH?.trim() || 'roborev', ['version'], false],
   ] as const) {

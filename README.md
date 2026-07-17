@@ -41,10 +41,10 @@ Discord Agent is intended for a private server with trusted users and repositori
 - Node.js 22 or newer
 - Git
 - A private Discord server where you can install a bot
-- Claude Code installed and authenticated on the bot host
-- Codex CLI installed when Codex tasks are desired
+- At least one provider installed and authenticated on the bot host
+- Claude Code is optional; Codex CLI is optional when Claude is the only provider
 
-Run Claude once locally to complete authentication. Codex can be authenticated privately from Discord with `/codex-auth login`, or locally with `codex login --device-auth`.
+Run the provider you intend to use once locally to complete authentication. Codex can also be authenticated privately from Discord with `/codex-auth login`, or locally with `codex login --device-auth`.
 
 ## Installation
 
@@ -71,6 +71,8 @@ npm run register
 npm run dev
 ```
 
+On the first start, open the private `#agent-chat` channel and choose an available provider. That selection powers the PM chat and becomes the default for new projects. If Codex is selected, complete `/codex-auth login` first when the setup prompt asks for it. Claude and Codex are both optional at runtime; set `CLAUDE_ENABLED=false` for a Codex-only host.
+
 For production-style execution:
 
 ```bash
@@ -84,13 +86,13 @@ The bot requires the message-content and server-members privileged intents. It n
 
 ## Registering a project
 
-Run this in the configured guild:
+Choose the global provider in `#agent-chat` before registering a project. Then run this in the configured guild:
 
 ```text
 /add-project name:factory-floor path:/absolute/path/to/factory-floor
 ```
 
-The bot creates a category named for the project and a private `#agent` channel. When Roborev is enabled, it also creates `#roborev`.
+The bot creates a category named for the project and a private `#agent` channel. The project inherits the global provider at creation time; use `/provider` in the project channel to override it later. When Roborev is enabled, it also creates `#roborev`.
 
 Send a normal message in `#agent` to create a task. Discord Agent will:
 
@@ -109,7 +111,7 @@ Send a normal message in `#agent` to create a task. Discord Agent will:
 | `/add-project` | Register a local project and create its channels. |
 | `/list-projects` | List active projects, providers, models, and channels. |
 | `/remove-project` | Soft-archive the project record and delete its Discord channels. Historical tasks remain in SQLite. |
-| `/provider [claude\|codex]` | Show or change the project's default provider after an authoritative availability check. In a task thread, proposing the other provider creates a confirmed sibling handoff. |
+| `/provider [claude\|codex]` | Show or change the global provider in `#agent-chat`, or the project's default provider in a project channel, after an authoritative availability check. In a task thread, proposing the other provider creates a confirmed sibling handoff. |
 | `/model [model] [custom]` | Set the model override for the project's current provider. |
 | `/cancel` | In a task thread, cancel that durable task while preserving its worktree. |
 | `/loop <prompt> [interval]` | Start a recurring task in one thread/session/worktree. |
@@ -204,12 +206,13 @@ When enabled, the bot starts `roborev stream`, matches events to registered repo
 | `NOTIFY_USER_ID` | no | empty | User to mention after task completion. |
 | `AUTHORIZED_USER_ID` | primary/Codex auth | `NOTIFY_USER_ID` | Exact owner allowed to use `#agent-chat` and manage Codex login. |
 | `AUTHORIZED_USER_ID` | Codex auth | `NOTIFY_USER_ID` | Exact human owner allowed to manage Codex authentication. |
-| `CODEX_CLI_PATH` | no | `codex` | Codex CLI executable used to launch App Server. |
+| `CODEX_CLI_PATH` | no | `codex` (`codex.cmd` on Windows when installed through Volta) | Codex CLI executable used to launch App Server. |
 | `CODEX_MODEL` | no | provider default | Default Codex model. |
 | `CODEX_ENABLED` | no | `true` | Enable local Codex App Server startup. |
-| `PRIMARY_AGENT_MODEL` | no | Claude default | Model used by the restricted PM-style coordinator. |
+| `PRIMARY_AGENT_MODEL` | no | provider default | Optional model used by the restricted PM-style coordinator. |
 | `PRIMARY_USAGE_RESERVE` | no | `10` | Capacity percentage points preserved for coordination and recovery. |
 | `CLAUDE_TIMEOUT_MS` | no | `900000` | Provider turn timeout. |
+| `CLAUDE_ENABLED` | no | `true` | Keep Claude available as a selectable provider; set `false` on Codex-only hosts. |
 | `CLAUDE_MODEL` | no | SDK default | Default Claude model. |
 | `PROJECTS_BASE_DIR` | no | unrestricted | Root beneath which projects may be registered. |
 | `ALLOW_NON_GIT` | no | `false` | Legacy registration switch. Agent task execution still requires a Git repository for worktree isolation. |

@@ -18,7 +18,7 @@ import { getTaskCoordinator } from '../services/taskCoordinatorService.js';
 import { isAuthorized } from '../utils/permissions.js';
 import { redactSensitiveText } from '../utils/redaction.js';
 import { getPrimaryAgentService } from '../services/primaryAgentServiceRegistry.js';
-import { getProviderRegistry, maybeGetPendingTaskService } from '../services/agentRuntimeService.js';
+import { getProviderRegistry, maybeGetPendingTaskService, maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
 import { UsageAdmissionError } from '../services/usageAdmission.js';
 
 export interface MessageHandlerDependencies {
@@ -84,6 +84,14 @@ export async function handleMessage(
 
   const primary = getPrimaryAgentService();
   if (!injected && primary && message.channelId === primary.channelId) { await primary.handleMessage(message); return; }
+  if (!injected && !primary && 'name' in message.channel && message.channel.name === 'agent-chat') {
+    const onboarding = maybeGetProviderOnboardingService();
+    if (onboarding) {
+      await onboarding.ensurePrompt();
+      await message.reply('Choose a provider using the setup buttons above. The selected provider will power this PM chat and become the default for new projects.');
+      return;
+    }
+  }
 
   const dependencies = injected ?? defaultDependencies();
   const lagMs = Date.now() - message.createdTimestamp;

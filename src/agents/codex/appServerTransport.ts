@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { redactErrorMessage, redactSensitiveText } from '../../utils/redaction.js';
+import { buildProcessInvocation } from '../../utils/processInvocation.js';
 import { isRecord, parseJsonRpcLine, type JsonRpcId, type JsonRpcMessage } from './protocol.js';
 
 export interface DataStream { on(event: 'data', listener: (chunk: unknown) => void): unknown; }
@@ -57,11 +58,14 @@ export class AppServerTransport extends EventEmitter {
     this.overloadRetries = options.overloadRetries ?? 3;
     this.overloadBaseDelayMs = options.overloadBaseDelayMs ?? 100;
     this.sleep = options.sleep ?? (delayMs => new Promise(resolve => setTimeout(resolve, delayMs)));
-    const spawnProcess = options.spawnProcess ?? ((command, args) => spawn(command, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: false,
-      env: process.env,
-    }) as ChildProcessWithoutNullStreams);
+    const spawnProcess = options.spawnProcess ?? ((command, args) => {
+      const invocation = buildProcessInvocation(command, args);
+      return spawn(invocation.command, invocation.args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: false,
+        env: process.env,
+      }) as ChildProcessWithoutNullStreams;
+    });
     this.process = options.process ?? spawnProcess(options.command ?? 'codex', options.args ?? ['app-server']);
     this.process.stdout.on('data', chunk => this.consumeStdout(String(chunk)));
     this.process.stderr.on('data', chunk => {

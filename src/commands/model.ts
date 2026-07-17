@@ -2,6 +2,7 @@ import {
   ActionRowBuilder,
   ComponentType,
   EmbedBuilder,
+  MessageFlags,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
   type ChatInputCommandInteraction,
@@ -49,14 +50,14 @@ export async function handleModel(
   if (interaction.channel?.isThread()) {
     await interaction.reply({
       content: 'A task thread keeps its current provider/model context. Change the project model from the main project channel.',
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
   const project = dependencies.getProjectByChannel(interaction.channelId);
   if (!project || interaction.channelId !== project.agentChannelId) {
-    await interaction.reply({ content: 'This command can only be used in a project channel.', ephemeral: true });
+    await interaction.reply({ content: 'This command can only be used in a project channel.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -85,7 +86,7 @@ export async function handleModel(
   if (provider !== 'claude') {
     await interaction.reply({
       content: `Current Codex model: \`${currentModel}\`. Set a Codex model with the \`custom\` option, or clear it with \`custom:__default__\`.`,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }

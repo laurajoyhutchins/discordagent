@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatInputCommandInteraction } from 'discord.js';
+import { MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
 import type { Project } from '../types.js';
 import { handleModel } from './model.js';
 
@@ -51,7 +51,7 @@ describe('/model provider scoping', () => {
     expect(update).not.toHaveBeenCalled();
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringMatching(/task thread/i),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     }));
   });
 });

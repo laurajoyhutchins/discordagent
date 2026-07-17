@@ -1,4 +1,4 @@
-import { Interaction } from 'discord.js';
+import { Interaction, MessageFlags } from 'discord.js';
 import { isAuthorized } from '../utils/permissions.js';
 import { redactErrorMessage } from '../utils/redaction.js';
 import { handleAddProject } from '../commands/addProject.js';
@@ -13,15 +13,17 @@ import { handleModel } from '../commands/model.js';
 import { handleProvider } from '../commands/provider.js';
 import { stopLoopFromButton } from '../services/loopRunner.js';
 import { handleCodexAuth, handleCodexAuthButton } from '../commands/codexAuth.js';
+import { maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   // Handle button interactions (e.g., loop stop button)
   if (interaction.isButton()) {
+    if (await maybeGetProviderOnboardingService()?.handleButton(interaction)) return;
     if (await handleCodexAuthButton(interaction)) return;
     if (interaction.customId.startsWith('loop_stop_')) {
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
       if (!isAuthorized(member)) {
-        await interaction.reply({ content: 'You are not authorized.', ephemeral: true });
+        await interaction.reply({ content: 'You are not authorized.', flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -39,7 +41,7 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
   // Auth check
   const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
   if (!isAuthorized(member)) {
-    await interaction.reply({ content: 'You are not authorized to use this bot.', ephemeral: true });
+    await interaction.reply({ content: 'You are not authorized to use this bot.', flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -79,7 +81,7 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
         await handleModel(interaction);
         break;
       default:
-        await interaction.reply({ content: 'Unknown command.', ephemeral: true });
+        await interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
     }
   } catch (err) {
     console.error(`Error handling command ${interaction.commandName}:`, redactErrorMessage(err));
@@ -87,7 +89,7 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(userMsg).catch(() => {});
     } else {
-      await interaction.reply({ content: userMsg, ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: userMsg, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
   }
 }

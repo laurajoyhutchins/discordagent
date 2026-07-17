@@ -1,8 +1,8 @@
-import { EmbedBuilder, type ChatInputCommandInteraction } from 'discord.js';
+import { EmbedBuilder, MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
 import { getUsageAdmissionService } from '../services/usageAdmissionRegistry.js';
 
 export async function handleUsage(interaction: ChatInputCommandInteraction): Promise<void> {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const service = getUsageAdmissionService();
   if (!service) {
     const unavailable = new EmbedBuilder()

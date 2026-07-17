@@ -13,11 +13,16 @@ import { handleModel } from '../commands/model.js';
 import { handleProvider } from '../commands/provider.js';
 import { stopLoopFromButton } from '../services/loopRunner.js';
 import { handleCodexAuth, handleCodexAuthButton } from '../commands/codexAuth.js';
+import {
+  handleFactoryFloor,
+  handleFactoryFloorButton,
+} from '../commands/factoryFloor.js';
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   // Handle button interactions (e.g., loop stop button)
   if (interaction.isButton()) {
     if (await handleCodexAuthButton(interaction)) return;
+    if (await handleFactoryFloorButton(interaction)) return;
     if (interaction.customId.startsWith('loop_stop_')) {
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
       if (!isAuthorized(member)) {
@@ -68,6 +73,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
         break;
       case 'usage':
         await handleUsage(interaction);
+        break;
+      case 'factory-floor':
+        await handleFactoryFloor(interaction);
         break;
       case 'codex-auth':
         await handleCodexAuth(interaction);

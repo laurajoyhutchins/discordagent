@@ -51,6 +51,37 @@ export const commands = [
     .setName('usage')
     .setDescription('Show provider rate limit usage and task stats'),
 
+  new SlashCommandBuilder()
+    .setName('factory-floor')
+    .setDescription('Submit and inspect durable Factory Floor runs')
+    .addSubcommand(command =>
+      command.setName('status').setDescription('Check Factory Floor control-plane status')
+    )
+    .addSubcommand(command =>
+      command
+        .setName('submit')
+        .setDescription('Submit a durable development task')
+        .addStringOption(option =>
+          option.setName('objective').setDescription('What Factory Floor should accomplish').setRequired(true)
+        )
+        .addStringOption(option =>
+          option.setName('criteria').setDescription('Acceptance criteria, one per line').setRequired(false)
+        )
+        .addStringOption(option =>
+          option.setName('repository').setDescription('GitHub repository in owner/name form').setRequired(false)
+        )
+    )
+    .addSubcommand(command =>
+      command
+        .setName('run')
+        .setDescription('Refresh a bound Factory Floor run')
+        .addStringOption(option =>
+          option.setName('run-id').setDescription('Run ID; optional inside its bound thread').setRequired(false)
+        )
+    )
+    .addSubcommand(command =>
+      command.setName('approvals').setDescription('List pending Factory Floor approvals')
+    ),
 
   new SlashCommandBuilder()
     .setName('provider')
@@ -64,8 +95,6 @@ export const commands = [
           { name: 'Codex', value: 'codex' },
         )
     ),
-
-
 
   new SlashCommandBuilder()
     .setName('codex-auth')

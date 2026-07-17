@@ -246,6 +246,53 @@ describe('OpenCodeAcpTransport', () => {
     expect(stderr).toEqual(['Authorization: [REDACTED]']);
   });
 
+  it('buffers split stderr secrets until the stream is complete before redacting', async () => {
+    const process = new FakeProcess();
+    const stderr: string[] = [];
+    const transport = new OpenCodeAcpTransport({
+      process,
+      handlers: { onStderr: message => stderr.push(message) },
+    });
+
+    process.stderr.write('Authorization: Bearer sk-project-');
+    process.stderr.write('super-secret-value\n');
+    process.stderr.end();
+    await flush();
+
+    expect(stderr).toEqual(['Authorization: [REDACTED]']);
+    await transport.close();
+  });
+
+  it('rejects pending operations and terminates the process on ACP stdout EOF', async () => {
+    const process = new FakeProcess();
+    const transport = new OpenCodeAcpTransport({ process });
+    const pending = transport.prompt('session-1', 'continue');
+    await flush();
+    process.request('session/prompt');
+
+    process.stdout.end();
+
+    await expect(pending).rejects.toThrow('closed');
+    expect(process.stdinEnded).toBe(true);
+    expect(process.killSignals).toEqual(['SIGTERM']);
+    await transport.close();
+  });
+
+  it('rejects pending operations and terminates the process on ACP stdout errors', async () => {
+    const process = new FakeProcess();
+    const transport = new OpenCodeAcpTransport({ process });
+    const pending = transport.prompt('session-1', 'continue');
+    await flush();
+    process.request('session/prompt');
+
+    process.stdout.emit('error', new Error('provider token=sk-project-super-secret-value'));
+
+    await expect(pending).rejects.toThrow('[REDACTED]');
+    expect(process.stdinEnded).toBe(true);
+    expect(process.killSignals).toEqual(['SIGTERM']);
+    await transport.close();
+  });
+
   it('closes by rejecting pending operations, ending stdin, and sending SIGTERM', async () => {
     const process = new FakeProcess();
     const transport = new OpenCodeAcpTransport({ process });

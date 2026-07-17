@@ -75,6 +75,7 @@ export class OpenCodeAcpTransport implements OpenCodeAcpConnection {
   private readonly handlers: OpenCodeAcpHandlers;
   private readonly connection: ClientConnection;
   private readonly pending = new Set<PendingOperation>();
+  private stderrBuffer = '';
   private closed = false;
   private handshake?: InitializeResponse;
 
@@ -99,11 +100,17 @@ export class OpenCodeAcpTransport implements OpenCodeAcpConnection {
     }
 
     this.process.stderr.on('data', chunk => {
-      const message = redactSensitiveText(String(chunk)).trim();
-      if (message) this.handlers.onStderr?.(message);
+      this.stderrBuffer += String(chunk);
     });
+    this.process.stderr.once('end', () => this.flushStderr());
+    this.process.stderr.once('close', () => this.flushStderr());
+    this.process.stderr.on('error', error => this.handleProcessFailure(error));
+    this.process.stdout.once('end', () => {
+      this.handleProcessFailure(new Error('OpenCode ACP stdout closed'));
+    });
+    this.process.stdout.on('error', error => this.handleProcessFailure(error));
     this.process.once('exit', (code, signal) => {
-      this.handleProcessFailure(new Error(`OpenCode ACP process exited (${code ?? signal ?? 'unknown'})`));
+      this.handleProcessFailure(new Error(`OpenCode ACP process exited (${code ?? signal ?? 'unknown'})`), false);
     });
     this.process.on('error', error => this.handleProcessFailure(error));
 
@@ -115,6 +122,11 @@ export class OpenCodeAcpTransport implements OpenCodeAcpConnection {
       .onRequest(methods.client.session.requestPermission, context => this.handlers.onPermission(context.params))
       .onNotification(methods.client.session.update, context => this.handlers.onSessionUpdate(context.params));
     this.connection = app.connect(stream);
+    void this.connection.closed.then(() => {
+      if (this.closed) return;
+      const reason = this.connection.signal.reason;
+      this.handleProcessFailure(reason ?? new Error('OpenCode ACP stream closed'));
+    });
   }
 
   async initialize(): Promise<InitializeResponse> {
@@ -164,6 +176,7 @@ export class OpenCodeAcpTransport implements OpenCodeAcpConnection {
     if (this.closed) return;
     this.closed = true;
     const error = new Error('OpenCode ACP transport closed');
+    this.flushStderr();
     this.rejectPending(error);
     this.connection.close(error);
     this.process.stdin.end();
@@ -200,12 +213,24 @@ export class OpenCodeAcpTransport implements OpenCodeAcpConnection {
     settle();
   }
 
-  private handleProcessFailure(error: Error): void {
+  private flushStderr(): void {
+    if (!this.stderrBuffer) return;
+    const message = redactSensitiveText(this.stderrBuffer).trim();
+    this.stderrBuffer = '';
+    if (message) this.handlers.onStderr?.(message);
+  }
+
+  private handleProcessFailure(error: unknown, terminate = true): void {
     if (this.closed) return;
     this.closed = true;
+    this.flushStderr();
     const safeError = new Error(redactErrorMessage(error));
     this.rejectPending(safeError);
     this.connection.close(safeError);
+    if (terminate) {
+      this.process.stdin.end();
+      this.process.kill('SIGTERM');
+    }
   }
 
   private rejectPending(error: Error): void {

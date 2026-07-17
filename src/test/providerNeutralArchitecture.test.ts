@@ -41,6 +41,21 @@ describe('complete provider-neutral workspace architecture', () => {
     expect(threadListener).toBeLessThan(readyHandlerEnd);
   });
 
+
+  it('keeps generic Discord task controls independent from Factory Floor', () => {
+    const paths = [
+      'src/commands/turnIntoTask.ts',
+      'src/discord/taskControl.ts',
+      'src/discord/taskControlHandler.ts',
+    ];
+
+    for (const relativePath of paths) {
+      const source = readFileSync(join(root, relativePath), 'utf8');
+      expect(source, relativePath).not.toMatch(/factory[-_ ]floor/i);
+      expect(source, relativePath).not.toMatch(/from ['"][^'"]*factory-floor/i);
+    }
+  });
+
   it('uses provider-neutral package and operator documentation', () => {
     const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
       name: string;
@@ -60,11 +75,14 @@ describe('complete provider-neutral workspace architecture', () => {
     expect(readme).toMatch(/Claude and Codex adapters/i);
     expect(readme).toMatch(/persistent primary-agent chat/i);
     expect(readme).toMatch(/quiet usage admission/i);
+    expect(readme).toMatch(/Turn into task/i);
+    expect(readme).toMatch(/Durable task controls/i);
     expect(readme).toMatch(/redact.*before.*SQLite.*Discord.*logs/is);
     expect(operatorGuide).toMatch(/TaskCoordinator/);
     expect(operatorGuide).toMatch(/ClaudeProvider/);
     expect(architecture).toMatch(/persist the provider session before awaiting completion/is);
     expect(architecture).toMatch(/redacted before persistence, Discord, and logs/is);
+    expect(architecture).toMatch(/TaskControlSurface/);
 
     const addProject = readFileSync(join(root, 'src/commands/addProject.ts'), 'utf8');
     expect(addProject).toMatch(/non-git.*cannot start.*Git/is);

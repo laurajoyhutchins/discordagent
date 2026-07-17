@@ -1,6 +1,10 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { ApplicationCommandType, ContextMenuCommandBuilder, SlashCommandBuilder } from 'discord.js';
 
 export const commands = [
+  new ContextMenuCommandBuilder()
+    .setName('Turn into task')
+    .setType(ApplicationCommandType.Message),
+
   new SlashCommandBuilder()
     .setName('add-project')
     .setDescription('Register a project for agent orchestration')

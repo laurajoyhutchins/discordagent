@@ -13,11 +13,14 @@ import { handleModel } from '../commands/model.js';
 import { handleProvider } from '../commands/provider.js';
 import { stopLoopFromButton } from '../services/loopRunner.js';
 import { handleCodexAuth, handleCodexAuthButton } from '../commands/codexAuth.js';
+import { handleTurnIntoTask } from '../commands/turnIntoTask.js';
+import { handleTaskControlButton } from '../discord/taskControlHandler.js';
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   // Handle button interactions (e.g., loop stop button)
   if (interaction.isButton()) {
     if (await handleCodexAuthButton(interaction)) return;
+    if (await handleTaskControlButton(interaction)) return;
     if (interaction.customId.startsWith('loop_stop_')) {
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
       if (!isAuthorized(member)) {
@@ -31,6 +34,15 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
     }
 
     // Task-scoped agent components are consumed by InteractionBroker message collectors.
+    return;
+  }
+
+  if (interaction.isMessageContextMenuCommand()) {
+    if (interaction.commandName === 'Turn into task') {
+      await handleTurnIntoTask(interaction);
+      return;
+    }
+    await interaction.reply({ content: 'Unknown message command.', ephemeral: true });
     return;
   }
 

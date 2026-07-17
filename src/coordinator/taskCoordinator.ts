@@ -14,6 +14,7 @@ import type {
 } from '../agents/contracts.js';
 import type { ProviderRegistry } from '../agents/providerRegistry.js';
 import type { InteractionBroker } from '../discord/interactionBroker.js';
+import type { TaskControlSurface } from '../discord/taskControl.js';
 import type { TaskRenderer } from '../discord/taskRenderer.js';
 import type { WorktreeManager } from '../git/worktreeManager.js';
 import type { EventRepository } from '../repositories/eventRepository.js';
@@ -80,6 +81,7 @@ export interface TaskCoordinatorDependencies {
   providers: ProviderRegistry;
   rendererFactory(thread: AnyThreadChannel): TaskRenderer;
   brokerFactory(thread: AnyThreadChannel): InteractionBroker;
+  controlSurface?: TaskControlSurface;
   idFactory?: (prefix: string) => string;
   usage?: UsageAdmissionService;
 }
@@ -97,6 +99,7 @@ export function createTaskCoordinator(
   const idFactory = dependencies.idFactory ?? (prefix => `${prefix}-${randomUUID()}`);
   const activeReservations = new Map<string, string>();
   const interruptionRequested = new Set<string>();
+  const activeThreads = new Map<string, AnyThreadChannel>();
 
   async function validateProjectProvider(
     projectName: string,
@@ -162,6 +165,8 @@ export function createTaskCoordinator(
       throw error;
     }
 
+    activeThreads.set(taskId, input.thread);
+
     if (input.reservationId && dependencies.usage) {
       try {
         dependencies.usage.attach(input.reservationId, taskId);
@@ -169,7 +174,7 @@ export function createTaskCoordinator(
       } catch (error) {
         dependencies.usage.release(input.reservationId);
         const failed = dependencies.tasks.transition(taskId, ['created'], 'failed');
-        dependencies.tasks.saveResult(taskId, {
+        const result: TaskResult = {
           provider: failed.provider,
           outcome: 'failed',
           exitType: 'usage_reservation_attach_failed',
@@ -177,12 +182,16 @@ export function createTaskCoordinator(
           completedAt: Date.now(),
           summary: 'The task was preserved but could not attach its usage reservation.',
           error: { code: 'usage_reservation_attach_failed', message: redactErrorMessage(error), retryable: true },
-        });
+        };
+        dependencies.tasks.saveResult(taskId, result);
+        await updateControlSafely(input.thread, failed, result);
+        activeThreads.delete(taskId);
         throw error;
       }
     }
 
-    dependencies.tasks.transition(taskId, ['created'], 'starting');
+    const starting = dependencies.tasks.transition(taskId, ['created'], 'starting');
+    await updateControlSafely(input.thread, starting);
     const renderer = dependencies.rendererFactory(input.thread);
     const broker = dependencies.brokerFactory(input.thread);
     renderer.start(input.thread);
@@ -232,7 +241,7 @@ export function createTaskCoordinator(
         : await input.provider.startTask(providerInput, host);
     } catch (error) {
       gate.resolve();
-      return failStartingTask(input.taskId, input.provider.id, input.renderer, error, input.reservationId);
+      return failStartingTask(input.taskId, input.provider.id, input.renderer, input.thread, error, input.reservationId);
     }
 
     if (!input.session) {
@@ -244,12 +253,14 @@ export function createTaskCoordinator(
         input.taskId,
         input.provider.id,
         input.renderer,
+        input.thread,
         new Error('Provider continuation returned a different session identity'),
         input.reservationId,
       );
     }
 
-    dependencies.tasks.transition(input.taskId, ['starting'], 'running');
+    const running = dependencies.tasks.transition(input.taskId, ['starting'], 'running');
+    await updateControlSafely(input.thread, running);
     gate.resolve();
 
     let result: TaskResult;
@@ -268,7 +279,7 @@ export function createTaskCoordinator(
         error: { code: 'provider_completion_failed', message, retryable: true },
       };
     }
-    return finalizeTask(input.taskId, result, input.renderer, input.reservationId);
+    return finalizeTask(input.taskId, result, input.renderer, input.thread, input.reservationId);
   }
 
   function createHost(
@@ -285,13 +296,15 @@ export function createTaskCoordinator(
       if (!before || before.status !== 'running') {
         throw new Error(`Task "${taskId}" is not running and cannot request user input`);
       }
-      dependencies.tasks.transition(taskId, ['running'], 'waiting_for_user');
+      const waiting = dependencies.tasks.transition(taskId, ['running'], 'waiting_for_user');
+      await updateControlSafely(thread, waiting);
       try {
         return await operation();
       } finally {
         const after = dependencies.tasks.findById(taskId);
         if (after?.status === 'waiting_for_user') {
-          dependencies.tasks.transition(taskId, ['waiting_for_user'], 'running');
+          const running = dependencies.tasks.transition(taskId, ['waiting_for_user'], 'running');
+          await updateControlSafely(thread, running);
         }
       }
     }
@@ -342,6 +355,7 @@ export function createTaskCoordinator(
     taskId: string,
     provider: AgentProviderId,
     renderer: TaskRenderer,
+    thread: AnyThreadChannel,
     error: unknown,
     reservationId?: string,
   ): Promise<TaskRecord> {
@@ -373,6 +387,8 @@ export function createTaskCoordinator(
     if (reservationId && dependencies.usage) dependencies.usage.complete(reservationId, safeStored);
     activeReservations.delete(taskId);
     interruptionRequested.delete(taskId);
+    await updateControlSafely(thread, dependencies.tasks.findById(taskId)!, safeStored);
+    activeThreads.delete(taskId);
     await finishRendererSafely(renderer, safeStored);
     return dependencies.tasks.findById(taskId)!;
   }
@@ -381,6 +397,7 @@ export function createTaskCoordinator(
     taskId: string,
     result: TaskResult,
     renderer: TaskRenderer,
+    thread: AnyThreadChannel,
     reservationId?: string,
   ): Promise<TaskRecord> {
     const worktree = dependencies.tasks.getWorktree(taskId);
@@ -410,6 +427,8 @@ export function createTaskCoordinator(
     if (reservationId && dependencies.usage) dependencies.usage.complete(reservationId, safeResult);
     activeReservations.delete(taskId);
     interruptionRequested.delete(taskId);
+    await updateControlSafely(thread, dependencies.tasks.findById(taskId)!, safeResult);
+    activeThreads.delete(taskId);
     await finishRendererSafely(renderer, safeResult);
     return dependencies.tasks.findById(taskId)!;
   }
@@ -434,7 +453,9 @@ export function createTaskCoordinator(
     const reservation = await dependencies.usage?.reserve({ provider: task.provider, prompt: input.prompt });
 
     try {
-      dependencies.tasks.reopenForContinuation(task.id);
+      const starting = dependencies.tasks.reopenForContinuation(task.id);
+      activeThreads.set(task.id, input.thread);
+      await updateControlSafely(input.thread, starting);
       if (reservation && dependencies.usage) {
         dependencies.usage.attach(reservation.id, task.id);
         activeReservations.set(task.id, reservation.id);
@@ -466,6 +487,17 @@ export function createTaskCoordinator(
       }
       throw error;
     }
+  }
+
+  async function updateControlSafely(
+    thread: AnyThreadChannel,
+    task: TaskRecord,
+    result?: TaskResult,
+  ): Promise<void> {
+    if (!dependencies.controlSurface) return;
+    await dependencies.controlSurface.update(thread, task, result).catch(error => {
+      console.warn('[taskCoordinator] Failed to update task controls:', redactErrorMessage(error));
+    });
   }
 
   return {
@@ -518,8 +550,14 @@ export function createTaskCoordinator(
       const provider = dependencies.providers.require(task.provider);
       await provider.cancelTask(task.providerSessionId ?? task.id);
       const current = dependencies.tasks.findById(task.id);
+      let cancelled = current;
       if (current && !TERMINAL_STATUSES.has(current.status)) {
-        dependencies.tasks.transition(task.id, [current.status], 'cancelled');
+        cancelled = dependencies.tasks.transition(task.id, [current.status], 'cancelled');
+      }
+      const thread = activeThreads.get(task.id);
+      if (thread && cancelled) {
+        await updateControlSafely(thread, cancelled, dependencies.tasks.getResult(task.id));
+        activeThreads.delete(task.id);
       }
       const reservationId = activeReservations.get(task.id);
       if (reservationId && dependencies.usage) {

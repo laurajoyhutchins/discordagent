@@ -9,6 +9,8 @@ Discord Agent provides a provider-neutral runtime with executable Claude and Cod
 - **Persistent primary-agent chat** — a private `#agent-chat` channel provides one PM-style point of contact for natural conversation, planning, delegation, and concise reporting.
 - **Natural-language project channels** — each registered project receives a private `#agent` channel.
 - **Task threads** — each new prompt creates a Discord thread representing one durable agent task and one immutable provider session.
+- **Message-to-task intake** — use the **Turn into task** message action on an existing project-channel message to create a normal isolated task from that exact text.
+- **Durable task controls** — every task thread receives one editable control card with provider-neutral state, result details, **Inspect**, and active-task **Cancel** controls.
 - **Isolated Git worktrees** — each Git-backed task receives its own branch and writable worktree before provider execution begins.
 - **Durable state** — projects, tasks, worktrees, provider sessions, events, results, and recovery checkpoints are stored in SQLite.
 - **Claude and Codex adapters** — Claude uses the Agent SDK; Codex uses the local App Server JSONL protocol behind the same provider contract.
@@ -80,7 +82,7 @@ npm start
 
 ## Discord bot permissions
 
-The bot requires the message-content and server-members privileged intents. It needs permission to view channels, send messages, embed links, create and manage threads, and create/delete project channels. Roborev uses the bot identity; `Manage Webhooks` is no longer required by Discord Agent itself.
+The bot requires the message-content and server-members privileged intents. It needs permission to view channels, read message history, send messages, embed links, create and manage threads, and create/delete project channels. Roborev uses the bot identity; `Manage Webhooks` is no longer required by Discord Agent itself.
 
 ## Registering a project
 
@@ -92,7 +94,9 @@ Run this in the configured guild:
 
 The bot creates a category named for the project and a private `#agent` channel. When Roborev is enabled, it also creates `#roborev`.
 
-Send a normal message in `#agent` to create a task. Discord Agent will:
+Send a normal message in `#agent` to create a task. You can also open a message's context menu and choose **Apps → Turn into task** to use that message as the task objective. Messages that already own a thread are rejected to avoid duplicate task threads.
+
+Discord Agent will:
 
 1. select the project's default provider;
 2. create a Discord task thread;
@@ -100,7 +104,8 @@ Send a normal message in `#agent` to create a task. Discord Agent will:
 4. persist the task and worktree mapping;
 5. start the provider and persist its session identity;
 6. stream normalized events into the thread;
-7. store the result while preserving the thread for later continuation.
+7. keep one task control card synchronized with durable state;
+8. store the result while preserving the thread for later continuation.
 
 ## Commands
 
@@ -118,7 +123,9 @@ Send a normal message in `#agent` to create a task. Discord Agent will:
 | `/usage` | Show provider windows, operating posture, and active reservations. |
 | `/codex-auth status\|login\|logout` | Check, establish, or revoke Codex authentication using owner-only ephemeral controls. |
 
-Text commands in `#agent` include `/provider`, `/model`, `/loop`, `/stop-loop`, and `/status`. Ordinary natural-language messages are the default interface.
+Text commands in `#agent` include `/provider`, `/model`, `/loop`, `/stop-loop`, and `/status`. Ordinary natural-language messages are the default interface. The **Turn into task** message action is available only for messages in a registered project `#agent` channel.
+
+Task control cards are projections of SQLite state, not a second task store. **Inspect** returns the current task/result privately. **Cancel** delegates to the same coordinator used by `/cancel`, and is removed once the task becomes terminal. After completion, failure, or interruption, send a new message in the task thread to continue explicitly with the preserved provider session and worktree; no turn is replayed automatically.
 
 ## Provider behavior
 

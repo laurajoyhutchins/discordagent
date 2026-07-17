@@ -15,6 +15,7 @@ import { ProviderRegistry } from '../agents/providerRegistry.js';
 import { openDatabase, type DatabaseHandle } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import type { InteractionBroker } from '../discord/interactionBroker.js';
+import type { TaskControlSurface } from '../discord/taskControl.js';
 import type { TaskRenderer } from '../discord/taskRenderer.js';
 import type { CreatedWorktree, WorktreeManager } from '../git/worktreeManager.js';
 import { createEventRepository } from '../repositories/eventRepository.js';
@@ -177,6 +178,10 @@ function setup(order: string[] = []) {
   providers.register(provider);
   const renderers: FakeRenderer[] = [];
   const broker = new FakeBroker();
+  const controlUpdates: Array<{ status: TaskRecord['status']; result?: TaskResult }> = [];
+  const controlSurface: TaskControlSurface = {
+    async update(_thread, task, result) { controlUpdates.push({ status: task.status, ...(result ? { result } : {}) }); },
+  };
   let id = 0;
   const coordinator = createTaskCoordinator({
     projects,
@@ -190,10 +195,11 @@ function setup(order: string[] = []) {
       return renderer;
     },
     brokerFactory: () => broker,
+    controlSurface,
     idFactory: prefix => `${prefix}-${++id}`,
   });
   return {
-    coordinator, tasks: baseTasks, events, provider, renderers, broker,
+    coordinator, tasks: baseTasks, events, provider, renderers, broker, controlSurface, controlUpdates,
     worktree, worktrees, removeCount: () => removeCount, removedInputs,
   };
 }
@@ -251,6 +257,12 @@ describe('TaskCoordinator', () => {
     expect(context.renderers[0].results[0]).toMatchObject({
       outcome: 'completed', branchName: context.worktree.branchName,
     });
+    expect(context.controlUpdates.map(update => update.status)).toEqual([
+      'starting', 'running', 'completed',
+    ]);
+    expect(context.controlUpdates.at(-1)?.result).toMatchObject({
+      outcome: 'completed', branchName: context.worktree.branchName,
+    });
   });
 
   it('rejects an unavailable provider before creating a Discord thread or worktree', async () => {
@@ -286,6 +298,9 @@ describe('TaskCoordinator', () => {
 
     expect(task.status).toBe('completed');
     expect(order).toEqual(expect.arrayContaining(['waiting_for_user', 'running']));
+    expect(context.controlUpdates.map(update => update.status)).toEqual([
+      'starting', 'running', 'waiting_for_user', 'running', 'completed',
+    ]);
     expect(context.broker.approvals).toBe(1);
     expect(context.broker.lastThread?.id).toBe('thread-123456');
     expect(context.events.list(task.id).map(entry => entry.event.type)).toContain('approval_request');
@@ -329,6 +344,20 @@ describe('TaskCoordinator', () => {
       expect(approval).not.toContain(secret);
       expect(result).not.toContain(secret);
     }
+  });
+
+  it('does not fail durable work when Discord task-control updates fail', async () => {
+    const context = setup();
+    context.controlSurface.update = async () => { throw new Error('Discord unavailable'); };
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'control-failure-session', createdAt: 11 },
+      completion: Promise.resolve(completed('control-failure-session')),
+    });
+
+    await expect(context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Keep work independent from Discord rendering',
+      message: new FakeMessage(new FakeThread('thread-control-failure')) as unknown as Message,
+    })).resolves.toMatchObject({ status: 'completed' });
   });
 
   it('continues only with the immutable task provider and existing worktree/session', async () => {

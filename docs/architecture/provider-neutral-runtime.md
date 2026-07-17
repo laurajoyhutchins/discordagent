@@ -18,6 +18,7 @@ project #agent / task thread
       ├── ClaudeProvider → Claude Agent SDK
       └── CodexProvider → local Codex App Server JSON-RPC
   → normalized events → SQLite + DiscordTaskRenderer
+  → durable status transitions → optional TaskControlSurface
 ```
 
 ## Task lifecycle
@@ -33,9 +34,12 @@ A new task follows this order:
 7. start the provider;
 8. persist the provider session before awaiting completion;
 9. stream redacted normalized events;
-10. persist the terminal result and calibrate actual usage.
+10. persist the terminal result and calibrate actual usage;
+11. refresh the thread's provider-neutral task control card after each durable transition.
 
-Admission happens before Discord or Git side effects. A rejected task creates neither a thread nor a worktree. Continuations reserve a new turn budget while retaining the same task, provider session, branch, and worktree.
+Admission happens before Discord or Git side effects. A rejected task creates neither a thread nor a worktree. Continuations reserve a new turn budget while retaining the same task, provider session, branch, and worktree. A message context action may supply an existing project-channel message as the objective, but it still enters through the same coordinator boundary.
+
+`TaskControlSurface` is an optional frontend port. Its Discord implementation upserts one control message per task thread by stable task-scoped component IDs. It reads `TaskRecord` and `TaskResult` only; control-message failures are logged after redaction and never change task state or provider execution.
 
 ## Providers
 
@@ -57,4 +61,4 @@ Operating postures are `unknown`, `healthy`, `cautious`, `restricted`, `preserve
 
 ## Recovery and safety
 
-Startup marks nonterminal tasks interrupted and never replays a possibly side-effecting turn. Dirty worktrees are never force-removed. Provider events and errors are redacted before persistence, Discord, and logs. Git commands use argument arrays with `shell: false`. Roborev posts through the authenticated bot and stores no webhook credentials.
+Startup marks nonterminal tasks interrupted and never replays a possibly side-effecting turn. Recovery posts a checkpoint and refreshes the task control card so **Inspect** reflects the durable interrupted state. Dirty worktrees are never force-removed. Provider events and errors are redacted before persistence, Discord, and logs. Git commands use argument arrays with `shell: false`. Roborev posts through the authenticated bot and stores no webhook credentials.

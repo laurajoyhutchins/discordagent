@@ -5,6 +5,7 @@ import { ClaudeProvider } from '../agents/claude/claudeProvider.js';
 import { ProviderRegistry } from '../agents/providerRegistry.js';
 import { createTaskCoordinator, type TaskCoordinator } from '../coordinator/taskCoordinator.js';
 import { DiscordInteractionBroker } from '../discord/interactionBroker.js';
+import { DiscordTaskControlSurface, type TaskControlSurface } from '../discord/taskControl.js';
 import { DiscordTaskRenderer } from '../discord/taskRenderer.js';
 import { createGitClient, type GitClient } from '../git/gitClient.js';
 import { createWorktreeManager, type WorktreeManager } from '../git/worktreeManager.js';
@@ -54,6 +55,7 @@ export interface RuntimeOptions {
   primaryModel?: PrimaryModel;
   disablePrimaryAgent?: boolean;
   disableUsagePolling?: boolean;
+  taskControlSurface?: TaskControlSurface;
 }
 
 export interface RuntimeServices {
@@ -152,6 +154,7 @@ export async function startRuntime(
       providers.register(codexProvider);
     }
 
+    const taskControlSurface = options.taskControlSurface ?? new DiscordTaskControlSurface();
     const coordinator = createTaskCoordinator({
       projects,
       tasks,
@@ -161,6 +164,7 @@ export async function startRuntime(
       usage,
       rendererFactory: () => new DiscordTaskRenderer({ notifyUserId: config.notifyUserId }),
       brokerFactory: () => new DiscordInteractionBroker(),
+      controlSurface: taskControlSurface,
     });
 
     const pendingTasks = createPendingTaskService(coordinator);
@@ -220,7 +224,7 @@ export async function startRuntime(
         try { usage.release(reservation.id); } catch { /* already finalized */ }
       }
     }
-    await notifyRecoveredTasks(client, recoveredTasks, events);
+    await notifyRecoveredTasks(client, recoveredTasks, events, tasks, taskControlSurface);
 
     return { database, projects, tasks, events, messages, memories, worktrees, providers, coordinator, usage, pendingTasks, ...(usagePoll ? { usagePoll } : {}), ...(usageUnsubscribe ? { usageUnsubscribe } : {}), ...(primaryAgent ? { primaryAgent } : {}), ...(codexTransport ? { codexTransport } : {}), ...(codexAuth ? { codexAuth } : {}) };
   } catch (error) {
@@ -255,6 +259,8 @@ async function notifyRecoveredTasks(
   client: Client,
   recoveredTasks: readonly import('../types.js').TaskRecord[],
   events: EventRepository,
+  tasks: TaskRepository,
+  controlSurface: TaskControlSurface,
 ): Promise<void> {
   for (const task of recoveredTasks) {
     const channel = await client.channels?.fetch(task.threadId).catch(() => null);
@@ -279,5 +285,10 @@ async function notifyRecoveredTasks(
     await channel.send({ content }).catch(error => {
       console.warn(`[runtime] Failed to post recovery checkpoint for task ${task.id}:`, redactErrorMessage(error));
     });
+    if (channel.isThread()) {
+      await controlSurface.update(channel, task, tasks.getResult(task.id)).catch(error => {
+        console.warn(`[runtime] Failed to refresh task controls for task ${task.id}:`, redactErrorMessage(error));
+      });
+    }
   }
 }

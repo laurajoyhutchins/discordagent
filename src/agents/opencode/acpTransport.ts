@@ -6,14 +6,25 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
   type ClientConnection,
-  type RequestPermissionResponse,
+} from '@agentclientprotocol/sdk';
+import type {
+  InitializeRequest,
+  InitializeResponse,
+  LoadSessionResponse,
+  NewSessionResponse,
+  PromptResponse,
+  RequestPermissionRequest,
+  RequestPermissionResponse,
+  ResumeSessionResponse,
+  SessionNotification,
+  SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk';
 import { buildProcessInvocation } from '../../utils/processInvocation.js';
 import { redactErrorMessage, redactSensitiveText } from '../../utils/redaction.js';
 
 export interface OpenCodeAcpHandlers {
-  onSessionUpdate(params: unknown): Promise<void> | void;
-  onPermission(params: unknown): Promise<unknown>;
+  onSessionUpdate(params: SessionNotification): Promise<void> | void;
+  onPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse>;
   onStderr?(message: string): void;
 }
 
@@ -40,12 +51,12 @@ export interface OpenCodeAcpTransportOptions {
 }
 
 export interface OpenCodeAcpConnection {
-  initialize(): Promise<unknown>;
-  newSession(cwd: string): Promise<unknown>;
-  loadSession(sessionId: string, cwd: string): Promise<unknown>;
-  resumeSession?(sessionId: string, cwd: string): Promise<unknown>;
-  setSessionConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<unknown>;
-  prompt(sessionId: string, text: string): Promise<unknown>;
+  initialize(): Promise<InitializeResponse>;
+  newSession(cwd: string): Promise<NewSessionResponse>;
+  loadSession(sessionId: string, cwd: string): Promise<LoadSessionResponse>;
+  resumeSession?(sessionId: string, cwd: string): Promise<ResumeSessionResponse>;
+  setSessionConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<SetSessionConfigOptionResponse>;
+  prompt(sessionId: string, text: string): Promise<PromptResponse>;
   cancel(sessionId: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -57,7 +68,7 @@ interface PendingOperation {
 }
 
 const noopSessionUpdate = (): void => {};
-const cancelledPermission = async (): Promise<unknown> => ({ outcome: { outcome: 'cancelled' } });
+const cancelledPermission = async (): Promise<RequestPermissionResponse> => ({ outcome: { outcome: 'cancelled' } });
 
 export class OpenCodeAcpTransport implements OpenCodeAcpConnection {
   private readonly process: OpenCodeAcpProcess;
@@ -65,7 +76,7 @@ export class OpenCodeAcpTransport implements OpenCodeAcpConnection {
   private readonly connection: ClientConnection;
   private readonly pending = new Set<PendingOperation>();
   private closed = false;
-  private handshake: unknown;
+  private handshake?: InitializeResponse;
 
   constructor(options: OpenCodeAcpTransportOptions = {}) {
     this.handlers = {
@@ -101,45 +112,44 @@ export class OpenCodeAcpTransport implements OpenCodeAcpConnection {
       Readable.toWeb(this.process.stdout) as ReadableStream<Uint8Array>,
     );
     const app = client({ name: 'discord-agent' })
-      .onRequest(methods.client.session.requestPermission, async context => (
-        await this.handlers.onPermission(context.params) as RequestPermissionResponse
-      ))
+      .onRequest(methods.client.session.requestPermission, context => this.handlers.onPermission(context.params))
       .onNotification(methods.client.session.update, context => this.handlers.onSessionUpdate(context.params));
     this.connection = app.connect(stream);
   }
 
-  async initialize(): Promise<unknown> {
+  async initialize(): Promise<InitializeResponse> {
     return this.execute(async () => {
-      const response = await this.connection.agent.request(methods.agent.initialize, {
+      const request: InitializeRequest = {
         protocolVersion: PROTOCOL_VERSION,
         clientInfo: { name: 'discord-agent', version: '1.0.0' },
         clientCapabilities: {},
-      });
+      };
+      const response = await this.connection.agent.request(methods.agent.initialize, request);
       this.handshake = response;
       return response;
     });
   }
 
-  newSession(cwd: string): Promise<unknown> {
+  newSession(cwd: string): Promise<NewSessionResponse> {
     return this.execute(() => this.connection.agent.request(methods.agent.session.new, { cwd, mcpServers: [] }));
   }
 
-  loadSession(sessionId: string, cwd: string): Promise<unknown> {
+  loadSession(sessionId: string, cwd: string): Promise<LoadSessionResponse> {
     return this.execute(() => this.connection.agent.request(methods.agent.session.load, { sessionId, cwd, mcpServers: [] }));
   }
 
-  resumeSession(sessionId: string, cwd: string): Promise<unknown> {
+  resumeSession(sessionId: string, cwd: string): Promise<ResumeSessionResponse> {
     return this.execute(() => this.connection.agent.request(methods.agent.session.resume, { sessionId, cwd, mcpServers: [] }));
   }
 
-  setSessionConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<unknown> {
+  setSessionConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<SetSessionConfigOptionResponse> {
     const params = typeof value === 'boolean'
       ? { sessionId, configId, type: 'boolean' as const, value }
       : { sessionId, configId, value };
     return this.execute(() => this.connection.agent.request(methods.agent.session.setConfigOption, params));
   }
 
-  prompt(sessionId: string, text: string): Promise<unknown> {
+  prompt(sessionId: string, text: string): Promise<PromptResponse> {
     return this.execute(() => this.connection.agent.request(methods.agent.session.prompt, {
       sessionId,
       prompt: [{ type: 'text', text }],

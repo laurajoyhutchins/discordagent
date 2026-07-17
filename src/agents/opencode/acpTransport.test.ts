@@ -1,8 +1,22 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import type {
+  InitializeRequest,
+  InitializeResponse,
+  LoadSessionResponse,
+  NewSessionResponse,
+  PromptResponse,
+  RequestPermissionRequest,
+  RequestPermissionResponse,
+  ResumeSessionResponse,
+  SessionNotification,
+  SetSessionConfigOptionResponse,
+} from '@agentclientprotocol/sdk';
 import { buildProcessInvocation } from '../../utils/processInvocation.js';
 import {
+  type OpenCodeAcpConnection,
+  type OpenCodeAcpHandlers,
   OpenCodeAcpTransport,
   type OpenCodeAcpProcess,
 } from './acpTransport.js';
@@ -52,6 +66,37 @@ class FakeProcess extends EventEmitter implements OpenCodeAcpProcess {
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 describe('OpenCodeAcpTransport', () => {
+  it('exposes generated ACP types through the transport seam', () => {
+    expectTypeOf<OpenCodeAcpConnection['initialize']>().toEqualTypeOf<
+      () => Promise<InitializeResponse>
+    >();
+    expectTypeOf<OpenCodeAcpConnection['newSession']>().toEqualTypeOf<
+      (cwd: string) => Promise<NewSessionResponse>
+    >();
+    expectTypeOf<OpenCodeAcpConnection['loadSession']>().toEqualTypeOf<
+      (sessionId: string, cwd: string) => Promise<LoadSessionResponse>
+    >();
+    expectTypeOf<OpenCodeAcpConnection['resumeSession']>().toEqualTypeOf<
+      ((sessionId: string, cwd: string) => Promise<ResumeSessionResponse>) | undefined
+    >();
+    expectTypeOf<OpenCodeAcpConnection['setSessionConfigOption']>().toEqualTypeOf<
+      (sessionId: string, configId: string, value: string | boolean) => Promise<SetSessionConfigOptionResponse>
+    >();
+    expectTypeOf<OpenCodeAcpConnection['prompt']>().toEqualTypeOf<
+      (sessionId: string, text: string) => Promise<PromptResponse>
+    >();
+    expectTypeOf<OpenCodeAcpHandlers['onSessionUpdate']>().toEqualTypeOf<
+      (params: SessionNotification) => Promise<void> | void
+    >();
+    expectTypeOf<OpenCodeAcpHandlers['onPermission']>().toEqualTypeOf<
+      (params: RequestPermissionRequest) => Promise<RequestPermissionResponse>
+    >();
+    expectTypeOf<InitializeRequest>().toMatchTypeOf<{
+      protocolVersion: number;
+      clientCapabilities?: object;
+    }>();
+  });
+
   it('launches opencode acp through the shell-free invocation helper', async () => {
     const process = new FakeProcess();
     let invocation: { command: string; args: readonly string[] } | undefined;

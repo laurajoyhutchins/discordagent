@@ -17,13 +17,38 @@ import {
 
 type RecordValue = Record<string, unknown>;
 
-export function adaptSessionUpdate(params: unknown): AgentEvent[] {
-  const root = isRecord(params) ? params : undefined;
-  const update = root && isRecord(root.update) ? root.update : root;
-  if (!update) return [];
+export interface OpenCodeEventAdapter {
+  adaptSessionUpdate(params: unknown): AgentEvent[];
+}
 
-  const events = adaptUpdate(update);
-  return events.map(redactAgentEvent);
+export function adaptSessionUpdate(params: unknown): AgentEvent[] {
+  return createOpenCodeEventAdapter().adaptSessionUpdate(params);
+}
+
+export function createOpenCodeEventAdapter(): OpenCodeEventAdapter {
+  const toolCalls = new Map<string, RecordValue>();
+  const terminalStates = new Map<string, Set<ToolState>>();
+  let sessionId: string | undefined;
+
+  return {
+    adaptSessionUpdate(params: unknown): AgentEvent[] {
+      const root = isRecord(params) ? params : undefined;
+      if (root) {
+        const nextSessionId = stringValue(root.sessionId);
+        if (nextSessionId && sessionId && nextSessionId !== sessionId) {
+          toolCalls.clear();
+          terminalStates.clear();
+        }
+        if (nextSessionId) sessionId = nextSessionId;
+      }
+
+      const update = root && isRecord(root.update) ? root.update : root;
+      if (!update) return [];
+
+      const events = adaptUpdate(update, toolCalls, terminalStates);
+      return events.map(redactAgentEvent);
+    },
+  };
 }
 
 export function approvalRequestFromAcp(params: unknown): ApprovalRequest {
@@ -95,7 +120,11 @@ export function taskResultFromPrompt(input: {
   return redactTaskResult(result);
 }
 
-function adaptUpdate(update: RecordValue): AgentEvent[] {
+function adaptUpdate(
+  update: RecordValue,
+  toolCalls: Map<string, RecordValue>,
+  terminalStates: Map<string, Set<ToolState>>,
+): AgentEvent[] {
   switch (update.sessionUpdate) {
     case 'agent_message_chunk':
       return textChunk(update);
@@ -109,9 +138,9 @@ function adaptUpdate(update: RecordValue): AgentEvent[] {
       return planEvent(plan.entries);
     }
     case 'tool_call':
-      return toolEvents(update, 'requested');
+      return toolEvents(update, 'requested', toolCalls, terminalStates);
     case 'tool_call_update':
-      return toolEvents(update, 'running');
+      return toolEvents(update, 'running', toolCalls, terminalStates);
     case 'usage_update':
       return usageEvent(update);
     default:
@@ -140,14 +169,32 @@ function planEvent(value: unknown): AgentEvent[] {
   return [{ type: 'plan', items }];
 }
 
-function toolEvents(update: RecordValue, fallback: ToolState): AgentEvent[] {
+function toolEvents(
+  update: RecordValue,
+  fallback: ToolState,
+  toolCalls: Map<string, RecordValue>,
+  terminalStates: Map<string, Set<ToolState>>,
+): AgentEvent[] {
+  const toolCallId = stringValue(update.toolCallId);
+  const previous = toolCallId ? toolCalls.get(toolCallId) : undefined;
+  const merged = mergeDefined(previous, update);
+  if (toolCallId) toolCalls.set(toolCallId, merged);
+
   const title = stringValue(update.title) ?? 'OpenCode tool call';
-  const state = toolState(update.status, fallback);
-  const kind = stringValue(update.kind);
+  const effectiveTitle = stringValue(merged.title) ?? title;
+  const state = toolState(merged.status, fallback);
+  const kind = stringValue(merged.kind);
+  if (toolCallId && (state === 'completed' || state === 'failed')) {
+    const seenTerminalStates = terminalStates.get(toolCallId) ?? new Set<ToolState>();
+    if (seenTerminalStates.has(state)) return [];
+    seenTerminalStates.add(state);
+    terminalStates.set(toolCallId, seenTerminalStates);
+  }
+
   if (kind === 'execute') {
-    const commandInput = commandInputText(update.rawInput);
-    const command = commandInput ? `${title} ${commandInput}` : title;
-    const output = serialized(update.rawOutput);
+    const commandInput = commandInputText(merged.rawInput);
+    const command = commandInput ? `${effectiveTitle} ${commandInput}` : effectiveTitle;
+    const output = serialized(merged.rawOutput);
     return [{
       type: 'command',
       command,
@@ -156,12 +203,12 @@ function toolEvents(update: RecordValue, fallback: ToolState): AgentEvent[] {
     }];
   }
 
-  const detail = toolDetail(update);
+  const detail = toolDetail(merged);
   if (kind === 'edit' || kind === 'delete' || kind === 'move') {
     return [{
       type: 'file_change',
-      paths: toolPaths(update),
-      summary: redactSensitiveText(`${title} (${state})${detail ? `\n${detail}` : ''}`),
+      paths: toolPaths(merged),
+      summary: redactSensitiveText(`${effectiveTitle} (${state})${detail ? `\n${detail}` : ''}`),
     }];
   }
 
@@ -170,6 +217,14 @@ function toolEvents(update: RecordValue, fallback: ToolState): AgentEvent[] {
     phase: `tool:${kind ?? 'unknown'}:${state}`,
     ...(detail ? { detail } : {}),
   }];
+}
+
+function mergeDefined(previous: RecordValue | undefined, update: RecordValue): RecordValue {
+  const merged: RecordValue = { ...(previous ?? {}) };
+  for (const [key, value] of Object.entries(update)) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged;
 }
 
 function toolDetail(update: RecordValue): string | undefined {

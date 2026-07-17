@@ -3,6 +3,7 @@ import type { ApprovalDecision } from '../contracts.js';
 import {
   adaptSessionUpdate,
   approvalRequestFromAcp,
+  createOpenCodeEventAdapter,
   permissionOutcome,
   taskResultFromPrompt,
 } from './opencodeEventAdapter.js';
@@ -98,6 +99,51 @@ describe('adaptSessionUpdate', () => {
     expect(adaptSessionUpdate({ update: { sessionUpdate: 'future_update', secret: 'API_KEY=leak' } })).toEqual([]);
     expect(adaptSessionUpdate({ update: { sessionUpdate: 'agent_message_chunk', content: { type: 'image' } } })).toEqual([]);
     expect(adaptSessionUpdate(null)).toEqual([]);
+  });
+
+  it('merges partial tool updates by id and suppresses duplicate terminal updates', () => {
+    const adapter = createOpenCodeEventAdapter();
+
+    expect(adapter.adaptSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'Run tests', kind: 'execute',
+      status: 'pending', rawInput: { command: 'npm test' },
+    } })).toEqual([{
+      type: 'command', command: 'Run tests npm test', state: 'requested',
+    }]);
+
+    expect(adapter.adaptSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'in_progress',
+      rawOutput: { output: 'working', secret: 'hidden' },
+    } })).toEqual([{
+      type: 'command', command: 'Run tests npm test', state: 'running',
+      output: '{"output":"working","secret":"[REDACTED]"}',
+    }]);
+
+    expect(adapter.adaptSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'completed',
+    } })).toEqual([{
+      type: 'command', command: 'Run tests npm test', state: 'completed',
+      output: '{"output":"working","secret":"[REDACTED]"}',
+    }]);
+    expect(adapter.adaptSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'completed',
+    } })).toEqual([]);
+  });
+
+  it('keeps lifecycle state separate between adapter instances', () => {
+    const first = createOpenCodeEventAdapter();
+    const second = createOpenCodeEventAdapter();
+    const initial = { sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call', toolCallId: 'tool-1', title: 'First title', kind: 'execute',
+      status: 'pending', rawInput: { command: 'first command' },
+    } };
+
+    expect(first.adaptSessionUpdate(initial)).toHaveLength(1);
+    expect(second.adaptSessionUpdate({ sessionId: 'session-2', update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'in_progress',
+    } })).toEqual([{
+      type: 'status', phase: 'tool:unknown:running',
+    }]);
   });
 });
 

@@ -73,7 +73,7 @@ npm run register
 npm run dev
 ```
 
-On the first start, open the private `#agent-chat` channel and choose an available provider. That selection powers the PM chat and becomes the default for new projects. If Codex is selected, complete `/codex-auth login` first when the setup prompt asks for it. Claude and Codex are both optional at runtime; set `CLAUDE_ENABLED=false` for a Codex-only host.
+On the first start, open the private `#agent-chat` channel and choose an available provider. That selection powers the PM chat and becomes the default for new projects. If Codex is selected, complete `/codex-auth login` first when the setup prompt asks for it. Claude, Codex, and OpenCode are optional at runtime; set `CLAUDE_ENABLED=false` for a Codex-only host.
 
 For production-style execution:
 

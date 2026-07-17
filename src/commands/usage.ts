@@ -36,7 +36,7 @@ export async function handleUsage(interaction: ChatInputCommandInteraction): Pro
     embed.addFields({
       name: 'Active reservations',
       value: reservations.slice(0, 10).map(item =>
-        `${item.provider} · ${item.taskClass} · ${item.low.toFixed(1)}–${item.high.toFixed(1)}${item.taskId ? ` · task ${item.taskId.slice(0, 8)}` : ''}`
+        `${providerLabel(item.provider)} · ${item.taskClass} · ${item.low.toFixed(1)}–${item.high.toFixed(1)}${item.taskId ? ` · task ${item.taskId.slice(0, 8)}` : ''}`
       ).join('\n'),
     });
   }

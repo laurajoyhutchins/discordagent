@@ -178,4 +178,20 @@ describe('/provider', () => {
       flags: MessageFlags.Ephemeral,
     }));
   });
+
+  it('lists OpenCode among task-thread handoff providers', async () => {
+    const command = interaction({ channelId: 'task-thread', isThread: true });
+    await handleProvider(command, {
+      getProjectByChannel: () => undefined,
+      updateProjectProvider: vi.fn(),
+      getDefaultProvider: () => undefined,
+      updateDefaultProvider: vi.fn(),
+      checkProvider: vi.fn(async () => ({ available: true })),
+    });
+
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/provider opencode/i),
+      flags: MessageFlags.Ephemeral,
+    }));
+  });
 });

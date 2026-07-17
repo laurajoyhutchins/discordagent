@@ -13,4 +13,14 @@ describe('slash command definitions', () => {
       expect.objectContaining({ name: 'OpenCode', value: 'opencode' }),
     ]));
   });
+
+  it('does not expose Claude-only model choices globally', () => {
+    const model = commands.find(command => command.name === 'model');
+    const serialized = model?.toJSON();
+    const option = serialized && 'options' in serialized
+      ? serialized.options?.find(candidate => candidate.name === 'model')
+      : undefined;
+
+    expect(option && 'choices' in option ? option.choices : undefined).toBeUndefined();
+  });
 });

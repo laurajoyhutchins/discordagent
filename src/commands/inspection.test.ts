@@ -45,4 +45,19 @@ describe('inspection commands', () => {
     const reply = value.editReply.mock.calls[0][0] as { embeds: Array<{ data: { fields: Array<{ name: string }> } }> };
     expect(reply.embeds[0].data.fields.map(field => field.name)).toContain('OpenCode');
   });
+
+  it('labels OpenCode in active reservation details', async () => {
+    setUsageAdmissionService({
+      posture: vi.fn(() => ({ posture: 'healthy', available: 30, reserved: 10 })),
+      reservations: vi.fn((provider?: string) => provider
+        ? []
+        : [{ id: 'r', taskId: 'task-123456', provider: 'opencode', taskClass: 'contained_feature', low: 6, high: 14, confidence: 'low', status: 'active', createdAt: 1 }]),
+    } as never);
+    const value = interaction();
+    await handleUsage(value);
+
+    const reply = value.editReply.mock.calls[0][0] as { embeds: Array<{ data: { fields: Array<{ name: string; value: string }> } }> };
+    const reservations = reply.embeds[0].data.fields.find(field => field.name === 'Active reservations');
+    expect(reservations?.value).toMatch(/^OpenCode ·/);
+  });
 });

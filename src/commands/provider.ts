@@ -34,7 +34,7 @@ export async function handleProvider(
 ): Promise<void> {
   if (interaction.channel?.isThread()) {
     await interaction.reply({
-      content: 'A task thread keeps the provider it started with. Use `/provider claude` or `/provider codex` as a text command in this task thread to request a confirmed sibling handoff.',
+      content: 'A task thread keeps the provider it started with. Use `/provider claude`, `/provider codex`, or `/provider opencode` as a text command in this task thread to request a confirmed sibling handoff.',
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -75,7 +75,7 @@ export async function handleProvider(
     }
     dependencies.updateDefaultProvider(requested);
     await interaction.reply({
-      content: `Global default provider set to **${providerLabel(requested)}**. The PM chat and new projects will use ${requested}.`,
+      content: `Global default provider set to **${providerLabel(requested)}**. The PM chat and new projects will use ${providerLabel(requested)}.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -104,7 +104,7 @@ export async function handleProvider(
 
   dependencies.updateProjectProvider(project.name, requested);
   await interaction.reply({
-    content: `Default provider for **${project.name}** set to **${providerLabel(requested)}**. New task threads will use ${requested}.`,
+    content: `Default provider for **${project.name}** set to **${providerLabel(requested)}**. New task threads will use ${providerLabel(requested)}.`,
     flags: MessageFlags.Ephemeral,
   });
 }

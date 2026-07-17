@@ -60,4 +60,22 @@ describe('CodexPrimaryModel', () => {
       reply: 'Codex sign-in is required. Run /codex-auth login, then try again.',
     });
   });
+
+  it('removes the notification listener when turn startup fails', async () => {
+    const transport = new FakeTransport();
+    transport.request.mockImplementation(async method => {
+      if (method === 'thread/start') return { thread: { id: 'primary-thread-1' } };
+      throw new Error('turn startup failed');
+    });
+    const model = new CodexPrimaryModel({
+      transport: transport as never,
+      auth: { readAccount: vi.fn(async () => ({ authenticated: true })) } as never,
+      workingDirectory: 'C:/tmp',
+    });
+
+    await expect(model.respond({ context: '', message: 'Hello' })).resolves.toEqual({
+      reply: 'I could not complete the coordination turn: turn startup failed',
+    });
+    expect(transport.listenerCount('notification')).toBe(0);
+  });
 });

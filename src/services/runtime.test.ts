@@ -6,6 +6,7 @@ import type { Client, TextChannel } from 'discord.js';
 import { openDatabase } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import { createProjectRepository } from '../repositories/projectRepository.js';
+import { createSettingsRepository } from '../repositories/settingsRepository.js';
 import { createTaskRepository } from '../repositories/taskRepository.js';
 import { createUsageRepository } from '../repositories/usageRepository.js';
 import type { AgentProvider, ProviderAvailability } from '../agents/contracts.js';
@@ -14,6 +15,7 @@ process.env.DISCORD_TOKEN = 'test';
 process.env.DISCORD_CLIENT_ID = 'test';
 process.env.DISCORD_GUILD_ID = 'test';
 process.env.AUTHORIZED_ROLE_IDS = 'role';
+process.env.AUTHORIZED_USER_ID = 'owner';
 process.env.CLAUDE_ENABLED = 'true';
 
 const { getTaskCoordinator } = await import('./taskCoordinatorService.js');
@@ -44,6 +46,23 @@ function fakeProvider(id: AgentProvider['id'] = 'claude', availability: Provider
       explanation: 'test',
     })),
   } as AgentProvider;
+}
+
+function onboardingClient(send: ReturnType<typeof vi.fn>): Client {
+  const agentChannel = {
+    id: 'agent-chat',
+    messages: { fetch: vi.fn(async () => null) },
+    send,
+  };
+  const guild = {
+    id: 'guild-1',
+    members: { me: { id: 'bot-1' } },
+    channels: {
+      cache: { find: () => undefined },
+      create: vi.fn(async () => agentChannel),
+    },
+  };
+  return { guilds: { fetch: vi.fn(async () => guild) } } as unknown as Client;
 }
 
 describe('runtime startup', () => {
@@ -146,21 +165,7 @@ describe('runtime startup', () => {
   it('posts provider onboarding in the PM channel before any provider is selected', async () => {
     const directory = tempDirectory();
     const send = vi.fn(async () => ({ id: 'setup-message' }));
-    const agentChannel = {
-      id: 'agent-chat',
-      messages: { fetch: vi.fn(async () => null) },
-      send,
-    };
-    const guild = {
-      id: 'guild-1',
-      members: { me: { id: 'bot-1' } },
-      channels: {
-        cache: { find: () => undefined },
-        create: vi.fn(async () => agentChannel),
-      },
-    };
-    const client = { guilds: { fetch: vi.fn(async () => guild) } } as unknown as Client;
-    const runtime = await startRuntime(client, {
+    const runtime = await startRuntime(onboardingClient(send), {
       databasePath: join(directory, 'runtime.sqlite'),
       legacyPath: join(directory, 'missing-projects.json'),
       worktreesBaseDir: join(directory, 'worktrees'),
@@ -170,6 +175,30 @@ describe('runtime startup', () => {
 
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/provider setup required/i) }));
     expect(runtime.primaryAgent).toBeUndefined();
+
+    await stopRuntime(runtime);
+  });
+
+  it('clears an unavailable saved PM provider and returns to onboarding', async () => {
+    const directory = tempDirectory();
+    const databasePath = join(directory, 'runtime.sqlite');
+    const db = openDatabase(databasePath);
+    runMigrations(db);
+    createSettingsRepository(db).setDefaultProvider('codex');
+    db.close();
+    const send = vi.fn(async () => ({ id: 'setup-message' }));
+
+    const runtime = await startRuntime(onboardingClient(send), {
+      databasePath,
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      claudeProvider: fakeProvider(),
+      disableCodex: true,
+    });
+
+    expect(runtime.settings.getDefaultProvider()).toBeUndefined();
+    expect(runtime.primaryAgent).toBeUndefined();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/provider setup required/i) }));
 
     await stopRuntime(runtime);
   });
@@ -187,7 +216,6 @@ describe('runtime startup', () => {
 
     expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
   });
-
 
   it('uses an injected Codex provider without spawning the CLI and records authoritative windows', async () => {
     const directory = tempDirectory();

@@ -9,6 +9,7 @@ import type { AgentProviderId } from '../agents/contracts.js';
 import type { ProviderRegistry } from '../agents/providerRegistry.js';
 import type { SettingsRepository } from '../repositories/settingsRepository.js';
 import { redactErrorMessage } from '../utils/redaction.js';
+import { providerLabel } from '../agents/providerLabels.js';
 
 const SETUP_MESSAGE_KEY = 'provider_setup_message_id';
 const SETUP_BUTTON_PREFIX = 'provider_setup:';
@@ -22,6 +23,7 @@ export function createProviderOnboardingService(input: {
   ownerId: string;
   settings: SettingsRepository;
   providers: ProviderRegistry;
+  pmProviderIds?: readonly AgentProviderId[];
   channel: TextChannel;
   onSelected?: (provider: AgentProviderId) => Promise<void>;
 }): ProviderOnboardingService {
@@ -34,7 +36,8 @@ export function createProviderOnboardingService(input: {
       if (existing) return;
     }
 
-    const providers = input.providers.list();
+    const providers = (input.pmProviderIds ?? input.providers.list().filter(provider => provider !== 'opencode'))
+      .filter(provider => input.providers.list().includes(provider));
     const components = providers.length > 0
       ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
           ...providers.map(provider => new ButtonBuilder()
@@ -60,6 +63,11 @@ export function createProviderOnboardingService(input: {
     const provider = interaction.customId.slice(SETUP_BUTTON_PREFIX.length) as AgentProviderId;
     if (!input.providers.list().includes(provider)) {
       await interaction.reply({ content: 'That provider is no longer available. Restart the bot and choose an available provider.', ephemeral: true });
+      return true;
+    }
+    const pmProviders = input.pmProviderIds ?? input.providers.list().filter(candidate => candidate !== 'opencode');
+    if (!pmProviders.includes(provider)) {
+      await interaction.reply({ content: `${providerLabel(provider)} is available for project task channels only, not the PM chat.`, ephemeral: true });
       return true;
     }
 
@@ -95,10 +103,6 @@ export function createProviderOnboardingService(input: {
   }
 
   return { ensurePrompt, handleButton };
-}
-
-function providerLabel(provider: AgentProviderId): string {
-  return provider === 'codex' ? 'Codex' : 'Claude';
 }
 
 export { SETUP_BUTTON_PREFIX };

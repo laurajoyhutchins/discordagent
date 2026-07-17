@@ -45,6 +45,8 @@ import { createUsageAdmissionService, type UsageAdmissionService } from './usage
 import { clearUsageAdmissionService, setUsageAdmissionService } from './usageAdmissionRegistry.js';
 import { createPendingTaskService, type PendingTaskService } from './pendingTaskService.js';
 import { createProviderOnboardingService, type ProviderOnboardingService } from './providerOnboarding.js';
+import { OpenCodeAcpTransport } from '../agents/opencode/acpTransport.js';
+import { OpenCodeProvider } from '../agents/opencode/opencodeProvider.js';
 
 export interface RuntimeOptions {
   databasePath?: string;
@@ -53,10 +55,12 @@ export interface RuntimeOptions {
   git?: GitClient;
   claudeProvider?: AgentProvider;
   codexProvider?: AgentProvider;
+  openCodeProvider?: AgentProvider;
   disableClaude?: boolean;
   codexTransport?: AppServerTransport;
   codexAuth?: CodexAuthService;
   disableCodex?: boolean;
+  disableOpenCode?: boolean;
   primaryModel?: PrimaryModel;
   disablePrimaryAgent?: boolean;
   disableUsagePolling?: boolean;
@@ -95,6 +99,7 @@ export async function startRuntime(
   let codexTransport = options.codexTransport;
   let codexAuth = options.codexAuth;
   let codexProvider = options.codexProvider;
+  let openCodeProvider = options.openCodeProvider;
   let usageUnsubscribe: (() => void) | undefined;
 
   try {
@@ -163,6 +168,39 @@ export async function startRuntime(
       providers.register(codexProvider);
     }
 
+    if (openCodeProvider && openCodeProvider.id !== 'opencode') {
+      throw new Error(`Runtime expected an OpenCode provider, received "${openCodeProvider?.id ?? 'none'}"`);
+    }
+    if (!options.disableOpenCode) {
+      if (!openCodeProvider && config.openCodeEnabled) {
+        openCodeProvider = new OpenCodeProvider({
+          cliPath: config.openCodeCliPath,
+          timeoutMs: config.openCodeTimeoutMs,
+          defaultModel: config.defaultOpenCodeModel,
+          resolveProjectModel: projectName => projects.findByName(projectName)?.models?.opencode,
+          createConnection: handlers => Promise.resolve(new OpenCodeAcpTransport({
+            cliPath: config.openCodeCliPath,
+            handlers,
+          })),
+        });
+      }
+      if (openCodeProvider) {
+        if (openCodeProvider.id !== 'opencode') {
+          throw new Error(`Runtime expected an OpenCode provider, received "${openCodeProvider.id}"`);
+        }
+        try {
+          const availability = await openCodeProvider.checkAvailability();
+          if (availability.available) {
+            providers.register(openCodeProvider);
+          } else {
+            console.warn('[runtime] OpenCode ACP unavailable:', redactErrorMessage(availability.reason ?? 'OpenCode provider is unavailable'));
+          }
+        } catch (error) {
+          console.warn('[runtime] OpenCode ACP unavailable:', redactErrorMessage(error));
+        }
+      }
+    }
+
     const coordinator = createTaskCoordinator({
       projects,
       tasks,
@@ -220,6 +258,7 @@ export async function startRuntime(
           ownerId: config.authorizedUserId,
           settings,
           providers,
+          pmProviderIds: providers.list().filter(provider => provider !== 'opencode'),
           channel: primaryChannel,
           onSelected: activatePrimaryProvider,
         });

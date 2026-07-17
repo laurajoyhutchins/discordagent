@@ -31,10 +31,10 @@ function tempDirectory(): string {
   return directory;
 }
 
-function fakeProvider(): AgentProvider {
+function fakeProvider(id: AgentProvider['id'] = 'claude', availability: ProviderAvailability = { available: true }): AgentProvider {
   return {
-    id: 'claude',
-    checkAvailability: vi.fn(async (): Promise<ProviderAvailability> => ({ available: true })),
+    id,
+    checkAvailability: vi.fn(async (): Promise<ProviderAvailability> => availability),
     startTask: vi.fn(),
     continueTask: vi.fn(),
     cancelTask: vi.fn(async () => undefined),
@@ -81,6 +81,64 @@ describe('runtime startup', () => {
     });
 
     expect(runtime.providers.list()).toEqual(['codex']);
+
+    await stopRuntime(runtime);
+  });
+
+  it('registers an injected OpenCode provider after its availability probe', async () => {
+    const directory = tempDirectory();
+    const opencode = fakeProvider('opencode');
+    const runtime = await startRuntime({} as Client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      openCodeProvider: opencode,
+      disableClaude: true,
+      disableCodex: true,
+      disablePrimaryAgent: true,
+    });
+
+    expect(runtime.providers.require('opencode')).toBe(opencode);
+    expect(opencode.checkAvailability).toHaveBeenCalledOnce();
+
+    await stopRuntime(runtime);
+  });
+
+  it('omits an injected OpenCode provider when its availability probe fails', async () => {
+    const directory = tempDirectory();
+    const opencode = fakeProvider('opencode', { available: false, reason: 'OpenCode ACP unavailable: missing CLI token=secret' });
+    const runtime = await startRuntime({} as Client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      openCodeProvider: opencode,
+      disableClaude: true,
+      disableCodex: true,
+      disablePrimaryAgent: true,
+    });
+
+    expect(runtime.providers.list()).not.toContain('opencode');
+    expect(opencode.checkAvailability).toHaveBeenCalledOnce();
+
+    await stopRuntime(runtime);
+  });
+
+  it('does not register an injected OpenCode provider when OpenCode is disabled', async () => {
+    const directory = tempDirectory();
+    const opencode = fakeProvider('opencode');
+    const runtime = await startRuntime({} as Client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      openCodeProvider: opencode,
+      disableOpenCode: true,
+      disableClaude: true,
+      disableCodex: true,
+      disablePrimaryAgent: true,
+    });
+
+    expect(runtime.providers.list()).not.toContain('opencode');
+    expect(opencode.checkAvailability).not.toHaveBeenCalled();
 
     await stopRuntime(runtime);
   });

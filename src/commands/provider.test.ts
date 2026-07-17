@@ -76,6 +76,23 @@ describe('/provider', () => {
     }));
   });
 
+  it('persists OpenCode as a project provider when the runtime reports it ready', async () => {
+    const update = vi.fn();
+    const command = interaction({ provider: 'opencode' });
+    await handleProvider(command, {
+      getProjectByChannel: () => project,
+      updateProjectProvider: update,
+      getDefaultProvider: () => undefined,
+      updateDefaultProvider: vi.fn(),
+      checkProvider: vi.fn(async () => ({ available: true })),
+    });
+
+    expect(update).toHaveBeenCalledWith('factory-floor', 'opencode');
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/OpenCode/i),
+    }));
+  });
+
   it('does not mutate the project when Codex authentication is required', async () => {
     const update = vi.fn();
     const command = interaction({ provider: 'codex' });
@@ -137,5 +154,28 @@ describe('/provider', () => {
 
     expect(update).toHaveBeenCalledWith('codex');
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/global.*Codex/i) }));
+  });
+
+  it('explains that OpenCode is task-only when selected for the PM', async () => {
+    const update = vi.fn();
+    const activate = vi.fn(async () => undefined);
+    const check = vi.fn(async () => ({ available: true }));
+    const command = interaction({ channelId: 'agent-chat', channelName: 'agent-chat', provider: 'opencode' });
+    await handleProvider(command, {
+      getProjectByChannel: () => undefined,
+      updateProjectProvider: vi.fn(),
+      getDefaultProvider: () => undefined,
+      updateDefaultProvider: update,
+      activateDefaultProvider: activate,
+      checkProvider: check,
+    });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(activate).not.toHaveBeenCalled();
+    expect(check).not.toHaveBeenCalled();
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/OpenCode.*task-only|task-only.*OpenCode/i),
+      flags: MessageFlags.Ephemeral,
+    }));
   });
 });

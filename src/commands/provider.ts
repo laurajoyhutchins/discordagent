@@ -1,5 +1,6 @@
 import { MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
 import type { AgentProviderId } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { Project } from '../types.js';
 import { activatePrimaryProvider, getProviderRegistry } from '../services/agentRuntimeService.js';
 import {
@@ -51,6 +52,13 @@ export async function handleProvider(
       });
       return;
     }
+    if (requested === 'opencode') {
+      await interaction.reply({
+        content: `${providerLabel(requested)} is task-only and available for project task channels; the PM chat requires a PM-capable provider. Your global PM provider was not changed.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     const availability = await dependencies.checkProvider(requested);
     if (!availability.available) {
       await interaction.reply({ content: availability.reason ?? `Provider ${requested} is unavailable.`, flags: MessageFlags.Ephemeral });
@@ -67,7 +75,7 @@ export async function handleProvider(
     }
     dependencies.updateDefaultProvider(requested);
     await interaction.reply({
-      content: `Global default provider set to **${requested === 'codex' ? 'Codex' : 'Claude'}**. The PM chat and new projects will use ${requested}.`,
+      content: `Global default provider set to **${providerLabel(requested)}**. The PM chat and new projects will use ${requested}.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -96,7 +104,7 @@ export async function handleProvider(
 
   dependencies.updateProjectProvider(project.name, requested);
   await interaction.reply({
-    content: `Default provider for **${project.name}** set to **${requested === 'codex' ? 'Codex' : 'Claude'}**. New task threads will use ${requested}.`,
+    content: `Default provider for **${project.name}** set to **${providerLabel(requested)}**. New task threads will use ${requested}.`,
     flags: MessageFlags.Ephemeral,
   });
 }

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ProviderRegistry } from '../agents/providerRegistry.js';
-import type { AgentProvider } from '../agents/contracts.js';
+import type { AgentProvider, AgentProviderId } from '../agents/contracts.js';
 import { createProviderOnboardingService } from './providerOnboarding.js';
 
-function provider(id: 'claude' | 'codex', available = true): AgentProvider {
+function provider(id: AgentProviderId, available = true): AgentProvider {
   return {
     id,
     checkAvailability: vi.fn(async () => available
@@ -27,9 +27,10 @@ function setup() {
   const registry = new ProviderRegistry();
   registry.register(provider('codex'));
   registry.register(provider('claude'));
+  registry.register(provider('opencode'));
   const message = { id: 'setup-message', edit: vi.fn(async () => undefined) };
   const channel = {
-    send: vi.fn(async () => message),
+    send: vi.fn(async (_payload: unknown) => message),
     messages: { fetch: vi.fn(async () => message) },
   };
   return { settings, registry, channel, message };
@@ -50,6 +51,20 @@ describe('provider onboarding', () => {
       content: expect.stringMatching(/choose.*provider/i),
       components: expect.any(Array),
     }));
+  });
+
+  it('does not show task-only OpenCode in PM onboarding choices', async () => {
+    const context = setup();
+    const service = createProviderOnboardingService({
+      ownerId: 'owner', settings: context.settings as never, providers: context.registry, channel: context.channel as never,
+    });
+
+    await service.ensurePrompt();
+
+    const payload = context.channel.send.mock.calls[0][0] as unknown as { components: Array<{ toJSON(): { components: Array<{ custom_id?: string }> } }> };
+    const customIds = payload.components.flatMap(row => row.toJSON().components.map(component => component.custom_id));
+    expect(customIds).toEqual(expect.arrayContaining(['provider_setup:claude', 'provider_setup:codex']));
+    expect(customIds).not.toContain('provider_setup:opencode');
   });
 
   it('persists an owner-selected provider and removes the setup controls', async () => {

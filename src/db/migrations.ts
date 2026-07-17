@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from './database.js';
+import { FACTORY_FLOOR_MIGRATION } from './factoryFloorMigration.js';
 import { SCHEMA_MIGRATIONS } from './schema.js';
 
 export interface Migration {
@@ -6,6 +7,11 @@ export interface Migration {
   name: string;
   statements: readonly string[];
 }
+
+const DEFAULT_MIGRATIONS: readonly Migration[] = [
+  ...SCHEMA_MIGRATIONS,
+  FACTORY_FLOOR_MIGRATION,
+];
 
 const BOOTSTRAP_SQL = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -43,7 +49,7 @@ function validateMigrations(migrations: readonly Migration[]): void {
 
 export function runMigrations(
   db: DatabaseHandle,
-  migrations: readonly Migration[] = SCHEMA_MIGRATIONS,
+  migrations: readonly Migration[] = DEFAULT_MIGRATIONS,
 ): void {
   validateMigrations(migrations);
   db.raw.exec(BOOTSTRAP_SQL);

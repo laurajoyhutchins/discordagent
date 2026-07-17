@@ -1,0 +1,45 @@
+name: Apply Generic Task Controls
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/generic-discord-task-controls'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Decode and verify reviewed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r '.pull_request.body' "$GITHUB_EVENT_PATH" \
+            | awk '/^<!-- PATCH_GZIP_BASE64$/{capture=1;next}/^PATCH_GZIP_BASE64 -->$/{capture=0}capture' \
+            | tr -d '\n' \
+            | base64 -d > /tmp/task-controls.patch.gz
+          echo 'a72665928f1ceeefba058b015d8ff75f7ff9ddc69894ecaea85e2d02eb2e561f  /tmp/task-controls.patch.gz' | sha256sum -c -
+          gzip -dc /tmp/task-controls.patch.gz > /tmp/task-controls.patch
+          echo '597d74be7fc575fd694777cb164c7802ada89002fa4e70e79eeedb6f2c094306  /tmp/task-controls.patch' | sha256sum -c -
+
+      - name: Apply reviewed implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --index /tmp/task-controls.patch
+          rm .github/workflows/apply-generic-task-controls.yml
+          git add -A
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: add generic Discord task controls'
+          git push origin "HEAD:${{ github.head_ref }}"

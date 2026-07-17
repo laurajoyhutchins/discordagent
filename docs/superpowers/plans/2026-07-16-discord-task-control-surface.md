@@ -30,12 +30,12 @@
 - Consumes: `TaskCoordinator.startFromMessage`, `getProjectByChannel`, existing project provider/model fields.
 - Produces: `handleTurnIntoTask(interaction, dependencies?)` and a guild message context command named `Turn into task`.
 
-- [ ] Write tests proving successful routing, authorization rejection, unregistered-channel rejection, empty-content rejection, and existing-thread rejection.
-- [ ] Run `npx vitest run src/commands/turnIntoTask.test.ts` and verify the suite fails because the handler does not exist.
-- [ ] Implement the minimum command handler and register `ContextMenuCommandBuilder` with `ApplicationCommandType.Message`.
-- [ ] Route message context interactions before chat-input handling.
-- [ ] Run `npx vitest run src/commands/turnIntoTask.test.ts src/handlers/messageHandler.test.ts` and verify both suites pass.
-- [ ] Run `npm run build` and fix only type errors introduced by this task.
+- [x] Write tests proving successful routing, authorization rejection, unregistered-channel rejection, empty-content rejection, and existing-thread rejection.
+- [x] Run `npx vitest run src/commands/turnIntoTask.test.ts` and verify the suite fails because the handler does not exist.
+- [x] Implement the minimum command handler and register `ContextMenuCommandBuilder` with `ApplicationCommandType.Message`.
+- [x] Route message context interactions before chat-input handling.
+- [x] Run `npx vitest run src/commands/turnIntoTask.test.ts src/handlers/messageHandler.test.ts` and verify both suites pass.
+- [x] Run `npm run build` and fix only type errors introduced by this task.
 
 ### Task 2: Generic Task Control Cards
 
@@ -50,12 +50,12 @@
 - Produces: `TaskControlSurface.update(thread, task, result?)`, `DiscordTaskControlSurface`, `buildTaskControlPayload`, `parseTaskControlCustomId`.
 - Consumes: `TaskRecord`, `TaskResult`, Discord thread message fetch/send/edit APIs.
 
-- [ ] Write failing tests for custom-ID parsing, active/terminal payloads, existing-card edit, missing-card creation, and coordinator lifecycle updates.
-- [ ] Run `npx vitest run src/discord/taskControl.test.ts src/coordinator/taskCoordinator.test.ts` and verify failures are caused by missing control-surface behavior.
-- [ ] Implement the Discord payload builder and upsert algorithm.
-- [ ] Add the optional coordinator dependency and invoke it through a redacted non-fatal helper after durable status transitions.
-- [ ] Wire the Discord implementation in `startRuntime`.
-- [ ] Run the focused tests and `npm run build` until green.
+- [x] Write failing tests for custom-ID parsing, active/terminal payloads, existing-card edit, missing-card creation, and coordinator lifecycle updates.
+- [x] Run `npx vitest run src/discord/taskControl.test.ts src/coordinator/taskCoordinator.test.ts` and verify failures are caused by missing control-surface behavior.
+- [x] Implement the Discord payload builder and upsert algorithm.
+- [x] Add the optional coordinator dependency and invoke it through a redacted non-fatal helper after durable status transitions.
+- [x] Wire the Discord implementation in `startRuntime`.
+- [x] Run the focused tests and `npm run build` until green.
 
 ### Task 3: Inspect, Cancel, and Recovery Refresh
 
@@ -72,10 +72,10 @@
 - Consumes: `getTaskRepository`, `getTaskCoordinator`, `DiscordTaskControlSurface.update`.
 - Produces: `handleTaskControlButton(interaction, dependencies?)`.
 
-- [ ] Write failing tests for inspect, active cancellation, terminal cancellation rejection, unauthorized use, and wrong-thread rejection.
-- [ ] Implement the button handler and route task-control buttons before loop controls.
-- [ ] Refresh task controls after successful cancellation and restart recovery.
-- [ ] Document the context command, control cards, permission requirements, and explicit continuation behavior.
-- [ ] Extend the provider-neutral architecture regression test to reject Factory Floor imports from the new modules.
-- [ ] Run focused non-SQLite tests, `npm run build`, and `git diff --check`.
-- [ ] Publish the feature branch and open a draft pull request; use GitHub Actions for the full native-dependency test suite.
+- [x] Write failing tests for inspect, active cancellation, terminal cancellation rejection, unauthorized use, and wrong-thread rejection.
+- [x] Implement the button handler and route task-control buttons before loop controls.
+- [x] Refresh task controls after successful cancellation and restart recovery.
+- [x] Document the context command, control cards, permission requirements, and explicit continuation behavior.
+- [x] Extend the provider-neutral architecture regression test to reject Factory Floor imports from the new modules.
+- [x] Run focused non-SQLite tests, `npm run build`, and `git diff --check`.
+- [x] Publish the feature branch and open a draft pull request; use GitHub Actions for the full native-dependency test suite.

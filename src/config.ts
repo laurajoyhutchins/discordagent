@@ -58,6 +58,12 @@ export const config = {
   authorizedUserId: process.env.AUTHORIZED_USER_ID ?? process.env.NOTIFY_USER_ID ?? '',
   primaryAgentModel: process.env.PRIMARY_AGENT_MODEL ?? process.env.CLAUDE_MODEL ?? '',
   primaryUsageReserve: parseFloat(process.env.PRIMARY_USAGE_RESERVE ?? '10'),
+  factoryFloorEnabled: process.env.FACTORY_FLOOR_ENABLED === 'true',
+  factoryFloorBaseUrl: process.env.FACTORY_FLOOR_BASE_URL ?? 'http://127.0.0.1:3000',
+  factoryFloorOperatorToken: process.env.FACTORY_FLOOR_OPERATOR_TOKEN ?? '',
+  factoryFloorDefaultRepository: process.env.FACTORY_FLOOR_DEFAULT_REPOSITORY ?? '',
+  factoryFloorPollIntervalMs: parseInt(process.env.FACTORY_FLOOR_POLL_INTERVAL_MS ?? '15000', 10),
+  factoryFloorRequestTimeoutMs: parseInt(process.env.FACTORY_FLOOR_REQUEST_TIMEOUT_MS ?? '15000', 10),
   databasePath,
   worktreesBaseDir: process.env.WORKTREES_BASE_DIR ?? defaultWorktreesBaseDir,
 } as const;

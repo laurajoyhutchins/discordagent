@@ -52,6 +52,7 @@ export class CodexPrimaryModel implements PrimaryModel {
     let text = '';
     let timer: NodeJS.Timeout | undefined;
     let settled = false;
+    let dispose = (): void => {};
 
     const result = new Promise<string>((resolve, reject) => {
       const finish = (callback: () => void): void => {
@@ -83,6 +84,12 @@ export class CodexPrimaryModel implements PrimaryModel {
           finish(() => reject(new Error(String(error.message ?? 'Codex primary turn failed'))));
         }
       };
+      dispose = () => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        this.options.transport.off('notification', onNotification);
+      };
       this.options.transport.on('notification', onNotification);
       timer = setTimeout(() => {
         finish(() => reject(new Error('Codex primary turn timed out')));
@@ -101,7 +108,7 @@ export class CodexPrimaryModel implements PrimaryModel {
       });
       return await result;
     } catch (error) {
-      this.options.transport.emit('notification', 'error', { threadId, error: { message: redactErrorMessage(error) } });
+      dispose();
       throw error;
     }
   }

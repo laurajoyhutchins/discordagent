@@ -47,6 +47,7 @@ export interface BindFactoryFloorRunInput {
 
 export class FactoryFloorBridgeService {
   private pollTimer?: ReturnType<typeof setInterval>;
+  private refreshPromise?: Promise<void>;
 
   constructor(
     private readonly api: FactoryFloorClient,
@@ -117,8 +118,8 @@ export class FactoryFloorBridgeService {
     try {
       const status = await this.api.getRun(principalId, runId);
       const updated = this.runs.updateStatus(runId, status.status);
-      await this.updateStatusMessage(updated, status);
-      return status;
+      await this.updateStatusMessage(updated, { ...status, status: updated.status });
+      return { ...status, status: updated.status };
     } catch (error) {
       const message = redactErrorMessage(error);
       this.runs.recordError(runId, message);
@@ -151,7 +152,15 @@ export class FactoryFloorBridgeService {
     });
   }
 
-  async refreshActive(): Promise<void> {
+  refreshActive(): Promise<void> {
+    if (this.refreshPromise) return this.refreshPromise;
+    this.refreshPromise = this.refreshActiveOnce().finally(() => {
+      this.refreshPromise = undefined;
+    });
+    return this.refreshPromise;
+  }
+
+  private async refreshActiveOnce(): Promise<void> {
     for (const binding of this.runs.listActive()) {
       try {
         await this.refreshRun(binding.runId);

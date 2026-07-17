@@ -183,14 +183,14 @@ describe('OpenCode ACP permissions', () => {
     expect(permissionOutcome('allow', [])).toEqual({ outcome: 'cancelled' });
   });
 
-  it('never escalates an allow decision to a persistent option', () => {
+  it('never changes an allow decision into rejection or a persistent grant', () => {
     expect(permissionOutcome('allow', [
       { optionId: 'allow-always', name: 'Allow always', kind: 'allow_always' },
     ])).toEqual({ outcome: 'cancelled' });
     expect(permissionOutcome('allow', [
       { optionId: 'allow-always', name: 'Allow always', kind: 'allow_always' },
       { optionId: 'reject-once', name: 'Reject once', kind: 'reject_once' },
-    ])).toEqual({ outcome: 'selected', optionId: 'reject-once' });
+    ])).toEqual({ outcome: 'cancelled' });
     expect(permissionOutcome('deny', [
       { optionId: 'reject-always', name: 'Reject always', kind: 'reject_always' },
     ])).toEqual({ outcome: 'cancelled' });

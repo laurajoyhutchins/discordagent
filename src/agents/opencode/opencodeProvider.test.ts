@@ -46,14 +46,14 @@ describe('OpenCodeProvider lifecycle', () => {
     await expect(run.completion).resolves.toMatchObject({ outcome: 'completed', sessionId: 'session-1' });
   });
 
-  it('continues only an OpenCode session and resumes the persisted ID', async () => {
+  it('continues only an OpenCode session and timestamps the resumed turn separately', async () => {
     const conn = connection();
-    const p = provider(conn);
+    const p = provider(conn, { now: () => 100 });
     await expect(p.continueTask({ ...input(), session: { provider: 'claude', sessionId: 'x', createdAt: 1 } }, host())).rejects.toThrow(/Cannot resume/);
     const run = await p.continueTask({ ...input(), session: { provider: 'opencode', sessionId: 'session-1', createdAt: 5 } }, host());
     expect(conn.resumeSession).toHaveBeenCalledWith('session-1', 'C:\\repo');
     expect(run.session.createdAt).toBe(5);
-    await run.completion;
+    await expect(run.completion).resolves.toMatchObject({ startedAt: 100 });
   });
 
   it('applies the requested model through the ACP model config option', async () => {

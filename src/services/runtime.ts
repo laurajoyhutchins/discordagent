@@ -221,7 +221,7 @@ export async function startRuntime(
     setUsageAdmissionService(usage);
     let primaryAgent: PrimaryAgentService | undefined;
     let primaryProviderActivator: ((provider: AgentProviderId) => Promise<void>) | undefined;
-    const selectedProvider = settings.getDefaultProvider();
+    let selectedProvider = settings.getDefaultProvider();
     if (!options.disablePrimaryAgent && config.authorizedUserId) {
       const guild = await client.guilds.fetch(config.guildId);
       const primaryChannel = await ensurePrimaryAgentChannel(guild, config.authorizedRoleIds);
@@ -253,18 +253,25 @@ export async function startRuntime(
       };
       primaryProviderActivator = activatePrimaryProvider;
       setAgentRuntimeServices({ providers, tasks, pendingTasks, primaryProviderActivator, ...(codexAuth ? { codexAuth } : {}) });
+      providerOnboarding = createProviderOnboardingService({
+        ownerId: config.authorizedUserId,
+        settings,
+        providers,
+        pmProviderIds: providers.list().filter(provider => provider !== 'opencode'),
+        channel: primaryChannel,
+        onSelected: activatePrimaryProvider,
+      });
+      if (selectedProvider) {
+        try {
+          await activatePrimaryProvider(selectedProvider);
+        } catch (error) {
+          console.warn(`[runtime] Saved PM provider ${selectedProvider} is unavailable:`, redactErrorMessage(error));
+          settings.set('default_provider', '');
+          selectedProvider = undefined;
+        }
+      }
       if (!selectedProvider) {
-        providerOnboarding = createProviderOnboardingService({
-          ownerId: config.authorizedUserId,
-          settings,
-          providers,
-          pmProviderIds: providers.list().filter(provider => provider !== 'opencode'),
-          channel: primaryChannel,
-          onSelected: activatePrimaryProvider,
-        });
         await providerOnboarding.ensurePrompt();
-      } else {
-        await activatePrimaryProvider(selectedProvider);
       }
     }
     if (providerOnboarding || primaryProviderActivator) {

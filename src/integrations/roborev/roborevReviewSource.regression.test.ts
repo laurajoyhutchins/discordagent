@@ -61,13 +61,14 @@ describe('RoboRev review source regressions', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the stream active when no projects are enabled so RoboRev can be enabled at runtime', async () => {
+  it('starts the stream when RoboRev is enabled after runtime startup', async () => {
     mockGetProjects.mockReturnValue([]);
     mockIsCliAvailable.mockResolvedValue(true);
     const proc = fakeProcess();
     mockSpawnStream.mockReturnValue(proc);
 
     const { createRoborevReviewSource } = await import('./roborevReviewSource.js');
+    const { notifyRoborevConfigurationChanged } = await import('./roborevLifecycle.js');
     const source = createRoborevReviewSource({
       cliPath: 'roborev',
       getProjects: mockGetProjects,
@@ -75,8 +76,14 @@ describe('RoboRev review source regressions', () => {
     });
 
     const disposable = await source.start(vi.fn());
+    expect(mockSpawnStream).not.toHaveBeenCalled();
 
-    expect(mockSpawnStream).toHaveBeenCalledOnce();
+    mockGetProjects.mockReturnValue([project()]);
+    notifyRoborevConfigurationChanged();
+
+    await vi.waitFor(() => {
+      expect(mockSpawnStream).toHaveBeenCalledOnce();
+    });
     await disposable.dispose();
   });
 

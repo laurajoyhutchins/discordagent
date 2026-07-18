@@ -11,6 +11,7 @@ import { handleUsage } from '../commands/usage.js';
 import { handleAgents } from '../commands/agents.js';
 import { handleModel } from '../commands/model.js';
 import { handleProvider } from '../commands/provider.js';
+import { handleTurnIntoTask } from '../commands/turnIntoTask.js';
 import { stopLoopFromButton } from '../services/loopRunner.js';
 import { handleCodexAuth, handleCodexAuthButton } from '../commands/codexAuth.js';
 import { maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
@@ -18,6 +19,7 @@ import { handleCapabilities } from '../commands/capabilities.js';
 import { handleRoborev } from '../commands/roborev.js';
 import { handleSettings, handleSettingsComponent } from '../commands/settings.js';
 import { handleProjectSettings, handleProjectSettingsComponent } from '../commands/projectSettings.js';
+import { handleTaskControlButton } from '../discord/taskControlHandler.js';
 
 export async function routeSettingsComponents(
   interaction: Interaction,
@@ -32,10 +34,23 @@ export async function routeSettingsComponents(
   return false;
 }
 
+export async function routeTaskControlComponents(
+  interaction: Interaction,
+  handler: typeof handleTaskControlButton = handleTaskControlButton,
+): Promise<boolean> {
+  if (!interaction.isButton()) return false;
+  return handler(interaction);
+}
+
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   // Settings components are revalidated by their command handlers against the
   // current channel, project, and clicking user before any state changes.
   if (await routeSettingsComponents(interaction)) return;
+
+  if (interaction.isMessageContextMenuCommand() && interaction.commandName === 'Turn into task') {
+    await handleTurnIntoTask(interaction);
+    return;
+  }
 
   // Global settings are owner-only rather than role-only, so these commands
   // must be authorized by their scoped handlers before the generic role gate.
@@ -58,10 +73,11 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
     return;
   }
 
-  // Handle button interactions (e.g., loop stop button)
+  // Handle button interactions (e.g., task controls and loop stop buttons).
   if (interaction.isButton()) {
     if (await maybeGetProviderOnboardingService()?.handleButton(interaction)) return;
     if (await handleCodexAuthButton(interaction)) return;
+    if (await routeTaskControlComponents(interaction)) return;
     if (interaction.customId.startsWith('loop_stop_')) {
       const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null) ?? null;
       if (!isAuthorized(member)) {

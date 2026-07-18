@@ -9,3 +9,7 @@ src/data/*.sqlite-*
 .playwright-mcp/
 .DS_Store
 *.log
+
+.deciduous/
+docs/superpowers/plans/
+console.log(PermissionFlagsBits.EmbedLinks.toString()

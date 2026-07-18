@@ -1,15 +1,17 @@
 import { createServer } from 'node:net';
-import { Client, GatewayIntentBits, Partials, REST, Routes } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, REST, Routes, type TextChannel } from 'discord.js';
 import { config } from './config.js';
 import { handleInteraction } from './handlers/interactionHandler.js';
 import { handleMessage } from './handlers/messageHandler.js';
 import { handleThreadDelete } from './handlers/threadDeleteHandler.js';
-import { startRoborevWatcher, stopRoborevWatcher } from './services/roborevWatcher.js';
 import { startRuntime, stopRuntime, type RuntimeServices } from './services/runtime.js';
 import { stopAllLoops } from './services/loopRunner.js';
 import { commands } from './commands/definitions.js';
 import { redactErrorMessage } from './utils/redaction.js';
 import { PROCESS_GATEWAY_INTENTS } from './discord/capabilities/registry.js';
+import { getAllProjects } from './services/projectStore.js';
+import { createRoborevReviewSource, buildReviewEmbed } from './integrations/roborev/index.js';
+import type { Disposable, ReviewNotification } from './integrations/reviewSource.js';
 
 // ── Single-instance lock ─────────────────────────────────────────────
 // Multiple bot processes sharing one token cause duplicate message
@@ -34,6 +36,22 @@ lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
 });
 
 let runtime: RuntimeServices | null = null;
+let reviewSourceDisposable: Disposable | undefined;
+
+async function handleReviewNotification(
+  notification: ReviewNotification,
+): Promise<void> {
+  const project = getAllProjects().find(
+    p => p.name === notification.projectId,
+  );
+  if (!project?.roborevChannelId) return;
+
+  const embed = buildReviewEmbed(notification);
+  const channel = await client.channels.fetch(project.roborevChannelId)
+    .catch(() => null);
+  if (!channel || !('send' in channel)) return;
+  await (channel as TextChannel).send({ embeds: [embed] });
+}
 
 const client = new Client({
   intents: PROCESS_GATEWAY_INTENTS.map(intent => GatewayIntentBits[intent]),
@@ -68,10 +86,15 @@ client.once('clientReady', async () => {
     console.error('Failed to register slash commands:', redactErrorMessage(err));
   }
 
-  // Start roborev watcher (async — checks CLI availability first)
-  startRoborevWatcher().catch(err => {
-    console.error('Failed to start roborev watcher:', redactErrorMessage(err));
-  });
+  // Start review sources through the generic lifecycle boundary
+  {
+    const source = createRoborevReviewSource();
+    reviewSourceDisposable = await source.start(handleReviewNotification)
+      .catch(err => {
+        console.error('[roborev] Failed to start review source:', redactErrorMessage(err));
+        return undefined;
+      });
+  }
 });
 
 
@@ -143,7 +166,7 @@ setInterval(async () => {
 async function shutdown(): Promise<void> {
   console.log('Shutting down...');
   stopAllLoops();
-  stopRoborevWatcher();
+  if (reviewSourceDisposable) await reviewSourceDisposable.dispose();
   if (runtime) await stopRuntime(runtime);
   client.destroy();
   process.exit(0);

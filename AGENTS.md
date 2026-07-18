@@ -152,9 +152,25 @@ Base selection is explicit project base, then symbolic remote default, then curr
 
 At startup, nonterminal tasks become `interrupted`. `taskRecovery.ts` inspects the worktree and writes a checkpoint. `runtime.ts` attempts to post that checkpoint in the original thread. No provider turn is replayed automatically.
 
-### Roborev
+### Review sources (RoboRev)
 
-Roborev events are sent through the authenticated Discord bot client to `roborevChannelId`. Do not reintroduce webhook creation, tokens, DMs, or persisted webhook credentials.
+RoboRev is a review integration, not an agent provider. Its CLI, event-parsing, and Discord-rendering
+logic is isolated under `src/integrations/roborev/`. The runtime interacts with review sources through
+a narrow lifecycle boundary (`ReviewSource` / `Disposable` in `src/integrations/reviewSource.ts`).
+
+`src/index.ts` creates the RoboRev review source and wires it to Discord delivery through the generic
+`ReviewSource.start(publish)` API. The source supervises the CLI stream, parses events, normalizes
+them into `ReviewNotification` objects, and calls the publish callback. Discord delivery errors are
+contained and do not affect the source lifecycle.
+
+RoboRev events are sent through the authenticated Discord bot client to `roborevChannelId`.
+Do not reintroduce webhook creation, tokens, DMs, or persisted webhook credentials.
+
+RoboRev is intentionally kept in-process for now:
+- It adds no latency compared to a webhook or sidecar.
+- No other review source currently exists; a generic integration store would be speculative.
+- If a second review source is added later, the `ReviewSource` boundary already exists to prevent
+  core runtime coupling, and a migration to a generic integration registry can be evaluated then.
 
 ## Security rules
 
@@ -188,7 +204,8 @@ Roborev events are sent through the authenticated Discord bot client to `roborev
 | `src/commands/` | Administrative slash commands. |
 | `src/services/projectStore.ts` | Temporary reduced facade over `ProjectRepository`. |
 | `src/services/loopRunner.ts` | Non-overlapping recurring turns in one durable task. |
-| `src/services/roborevWatcher.ts` | Roborev CLI stream and bot-authenticated channel delivery. |
+| `src/integrations/reviewSource.ts` | Narrow review-source lifecycle boundary (ReviewSource / Disposable). |
+| `src/integrations/roborev/` | RoboRev CLI, event-parsing, Discord renderer, and ReviewSource implementation. |
 | `src/primary/` | Restricted PM model, bounded context assembly, journal/memory coordination, and delegation. |
 | `src/repositories/usageRepository.ts` | Provider windows, reservations, and task-cost observations. |
 | `src/services/usageAdmission.ts` | Admission decisions, calibration, posture, and graceful interruption. |

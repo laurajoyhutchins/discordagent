@@ -1,42 +1,16 @@
 import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { existsSync, statSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import type { AgentProviderId } from '../agents/contracts.js';
 import { addProject, getDefaultProvider, getProject } from '../services/projectStore.js';
 import { createProjectChannels, deleteProjectChannels } from '../services/channelManager.js';
 import { config } from '../config.js';
 import { getProviderRegistry } from '../services/agentRuntimeService.js';
+import { isRoborevCliAvailable, hasRoborevSetup } from '../integrations/roborev/index.js';
 
 export function isPathWithinBase(base: string, candidate: string, pathApi = { relative, isAbsolute, sep }): boolean {
   const relativePath = pathApi.relative(base, candidate);
   return relativePath !== '..' && !relativePath.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(relativePath);
-}
-
-/**
- * Check if roborev is installed and available on this machine
- */
-function isRoborevAvailable(): boolean {
-  try {
-    execFileSync(config.roborevCliPath, ['version'], {
-      timeout: 5000,
-      stdio: 'ignore',
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Check if a project directory has roborev set up (has a .roborev config or git hook)
- */
-function hasRoborevSetup(projectPath: string): boolean {
-  return (
-    existsSync(join(projectPath, '.roborev')) ||
-    existsSync(join(projectPath, '.roborev.json')) ||
-    existsSync(join(projectPath, '.git', 'hooks', 'post-commit'))
-  );
 }
 
 export async function handleAddProject(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -126,7 +100,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   if (roborevOption !== null) {
     includeRoborev = roborevOption;
   } else {
-    includeRoborev = isGitRepo && isRoborevAvailable() && hasRoborevSetup(resolvedPath);
+    includeRoborev = isGitRepo && await isRoborevCliAvailable(config.roborevCliPath) && hasRoborevSetup(resolvedPath);
   }
 
   let channels: Awaited<ReturnType<typeof createProjectChannels>> | undefined;

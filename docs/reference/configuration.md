@@ -6,40 +6,50 @@
 |---|---|---|---|
 | `DISCORD_TOKEN` | Yes | — | Discord bot token |
 | `DISCORD_CLIENT_ID` | Yes | — | Discord application client ID |
-| `GUILD_ID` | Yes | — | Discord server (guild) ID |
-| `PROJECTS_BASE_DIR` | Yes | — | Base directory for project repositories |
-| `AUTHORIZED_USER_ID` | Yes | — | Discord user ID authorized for owner commands |
-| `NOTIFY_USER_ID` | No | — | User ID to ping on task completion |
-| `DATABASE_PATH` | No | `src/data/discordagent.sqlite` | SQLite database file path |
+| `DISCORD_GUILD_ID` | Yes | — | Discord server (guild) ID |
+| `AUTHORIZED_ROLE_IDS` | Yes | — | Comma-separated Discord role IDs authorized for project access |
+| `AUTHORIZED_USER_ID` | PM/Codex auth | `NOTIFY_USER_ID` | Exact owner authorized for `#agent-chat` and Codex authentication |
+| `NOTIFY_USER_ID` | No | — | User ID to mention on task completion |
+| `PROJECTS_BASE_DIR` | No | unrestricted | Optional parent-directory boundary for registered repositories |
+| `DATABASE_PATH` | No | runtime data directory | SQLite database file path |
 | `WORKTREES_BASE_DIR` | No | `<db-dir>/discordagent-worktrees` | Base directory for Git worktrees |
-| `CLAUD_ENABLED` | No | `true` | Enable Claude provider |
-| `CODE_ENABLED` | No | — | Enable Codex provider |
-| `CLAUD_MODEL` | No | — | Default Claude model |
-| `CODE_MODEL` | No | — | Default Codex model |
-| `PRIMARY_AGENT_MODEL` | No | — | Default primary agent model |
-| `CLAUD_TIMEOUT_MS` | No | `300000` (5 min) | Default Claude task timeout |
-| `PRIMARY_USAGE_RESERVE` | No | `10` | Percentage reserved for PM operations |
-| `CODEX_CLI_PATH` | No | `codex` | Path to the Codex CLI executable |
-| `AUTHORIZED_ROLE_IDS` | No | — | Comma-separated Discord role IDs for project access |
+| `CLAUDE_ENABLED` | No | `true` | Enable the Claude provider |
+| `CLAUDE_MODEL` | No | provider default | Default Claude task model |
+| `CLAUDE_TIMEOUT_MS` | No | `900000` | Default Claude task timeout in milliseconds |
+| `CODEX_ENABLED` | No | `true` | Enable the Codex provider |
+| `CODEX_CLI_PATH` | No | `codex` | Codex CLI executable used to launch App Server |
+| `CODEX_MODEL` | No | provider default | Default Codex task model |
+| `OPENCODE_ENABLED` | No | `true` | Enable the OpenCode ACP provider |
+| `OPENCODE_CLI_PATH` | No | `opencode` | OpenCode CLI executable |
+| `OPENCODE_TIMEOUT_MS` | No | `900000` | OpenCode task timeout in milliseconds |
+| `OPENCODE_MODEL` | No | provider default | Default OpenCode task model |
+| `OPENCODE_PRIMARY_MODEL` | No | global/provider fallback | OpenCode-specific PM-chat model |
+| `PRIMARY_AGENT_MODEL` | No | provider default | Default PM-agent model for any provider |
+| `PRIMARY_USAGE_RESERVE` | No | `10` | Percentage points reserved for PM operations |
+| `ROBOREV_CLI_PATH` | No | `roborev` | Roborev executable path |
+| `USAGE_CHANNEL_ID` | No | — | Optional detailed usage channel |
+| `ALLOW_NON_GIT` | No | `false` | Allow registration of non-Git directories; agent tasks still require Git worktrees |
+
+Disable providers that are not installed on the host. `npm run smoke:host` treats a missing Codex or OpenCode CLI as a failure when its provider remains enabled and as a warning when disabled.
 
 ## Claude MCP servers
 
-MCP servers are loaded from `~/.claude/settings.json` `mcpServers`. Only user-level settings are used; project/local Claude settings are ignored.
+MCP servers are loaded from `~/.claude/settings.json` under `mcpServers`. Only user-level settings are used; project/local Claude settings are ignored.
 
 Servers named `default` and `disabled` are reserved for profile resolution:
 
-- **default** — included in every profile
-- **disabled** — excluded from every profile
+- **default** — all host-allowlisted servers
+- **disabled** — no MCP servers
 
-Other server names become selectable MCP profiles in `/project-settings`.
+Every other server name becomes a selectable single-server MCP profile in `/project-settings`.
 
 ## Database
 
-The SQLite database is created automatically on first run. Migrations are versioned and run transactionally. The database file location is configurable via `DATABASE_PATH`.
+The SQLite database is created automatically on first run. Migrations are versioned and transactional. Provider-constraint rebuilds temporarily disable SQLite foreign-key enforcement, run `foreign_key_check` before commit, and restore the prior pragma value.
 
 ## Discord permissions
 
-See [Capability Model](/docs/explanation/capability-model.md) for the complete permission breakdown.
+See [Capability Model](../explanation/capability-model.md) for the complete permission breakdown.
 
 Required Gateway intents (enable in Discord Developer Portal):
 

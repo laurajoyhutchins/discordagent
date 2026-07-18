@@ -30,4 +30,17 @@ jobs:
         run: npm test
 
       - name: Build
-        run: npm run build
+        id: build
+        continue-on-error: true
+        run: npm run build > build-errors.txt 2>&1
+
+      - name: Upload build diagnostics
+        if: steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-errors
+          path: build-errors.txt
+
+      - name: Fail failed build
+        if: steps.build.outcome == 'failure'
+        run: cat build-errors.txt && exit 1

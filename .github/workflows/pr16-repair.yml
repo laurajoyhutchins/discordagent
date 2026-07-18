@@ -1,16 +1,16 @@
 name: PR16 Reconciliation
 
 on:
-  push:
-    branches:
-      - codex/discord-capabilities-control-cards
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   reconcile:
-    if: contains(github.event.head_commit.message, 'chore: run PR16 reconciliation')
+    if: github.head_ref == 'codex/discord-capabilities-control-cards'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

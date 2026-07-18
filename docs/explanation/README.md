@@ -9,6 +9,7 @@ Understanding-oriented documentation covering architecture, security, and design
 - [Task isolation and Git worktrees](architecture/task-isolation-and-git-worktrees.md) — branch naming, base resolution, safety guarantees
 - [Durable state and recovery](architecture/durable-state-and-recovery.md) — SQLite persistence, startup recovery, interrupted task handling
 - [Usage admission](architecture/usage-admission.md) — provider windows, calibrated estimates, quiet admission, preserve mode
+- [Review-source boundary](architecture/review-source-boundary.md) — why RoboRev is isolated from agent providers and durable task execution
 
 ## Security
 

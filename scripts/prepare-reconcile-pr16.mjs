@@ -46,6 +46,18 @@ source = source.replace(
   "  \"       'Codex default model: ' + (current.codexModel ?? 'host/provider default'),\\n       'OpenCode default model: ' + (current.openCodeModel ?? 'host/provider default'),\\n       `Codex status:\"",
   "  \"      'Codex default model: ' + (current.codexModel ?? 'host/provider default'),\\n      'OpenCode default model: ' + (current.openCodeModel ?? 'host/provider default'),\\n      `Codex status:\"",
 );
+source = source.replace(
+  `replace(
+  'AGENTS.md',
+  'ProviderRegistry resolves complete Codex and Codex implementations.',
+  'ProviderRegistry resolves complete Claude, Codex, and OpenCode implementations.',
+);`,
+  `replace(
+  'AGENTS.md',
+  '\`ProviderRegistry\` resolves complete Codex and Codex implementations. Codex is registered only when the local App Server initializes successfully and authoritative account state is available.',
+  '\`ProviderRegistry\` resolves complete Claude, Codex, and OpenCode implementations. Providers are registered only after their complete lifecycle and authoritative availability checks succeed.',
+);`,
+);
 writeFileSync(path, source);
 console.log('[prepare] narrowed settings transformations');
 await import('./reconcile-pr16.mjs');

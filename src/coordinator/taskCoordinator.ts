@@ -5,6 +5,8 @@ import type {
   AgentProvider,
   AgentProviderId,
   AgentRunHost,
+  AgentTaskSettings,
+  AgentTurnSettings,
   ApprovalDecision,
   ContinueTaskInput,
   ProviderRun,
@@ -13,23 +15,27 @@ import type {
   TaskResult,
   UserAnswer,
 } from '../agents/contracts.js';
+import { validateSupportedAgentSettings } from '../agents/contracts.js';
 import type { ProviderRegistry } from '../agents/providerRegistry.js';
 import type { InteractionBroker } from '../discord/interactionBroker.js';
-import type { TaskRenderer } from '../discord/taskRenderer.js';
+import type { TaskRenderer, TaskRenderContext } from '../discord/taskRenderer.js';
 import type { WorktreeManager } from '../git/worktreeManager.js';
 import type { EventRepository } from '../repositories/eventRepository.js';
 import type { ProjectRepository } from '../repositories/projectRepository.js';
 import type { TaskRepository } from '../repositories/taskRepository.js';
 import type { Project, TaskRecord } from '../types.js';
 import type { UsageAdmissionService } from '../services/usageAdmission.js';
+import type { SettingsService } from '../services/settingsService.js';
 import {
   redactAgentEvent,
   redactErrorMessage,
   redactApprovalRequest,
   redactTaskResult,
   redactUserQuestion,
+  redactSensitiveText,
 } from '../utils/redaction.js';
 import { recoverInterruptedTasks as recoverTasks } from './taskRecovery.js';
+import type { TaskCapabilityPreflight } from './capabilityPreflight.js';
 
 export interface StartFromMessageInput {
   projectName: string;
@@ -73,6 +79,7 @@ export interface TaskCoordinator {
   cancelByThread(threadId: string): Promise<boolean>;
   closeTask(taskId: string): Promise<void>;
   recoverInterruptedTasks(): Promise<TaskRecord[]>;
+  shutdown(): Promise<void>;
   estimateHandoff(threadId: string, targetProvider: AgentProviderId): Promise<import('../agents/contracts.js').HandoffEstimate>;
   handoffFromThread(input: { sourceThread: AnyThreadChannel; targetProvider: AgentProviderId }): Promise<TaskRecord>;
 }
@@ -83,10 +90,12 @@ export interface TaskCoordinatorDependencies {
   events: EventRepository;
   worktrees: WorktreeManager;
   providers: ProviderRegistry;
+  settings: SettingsService;
   rendererFactory(thread: AnyThreadChannel): TaskRenderer;
   brokerFactory(thread: AnyThreadChannel): InteractionBroker;
   idFactory?: (prefix: string) => string;
   usage?: UsageAdmissionService;
+  capabilityPreflight?: TaskCapabilityPreflight;
 }
 
 interface RunningGate {
@@ -95,6 +104,21 @@ interface RunningGate {
 }
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
+function validateProviderTurnSettings(provider: AgentProviderId, settings: AgentTurnSettings): void {
+  validateSupportedAgentSettings(provider, settings, 'turn');
+}
+
+function effectiveTurnSettings(
+  settings: AgentTurnSettings,
+  model?: string,
+  reasoningEffort?: ReasoningEffort,
+): AgentTurnSettings {
+  return {
+    ...settings,
+    ...(model !== undefined ? { model } : {}),
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+  };
+}
 
 export function createTaskCoordinator(
   dependencies: TaskCoordinatorDependencies,
@@ -102,20 +126,58 @@ export function createTaskCoordinator(
   const idFactory = dependencies.idFactory ?? (prefix => `${prefix}-${randomUUID()}`);
   const activeReservations = new Map<string, string>();
   const interruptionRequested = new Set<string>();
+  const activeRenderers = new Map<string, TaskRenderer>();
+  const startingTasks = new Map<string, { provider: AgentProvider; cancelled: boolean }>();
 
-  async function validateProjectProvider(
-    projectName: string,
-    override?: AgentProviderId,
-  ): Promise<{ project: Project; provider: AgentProvider; providerId: AgentProviderId }> {
+  async function syncRendererCard(
+    renderer: TaskRenderer,
+    taskId: string,
+    overrides: Pick<TaskRenderContext, 'phase' | 'usagePosture' | 'result'> = {},
+  ): Promise<void> {
+    if (!renderer.updateCard) return;
+    const task = dependencies.tasks.findById(taskId);
+    if (!task) return;
+    const worktree = dependencies.tasks.getWorktree(taskId);
+    let usagePosture: string | undefined = overrides.usagePosture;
+    if (!usagePosture && dependencies.usage) usagePosture = dependencies.usage.posture(task.provider).posture;
+    try {
+      await renderer.updateCard({
+        task,
+        ...(worktree ? { worktree } : {}),
+        ...(usagePosture ? { usagePosture } : {}),
+        ...(overrides.phase ? { phase: overrides.phase } : {}),
+        ...(overrides.result ? { result: overrides.result } : {}),
+      });
+    } catch (error) {
+      console.warn('[taskCoordinator] Failed to update task control card:', redactErrorMessage(error));
+    }
+  }
+
+  async function startRendererSafely(
+    renderer: TaskRenderer,
+    thread: AnyThreadChannel,
+    context: TaskRenderContext,
+  ): Promise<void> {
+    try {
+      await renderer.start(thread, context);
+    } catch (error) {
+      console.warn('[taskCoordinator] Failed to initialize task renderer:', redactErrorMessage(error));
+    }
+  }
+
+  function resolveProjectProvider(projectName: string, override?: AgentProviderId): { project: Project; providerId: AgentProviderId } {
     const project = dependencies.projects.findByName(projectName);
     if (!project) throw new Error(`Project "${projectName}" not found`);
-    const providerId = override ?? project.defaultProvider;
-    const provider = dependencies.providers.require(providerId);
+    return { project, providerId: override ?? project.defaultProvider };
+  }
+
+  async function requireAvailableProvider(
+    resolved: { project: Project; providerId: AgentProviderId },
+  ): Promise<{ project: Project; provider: AgentProvider; providerId: AgentProviderId }> {
+    const provider = dependencies.providers.require(resolved.providerId);
     const availability = await provider.checkAvailability();
-    if (!availability.available) {
-      throw new Error(availability.reason ?? `Provider "${providerId}" is unavailable`);
-    }
-    return { project, provider, providerId };
+    if (!availability.available) throw new Error(availability.reason ?? `Provider "${resolved.providerId}" is unavailable`);
+    return { ...resolved, provider };
   }
 
   async function startNewTask(input: {
@@ -124,8 +186,7 @@ export function createTaskCoordinator(
     providerId: AgentProviderId;
     prompt: string;
     thread: AnyThreadChannel;
-    model?: string;
-    reasoningEffort?: ReasoningEffort;
+    settings: AgentTaskSettings;
     baseBranch?: string;
     reservationId?: string;
   }): Promise<TaskRecord> {
@@ -148,6 +209,7 @@ export function createTaskCoordinator(
         channelId: input.thread.parentId ?? input.project.agentChannelId,
         threadId: input.thread.id,
         objective: input.prompt,
+        settings: input.settings,
         worktree: {
           id: idFactory('worktree'),
           repositoryPath: createdWorktree.repositoryPath,
@@ -188,10 +250,15 @@ export function createTaskCoordinator(
       }
     }
 
-    dependencies.tasks.transition(taskId, ['created'], 'starting');
     const renderer = dependencies.rendererFactory(input.thread);
     const broker = dependencies.brokerFactory(input.thread);
-    renderer.start(input.thread);
+    activeRenderers.set(taskId, renderer);
+    await startRendererSafely(renderer, input.thread, {
+      task: dependencies.tasks.findById(taskId)!,
+      worktree: dependencies.tasks.getWorktree(taskId),
+    });
+    dependencies.tasks.transition(taskId, ['created'], 'starting');
+    await syncRendererCard(renderer, taskId, { phase: 'Starting' });
     return executeTurn({
       taskId,
       project: input.project,
@@ -201,8 +268,7 @@ export function createTaskCoordinator(
       workingDirectory: createdWorktree.worktreePath,
       renderer,
       broker,
-      model: input.model ?? input.project.models?.[input.providerId],
-      reasoningEffort: input.reasoningEffort ?? input.project.reasoningEfforts?.[input.providerId],
+      settings: input.settings,
       reservationId: input.reservationId,
     });
   }
@@ -216,12 +282,14 @@ export function createTaskCoordinator(
     workingDirectory: string;
     renderer: TaskRenderer;
     broker: InteractionBroker;
-    model?: string;
-    reasoningEffort?: ReasoningEffort;
+    settings: AgentTaskSettings;
+    turnSettings?: AgentTurnSettings;
     session?: ContinueTaskInput['session'];
     reservationId?: string;
   }): Promise<TaskRecord> {
     const gate = runningGate();
+    const startup = input.session ? undefined : { provider: input.provider, cancelled: false };
+    if (startup) startingTasks.set(input.taskId, startup);
     const host = createHost(input.taskId, input.provider, input.thread, input.renderer, input.broker, gate);
     const providerInput = {
       taskId: input.taskId,
@@ -230,8 +298,10 @@ export function createTaskCoordinator(
       channelId: input.thread.parentId ?? input.project.agentChannelId,
       threadId: input.thread.id,
       prompt: input.prompt,
-      ...(input.model ? { model: input.model } : {}),
-      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+      settings: input.settings,
+      ...(input.settings.model !== undefined ? { model: input.settings.model } : {}),
+      ...(input.settings.reasoningEffort !== undefined ? { reasoningEffort: input.settings.reasoningEffort } : {}),
+      ...(input.turnSettings ? { turnSettings: input.turnSettings } : {}),
     };
 
     let run: ProviderRun;
@@ -240,11 +310,30 @@ export function createTaskCoordinator(
         ? await input.provider.continueTask({ ...providerInput, session: input.session }, host)
         : await input.provider.startTask(providerInput, host);
     } catch (error) {
+      startingTasks.delete(input.taskId);
       gate.resolve();
       return failStartingTask(input.taskId, input.provider.id, input.renderer, error, input.reservationId);
     }
+    // Cancellation may terminalize a starting task before the provider returns its
+    // session. Keep a late completion from becoming an unhandled rejection while
+    // the guards below discard it without changing the terminal task.
+    void run.completion.catch(() => undefined);
+
+    startingTasks.delete(input.taskId);
+    if (startup?.cancelled) {
+      void input.provider.cancelTask(run.session.sessionId).catch(error => {
+        console.warn('[taskCoordinator] Late startup cancellation failed:', redactErrorMessage(error));
+      });
+      gate.resolve();
+      return dependencies.tasks.findById(input.taskId)!;
+    }
 
     if (!input.session) {
+      const current = dependencies.tasks.findById(input.taskId);
+      if (!current || TERMINAL_STATUSES.has(current.status)) {
+        gate.resolve();
+        return current ?? dependencies.tasks.findById(input.taskId)!;
+      }
       dependencies.tasks.attachProviderSession(input.taskId, run.session);
     } else if (run.session.provider !== input.session.provider
       || run.session.sessionId !== input.session.sessionId) {
@@ -258,7 +347,14 @@ export function createTaskCoordinator(
       );
     }
 
+    const beforeRunning = dependencies.tasks.findById(input.taskId);
+    if (!beforeRunning || TERMINAL_STATUSES.has(beforeRunning.status)) {
+      gate.resolve();
+      return beforeRunning ?? dependencies.tasks.findById(input.taskId)!;
+    }
+
     dependencies.tasks.transition(input.taskId, ['starting'], 'running');
+    await syncRendererCard(input.renderer, input.taskId, { phase: 'Provider turn running' });
     gate.resolve();
 
     let result: TaskResult;
@@ -295,23 +391,30 @@ export function createTaskCoordinator(
         throw new Error(`Task "${taskId}" is not running and cannot request user input`);
       }
       dependencies.tasks.transition(taskId, ['running'], 'waiting_for_user');
+      await syncRendererCard(renderer, taskId, { phase: 'Waiting for user input' });
       try {
         return await operation();
       } finally {
         const after = dependencies.tasks.findById(taskId);
         if (after?.status === 'waiting_for_user') {
           dependencies.tasks.transition(taskId, ['waiting_for_user'], 'running');
+          await syncRendererCard(renderer, taskId, { phase: 'Provider turn resumed' });
         }
       }
     }
 
     return {
       async emit(event: AgentEvent): Promise<void> {
+        const currentTask = dependencies.tasks.findById(taskId);
+        if (activeRenderers.get(taskId) !== renderer || !currentTask || TERMINAL_STATUSES.has(currentTask.status)) return;
         const safeEvent = redactAgentEvent(event);
         dependencies.events.append(taskId, safeEvent);
         await renderer.handle(safeEvent).catch(error => {
           console.warn('[taskCoordinator] Failed to render task event:', redactErrorMessage(error));
         });
+        if (safeEvent.type === 'status') {
+          await syncRendererCard(renderer, taskId, { phase: safeEvent.phase });
+        }
 
         if (safeEvent.type === 'usage' && dependencies.usage) {
           dependencies.usage.recordUsage(provider.id, safeEvent.usage);
@@ -382,7 +485,9 @@ export function createTaskCoordinator(
     if (reservationId && dependencies.usage) dependencies.usage.complete(reservationId, safeStored);
     activeReservations.delete(taskId);
     interruptionRequested.delete(taskId);
+    await syncRendererCard(renderer, taskId, { result: safeStored, phase: 'Failed to start' });
     await finishRendererSafely(renderer, safeStored);
+    activeRenderers.delete(taskId);
     return dependencies.tasks.findById(taskId)!;
   }
 
@@ -392,6 +497,12 @@ export function createTaskCoordinator(
     renderer: TaskRenderer,
     reservationId?: string,
   ): Promise<TaskRecord> {
+    const alreadyFinalized = dependencies.tasks.getResult(taskId);
+    if (alreadyFinalized) {
+      activeRenderers.delete(taskId);
+      activeReservations.delete(taskId);
+      return dependencies.tasks.findById(taskId)!;
+    }
     const worktree = dependencies.tasks.getWorktree(taskId);
     const enriched: TaskResult = {
       ...result,
@@ -414,12 +525,15 @@ export function createTaskCoordinator(
           ? 'The task was cancelled.'
           : enriched.summary,
       };
-    const safeResult = redactTaskResult(storedResult);
-    dependencies.tasks.saveResult(taskId, safeResult);
+    const existingResult = dependencies.tasks.getResult(taskId);
+    const safeResult = existingResult ?? redactTaskResult(storedResult);
+    if (!existingResult) dependencies.tasks.saveResult(taskId, safeResult);
     if (reservationId && dependencies.usage) dependencies.usage.complete(reservationId, safeResult);
     activeReservations.delete(taskId);
     interruptionRequested.delete(taskId);
+    await syncRendererCard(renderer, taskId, { result: safeResult, phase: 'Completed' });
     await finishRendererSafely(renderer, safeResult);
+    activeRenderers.delete(taskId);
     return dependencies.tasks.findById(taskId)!;
   }
 
@@ -432,11 +546,24 @@ export function createTaskCoordinator(
     if (!TERMINAL_STATUSES.has(task.status)) {
       throw new Error(`Task is ${task.status}; wait for it to finish or cancel it first`);
     }
+    const project = dependencies.projects.findByName(task.projectName);
+    if (!project) throw new Error(`Project "${task.projectName}" not found`);
+    if (task.settingsMalformed) {
+      throw new Error(`Task "${task.id}" has a malformed settings snapshot; refusing continuation`);
+    }
+    const settings: AgentTaskSettings = task.settings && !task.settingsMalformed
+      ? task.settings
+      : dependencies.settings.resolveTaskSettings({
+      projectName: project.name,
+      provider: task.provider,
+    });
+    validateSupportedAgentSettings(task.provider, settings, 'task');
+    const turnSettings = effectiveTurnSettings({}, input.model, input.reasoningEffort);
+    validateProviderTurnSettings(task.provider, turnSettings);
+    dependencies.capabilityPreflight?.assertCanUseTaskThread?.(input.thread as never);
     if (!task.providerSessionId) throw new Error('Task has no provider session to continue');
     const worktree = dependencies.tasks.getWorktree(task.id);
     if (!worktree || worktree.removedAt) throw new Error('Task worktree is no longer available');
-    const project = dependencies.projects.findByName(task.projectName);
-    if (!project) throw new Error(`Project "${task.projectName}" not found`);
     const provider = dependencies.providers.require(task.provider);
     const availability = await provider.checkAvailability();
     if (!availability.available) throw new Error(availability.reason ?? 'Provider unavailable');
@@ -450,7 +577,13 @@ export function createTaskCoordinator(
       }
       const renderer = dependencies.rendererFactory(input.thread);
       const broker = dependencies.brokerFactory(input.thread);
-      renderer.start(input.thread);
+      activeRenderers.set(task.id, renderer);
+      const reopened = dependencies.tasks.findById(task.id)!;
+      await startRendererSafely(renderer, input.thread, {
+        task: reopened,
+        worktree,
+        phase: 'Resumed',
+      });
       await executeTurn({
         taskId: task.id,
         project,
@@ -460,8 +593,8 @@ export function createTaskCoordinator(
         workingDirectory: worktree.worktreePath,
         renderer,
         broker,
-        model: input.model ?? project.models?.[task.provider],
-        reasoningEffort: input.reasoningEffort ?? project.reasoningEfforts?.[task.provider],
+        settings,
+        ...(Object.keys(turnSettings).length > 0 ? { turnSettings } : {}),
         reservationId: reservation?.id,
         session: {
           provider: task.provider,
@@ -480,14 +613,24 @@ export function createTaskCoordinator(
 
   return {
     async startFromMessage(input: StartFromMessageInput): Promise<TaskRecord> {
-      const validated = await validateProjectProvider(input.projectName, input.provider);
+      const resolved = resolveProjectProvider(input.projectName, input.provider);
+      const validated = await requireAvailableProvider(resolved);
+      const settings = dependencies.settings.resolveTaskSettings({
+        projectName: input.projectName,
+        provider: resolved.providerId,
+        modelOverride: input.model,
+        reasoningOverride: input.reasoningEffort,
+      });
+      validateSupportedAgentSettings(resolved.providerId, settings, 'task');
+      await dependencies.worktrees.validateBaseBranch?.(validated.project.workingDirectory, validated.project.baseBranch);
+      dependencies.capabilityPreflight?.assertCanCreateTaskThread(input.message.channel as never);
       const reservation = await dependencies.usage?.reserve({ provider: validated.providerId, prompt: input.prompt });
       try {
         const thread = await input.message.startThread({
-          name: input.prompt.slice(0, 100),
+          name: safeThreadName(validated.providerId, input.prompt),
           autoArchiveDuration: 60,
         });
-        return await startNewTask({ ...validated, prompt: input.prompt, thread, model: input.model, reasoningEffort: input.reasoningEffort, reservationId: reservation?.id });
+        return await startNewTask({ ...validated, prompt: input.prompt, thread, settings, reservationId: reservation?.id });
       } catch (error) {
         if (reservation && dependencies.usage) {
           try { dependencies.usage.release(reservation.id); } catch { /* already consumed or released */ }
@@ -497,10 +640,20 @@ export function createTaskCoordinator(
     },
 
     async startInExistingThread(input: StartInExistingThreadInput): Promise<TaskRecord> {
-      const validated = await validateProjectProvider(input.projectName, input.provider);
+      const resolved = resolveProjectProvider(input.projectName, input.provider);
+      const validated = await requireAvailableProvider(resolved);
+      const settings = dependencies.settings.resolveTaskSettings({
+        projectName: input.projectName,
+        provider: resolved.providerId,
+        modelOverride: input.model,
+        reasoningOverride: input.reasoningEffort,
+      });
+      validateSupportedAgentSettings(resolved.providerId, settings, 'task');
+      await dependencies.worktrees.validateBaseBranch?.(validated.project.workingDirectory, validated.project.baseBranch);
+      dependencies.capabilityPreflight?.assertCanUseTaskThread?.(input.thread as never);
       const reservation = await dependencies.usage?.reserve({ provider: validated.providerId, prompt: input.prompt });
       try {
-        return await startNewTask({ ...validated, prompt: input.prompt, thread: input.thread, model: input.model, reasoningEffort: input.reasoningEffort, reservationId: reservation?.id });
+        return await startNewTask({ ...validated, prompt: input.prompt, thread: input.thread, settings, reservationId: reservation?.id });
       } catch (error) {
         if (reservation && dependencies.usage) {
           try { dependencies.usage.release(reservation.id); } catch { /* already consumed or released */ }
@@ -527,10 +680,31 @@ export function createTaskCoordinator(
       const task = dependencies.tasks.findByThreadId(threadId);
       if (!task || TERMINAL_STATUSES.has(task.status)) return false;
       const provider = dependencies.providers.require(task.provider);
-      await provider.cancelTask(task.providerSessionId ?? task.id);
+      const startup = startingTasks.get(task.id);
+      if (startup) startup.cancelled = true;
+      if (task.providerSessionId) {
+        void provider.cancelTask(task.providerSessionId).catch(error => {
+        console.warn('[taskCoordinator] Provider cancellation failed:', redactErrorMessage(error));
+        });
+      }
       const current = dependencies.tasks.findById(task.id);
       if (current && !TERMINAL_STATUSES.has(current.status)) {
         dependencies.tasks.transition(task.id, [current.status], 'cancelled');
+        const result: TaskResult = {
+          provider: task.provider,
+          outcome: 'cancelled',
+          exitType: 'cancelled',
+          startedAt: task.createdAt,
+          completedAt: Date.now(),
+          summary: 'The task was cancelled.',
+        };
+        dependencies.tasks.saveResult(task.id, result);
+        const renderer = activeRenderers.get(task.id);
+        if (renderer) {
+          await syncRendererCard(renderer, task.id, { phase: 'Cancelled', result });
+          await finishRendererSafely(renderer, result);
+          activeRenderers.delete(task.id);
+        }
       }
       const reservationId = activeReservations.get(task.id);
       if (reservationId && dependencies.usage) {
@@ -585,10 +759,17 @@ export function createTaskCoordinator(
       const provider = dependencies.providers.require(targetProvider);
       const availability = await provider.checkAvailability();
       if (!availability.available) throw new Error(availability.reason ?? `${targetProvider} is unavailable`);
+      const settings = dependencies.settings.resolveTaskSettings({
+        projectName: project.name,
+        provider: targetProvider,
+      });
+      validateSupportedAgentSettings(targetProvider, settings, 'task');
+      await dependencies.worktrees.validateBaseBranch?.(project.workingDirectory, sourceWorktree.branchName);
       const parent = sourceThread.parent;
       if (!parent || !('threads' in parent) || !parent.threads || typeof parent.threads.create !== 'function') {
         throw new Error('The source thread parent cannot create a sibling thread');
       }
+      dependencies.capabilityPreflight?.assertCanCreateTaskThread(parent as never);
       const result = dependencies.tasks.getResult(source.id);
       const prompt = [
         `Provider handoff from ${source.provider} task ${source.id}.`,
@@ -602,8 +783,8 @@ export function createTaskCoordinator(
       const reservation = await dependencies.usage?.reserve({ provider: targetProvider, prompt });
       let sibling: AnyThreadChannel;
       try {
-        sibling = await (parent.threads.create as (options: { name: string; autoArchiveDuration: 60 }) => Promise<AnyThreadChannel>)({ name: `${targetProvider}: ${source.objective}`.slice(0, 100), autoArchiveDuration: 60 });
-        const created = await startNewTask({ project, provider, providerId: targetProvider, prompt, thread: sibling, baseBranch: sourceWorktree.branchName, reservationId: reservation?.id });
+        sibling = await (parent.threads.create as (options: { name: string; autoArchiveDuration: 60 }) => Promise<AnyThreadChannel>)({ name: safeThreadName(targetProvider, source.objective), autoArchiveDuration: 60 });
+        const created = await startNewTask({ project, provider, providerId: targetProvider, prompt, thread: sibling, baseBranch: sourceWorktree.branchName, settings, reservationId: reservation?.id });
         await sourceThread.send({ content: `Provider handoff created: <#${sibling.id}> (${targetProvider}).` }).catch(() => undefined);
         await sibling.send({ content: `Continues source task <#${sourceThread.id}> using ${targetProvider}.` }).catch(() => undefined);
         return created;
@@ -618,6 +799,14 @@ export function createTaskCoordinator(
     recoverInterruptedTasks(): Promise<TaskRecord[]> {
       return recoverTasks(dependencies);
     },
+
+    async shutdown(): Promise<void> {
+      const renderers = [...activeRenderers.values()];
+      activeRenderers.clear();
+      await Promise.all(renderers.map(renderer => Promise.resolve(renderer.dispose?.()).catch(error => {
+        console.warn('[taskCoordinator] Failed to dispose task renderer:', redactErrorMessage(error));
+      })));
+    },
   };
 }
 
@@ -625,6 +814,14 @@ async function finishRendererSafely(renderer: TaskRenderer, result: TaskResult):
   await renderer.finish(result).catch(error => {
     console.warn('[taskCoordinator] Failed to render terminal task result:', redactErrorMessage(error));
   });
+  await Promise.resolve(renderer.dispose?.()).catch(error => {
+    console.warn('[taskCoordinator] Failed to dispose terminal task renderer:', redactErrorMessage(error));
+  });
+}
+
+function safeThreadName(provider: AgentProviderId, objective: string): string {
+  const safeObjective = redactSensitiveText(objective).replace(/[\r\n]+/g, ' ').trim();
+  return `${provider}: ${safeObjective || 'task'}`.slice(0, 100);
 }
 
 function runningGate(): RunningGate {

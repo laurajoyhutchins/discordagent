@@ -80,6 +80,172 @@ function startInput() {
 }
 
 describe('ClaudeProvider', () => {
+  it('uses the resolved task timeout for the provider turn', async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      const queryFn: ClaudeQueryFunction = () => (async function* () {
+        yield initMessage('timeout-session');
+        yield successResult('timeout-session');
+      })();
+      const provider = new ClaudeProvider({ queryFn, resolveMcpServers: () => undefined });
+      const { host } = createHost();
+      const run = await provider.startTask({ ...startInput(), settings: { timeoutMs: 25 } }, host);
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 25);
+      await expect(run.completion).resolves.toMatchObject({ outcome: 'completed' });
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it('uses the snapshotted model and resolves only the selected host MCP profile', async () => {
+    let captured: ClaudeQueryRequest | undefined;
+    const queryFn: ClaudeQueryFunction = request => {
+      captured = request;
+      return (async function* () {
+        yield initMessage('settings-session');
+        yield successResult('settings-session');
+      })();
+    };
+    const resolveMcpServers = vi.fn((profile?: string) => profile === 'browser'
+      ? { playwright: { type: 'stdio', command: 'playwright-mcp' } as never }
+      : undefined);
+    const provider = new ClaudeProvider({
+      queryFn,
+      resolveMcpServers,
+    });
+
+    const run = await provider.startTask({
+      ...startInput(), model: 'legacy-model', settings: { model: 'snapshot-model', mcpProfile: 'browser' },
+    }, createHost().host);
+    await run.completion;
+
+    expect(resolveMcpServers).toHaveBeenCalledWith('browser');
+    expect(captured?.options?.model).toBe('snapshot-model');
+    expect(captured?.options?.mcpServers).toEqual({ playwright: { type: 'stdio', command: 'playwright-mcp' } });
+  });
+
+  it('resolves an absent MCP profile through the host default allowlist', async () => {
+    let captured: ClaudeQueryRequest | undefined;
+    const defaultServers = { playwright: { type: 'stdio', command: 'playwright-mcp' } as never };
+    const resolveMcpServers = vi.fn((profile?: string) => profile === undefined || profile === 'default'
+      ? defaultServers : undefined);
+    const provider = new ClaudeProvider({
+      queryFn: request => {
+        captured = request;
+        return (async function* () {
+          yield initMessage('default-mcp-session');
+          yield successResult('default-mcp-session');
+        })();
+      },
+      resolveMcpServers,
+    });
+
+    const run = await provider.startTask(startInput(), createHost().host);
+    await run.completion;
+
+    expect(resolveMcpServers).toHaveBeenCalledWith(undefined);
+    expect(captured?.options?.mcpServers).toEqual(defaultServers);
+  });
+
+  it('passes an explicit disabled MCP profile as an empty server map', async () => {
+    let captured: ClaudeQueryRequest | undefined;
+    const resolveMcpServers = vi.fn((profile?: string) => profile === 'disabled' ? {} : undefined);
+    const provider = new ClaudeProvider({
+      queryFn: request => {
+        captured = request;
+        return (async function* () {
+          yield initMessage('disabled-mcp-session');
+          yield successResult('disabled-mcp-session');
+        })();
+      },
+      resolveMcpServers,
+    });
+
+    const run = await provider.startTask({ ...startInput(), settings: { mcpProfile: 'disabled' } }, createHost().host);
+    await run.completion;
+
+    expect(resolveMcpServers).toHaveBeenCalledWith('disabled');
+    expect(captured?.options).toHaveProperty('mcpServers', {});
+  });
+
+  it('fails closed when a snapshotted MCP profile is no longer available', async () => {
+    let captured: ClaudeQueryRequest | undefined;
+    const provider = new ClaudeProvider({
+      queryFn: request => {
+        captured = request;
+        return (async function* () {
+          yield initMessage('removed-mcp-session');
+          yield successResult('removed-mcp-session');
+        })();
+      },
+      resolveMcpServers: () => undefined,
+    });
+
+    const run = await provider.startTask({ ...startInput(), settings: { mcpProfile: 'removed-profile' } }, createHost().host);
+    await run.completion;
+
+    expect(captured?.options).toHaveProperty('mcpServers', {});
+  });
+
+  it('uses the immutable snapshot for resume and only the turn settings for this turn', async () => {
+    let captured: ClaudeQueryRequest | undefined;
+    const provider = new ClaudeProvider({
+      queryFn: request => {
+        captured = request;
+        return (async function* () {
+          yield initMessage('continuation-settings-session');
+          yield successResult('continuation-settings-session');
+        })();
+      },
+      resolveMcpServers: () => undefined,
+    });
+
+    const run = await provider.continueTask({
+      ...startInput(),
+      model: 'legacy-model',
+      settings: { model: 'snapshot-model', timeoutMs: 60_000 },
+      turnSettings: { model: 'turn-model', timeoutMs: 5_000 },
+      session: { provider: 'claude', sessionId: 'continuation-settings-session', createdAt: 1 },
+    }, createHost().host);
+    await run.completion;
+
+    expect(captured?.options?.model).toBe('turn-model');
+    expect(captured?.options?.resume).toBe('continuation-settings-session');
+  });
+
+  it('rejects unsupported Claude reasoning and approval settings before the SDK request', async () => {
+    const queryFn = vi.fn<ClaudeQueryFunction>(() => (async function* () {
+      yield initMessage('unsupported-settings-session');
+      yield successResult('unsupported-settings-session');
+    })());
+    const provider = new ClaudeProvider({ queryFn, resolveMcpServers: () => undefined });
+
+    await expect(provider.startTask({ ...startInput(), settings: { reasoningEffort: 'high' } }, createHost().host))
+      .rejects.toThrow(/Claude.*reasoningEffort.*support/i);
+    expect(queryFn).not.toHaveBeenCalled();
+    await expect(provider.startTask({ ...startInput(), settings: { approvalProfile: 'strict' } }, createHost().host))
+      .rejects.toThrow(/Claude.*approvalProfile.*support/i);
+    await expect(provider.startTask({ ...startInput(), settings: { unexpected: true } as never }, createHost().host))
+      .rejects.toThrow(/Claude.*unexpected.*support/i);
+  });
+
+  it('rejects unsupported continuation turn settings before the SDK request', async () => {
+    const queryFn = vi.fn<ClaudeQueryFunction>(() => (async function* () {
+      yield initMessage('unsupported-turn-settings-session');
+      yield successResult('unsupported-turn-settings-session');
+    })());
+    const provider = new ClaudeProvider({ queryFn, resolveMcpServers: () => undefined });
+
+    await expect(provider.continueTask({
+      ...startInput(),
+      settings: { model: 'snapshot-model', timeoutMs: 60_000 },
+      turnSettings: { reasoningEffort: 'high' } as never,
+      session: { provider: 'claude', sessionId: 'existing-session', createdAt: 1 },
+    }, createHost().host)).rejects.toThrow(/Claude.*reasoningEffort.*support/i);
+    expect(queryFn).not.toHaveBeenCalled();
+  });
+
   it('returns the provider session before completion and normalizes streaming, usage, and result data', async () => {
     const gate = deferred();
     let captured: ClaudeQueryRequest | undefined;
@@ -106,9 +272,7 @@ describe('ClaudeProvider', () => {
     const { host, events } = createHost();
     const provider = new ClaudeProvider({
       queryFn,
-      timeoutMs: 10_000,
-      defaultModel: 'default-model',
-      resolveProjectModel: () => 'project-model',
+      resolveMcpServers: () => undefined,
       env: {
         SAFE_VALUE: 'ok',
         CLAUDECODE: 'must-be-removed',
@@ -199,7 +363,7 @@ describe('ClaudeProvider', () => {
       approvalCount += 1;
       return approvalCount === 1 ? 'allow' : 'deny';
     };
-    const provider = new ClaudeProvider({ queryFn, timeoutMs: 10_000 });
+    const provider = new ClaudeProvider({ queryFn, resolveMcpServers: () => undefined });
     const run = await provider.startTask(startInput(), base.host);
     await run.completion;
 
@@ -236,7 +400,7 @@ describe('ClaudeProvider', () => {
         });
       })();
     };
-    const provider = new ClaudeProvider({ queryFn, timeoutMs: 10_000 });
+    const provider = new ClaudeProvider({ queryFn, resolveMcpServers: () => undefined });
     const { host } = createHost();
     const session: ProviderSession = {
       provider: 'claude',
@@ -260,7 +424,7 @@ describe('ClaudeProvider', () => {
     const queryFn: ClaudeQueryFunction = () => (async function* () {
       yield { type: 'mystery', payload: true };
     })();
-    const provider = new ClaudeProvider({ queryFn, timeoutMs: 10_000 });
+    const provider = new ClaudeProvider({ queryFn, resolveMcpServers: () => undefined });
     const { host } = createHost();
 
     await expect(Promise.race([
@@ -276,7 +440,7 @@ describe('ClaudeProvider', () => {
       yield { type: 'mystery', payload: true };
     })();
     const { host, events } = createHost();
-    const provider = new ClaudeProvider({ queryFn, timeoutMs: 10_000, now: () => 500 });
+    const provider = new ClaudeProvider({ queryFn, resolveMcpServers: () => undefined, now: () => 500 });
 
     const run = await provider.startTask(startInput(), host);
     await expect(run.completion).resolves.toMatchObject({

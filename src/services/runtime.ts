@@ -1,11 +1,15 @@
-import type { Client } from 'discord.js';
+import type { AnyThreadChannel, Client } from 'discord.js';
 import type { DatabaseHandle } from '../db/database.js';
 import type { AgentProvider, AgentProviderId } from '../agents/contracts.js';
 import { ClaudeProvider } from '../agents/claude/claudeProvider.js';
 import { ProviderRegistry } from '../agents/providerRegistry.js';
 import { createTaskCoordinator, type TaskCoordinator } from '../coordinator/taskCoordinator.js';
+import { createTaskCapabilityPreflight } from '../coordinator/capabilityPreflight.js';
+import { evaluateCapability, type CapabilityPermissionChannel } from '../discord/capabilities/evaluator.js';
+import { PROCESS_GATEWAY_INTENTS } from '../discord/capabilities/registry.js';
 import { DiscordInteractionBroker } from '../discord/interactionBroker.js';
 import { DiscordTaskRenderer } from '../discord/taskRenderer.js';
+import type { TaskRenderer } from '../discord/taskRenderer.js';
 import { createGitClient, type GitClient } from '../git/gitClient.js';
 import { createWorktreeManager, type WorktreeManager } from '../git/worktreeManager.js';
 import { createEventRepository, type EventRepository } from '../repositories/eventRepository.js';
@@ -31,7 +35,7 @@ import { AppServerTransport } from '../agents/codex/appServerTransport.js';
 import { CodexAuthService } from '../agents/codex/codexAuthService.js';
 import { CodexProvider } from '../agents/codex/codexProvider.js';
 import { CodexPrimaryModel } from '../agents/codex/codexPrimaryModel.js';
-import { clearAgentRuntimeServices, setAgentRuntimeServices } from './agentRuntimeService.js';
+import { capturePrimaryProviderState, clearAgentRuntimeServices, setAgentRuntimeServices, type PrimaryProviderActivationResult } from './agentRuntimeService.js';
 import { createMessageRepository, type MessageRepository } from '../repositories/messageRepository.js';
 import { createMemoryRepository, type MemoryRepository } from '../repositories/memoryRepository.js';
 import { ClaudePrimaryModel } from '../agents/claude/claudePrimaryModel.js';
@@ -45,6 +49,9 @@ import { createUsageAdmissionService, type UsageAdmissionService } from './usage
 import { clearUsageAdmissionService, setUsageAdmissionService } from './usageAdmissionRegistry.js';
 import { createPendingTaskService, type PendingTaskService } from './pendingTaskService.js';
 import { createProviderOnboardingService, type ProviderOnboardingService } from './providerOnboarding.js';
+import { createProjectSettingsRepository } from '../repositories/projectSettingsRepository.js';
+import { createSettingsService, type SettingsService } from './settingsService.js';
+import type { HostMcpServerConfig, HostMcpServers } from '../agents/contracts.js';
 
 export interface RuntimeOptions {
   databasePath?: string;
@@ -66,11 +73,13 @@ export interface RuntimeServices {
   database: DatabaseHandle;
   projects: ProjectRepository;
   settings: SettingsRepository;
+  settingsService: SettingsService;
   tasks: TaskRepository;
   events: EventRepository;
   worktrees: WorktreeManager;
   providers: ProviderRegistry;
   coordinator: TaskCoordinator;
+  renderers: Set<TaskRenderer>;
   codexTransport?: AppServerTransport;
   codexAuth?: CodexAuthService;
   messages: MessageRepository;
@@ -81,6 +90,43 @@ export interface RuntimeServices {
   providerOnboarding?: ProviderOnboardingService;
   usagePoll?: ReturnType<typeof setInterval>;
   usageUnsubscribe?: () => void;
+}
+
+export function resolvePrimaryAgentModel(input: {
+  persistedPrimaryModel?: string;
+  configuredProviderModel?: string;
+  configuredPrimaryModel?: string;
+  providerDefaultModel?: string;
+}): string | undefined {
+  return input.persistedPrimaryModel
+    ?? input.configuredProviderModel
+    ?? input.configuredPrimaryModel
+    ?? input.providerDefaultModel;
+}
+
+export interface HostMcpProfiles {
+  profiles: readonly string[];
+  resolve(profile?: string): HostMcpServers | undefined;
+}
+
+export function createHostMcpProfiles(
+  configuredServers?: HostMcpServers,
+): HostMcpProfiles {
+  const servers = configuredServers ?? {};
+  const serverNames = Object.keys(servers).filter(name => name !== 'default' && name !== 'disabled');
+  const filteredServers = Object.fromEntries(serverNames.map(name => [name, servers[name]])) as Record<string, HostMcpServerConfig>;
+  const defaultServers = serverNames.length > 0 ? filteredServers : undefined;
+  const profiles = ['default', 'disabled', ...serverNames];
+
+  return {
+    profiles,
+    resolve(profile?: string): HostMcpServers | undefined {
+      if (profile === undefined || profile === 'default') return defaultServers;
+      if (profile === 'disabled') return {};
+      if (!Object.prototype.hasOwnProperty.call(servers, profile)) return undefined;
+      return { [profile]: filteredServers[profile] };
+    },
+  };
 }
 
 export async function startRuntime(
@@ -106,22 +152,49 @@ export async function startRuntime(
     const database = getProjectDatabase();
     const projects = getProjectRepository();
     const settings = getSettingsRepository();
+    const projectSettings = createProjectSettingsRepository(database);
     const tasks = createTaskRepository(database);
     const events = createEventRepository(database);
     const messages = createMessageRepository(database);
     const memories = createMemoryRepository(database);
-    const usage = createUsageAdmissionService(createUsageRepository(database), { primaryReserve: config.primaryUsageReserve });
+    const usage = createUsageAdmissionService(createUsageRepository(database), {
+      primaryReserve: () => settings.getUsageReserve() ?? config.primaryUsageReserve,
+    });
+    const capabilityContext = (channel: CapabilityPermissionChannel) => {
+      const channelGuild = (channel as CapabilityPermissionChannel & { guild?: { members: { me: import('discord.js').GuildMember | null } } }).guild;
+      const guild = channelGuild ?? client.guilds.cache.get(config.guildId);
+      return {
+        member: guild?.members.me ?? null,
+        channel,
+        configuredIntents: PROCESS_GATEWAY_INTENTS,
+      };
+    };
+    const capabilityPreflight = createTaskCapabilityPreflight(capabilityContext);
+    const runtimeRenderers = new Set<TaskRenderer>();
+    const rendererFactory = (thread: import('discord.js').AnyThreadChannel) => {
+      const renderer = new DiscordTaskRenderer({
+      notifyUserId: config.notifyUserId,
+      controlCardStore: tasks,
+      controlCardCanEmbed: target => evaluateCapability('core.message.embed', capabilityContext(target as unknown as CapabilityPermissionChannel)).state === 'available',
+      controlCardCanPin: target => evaluateCapability('task.control-card.pin', capabilityContext(target as unknown as CapabilityPermissionChannel)).state === 'available',
+      });
+      runtimeRenderers.add(renderer);
+      const dispose = renderer.dispose.bind(renderer);
+      renderer.dispose = async () => {
+        runtimeRenderers.delete(renderer);
+        await dispose();
+      };
+      return renderer;
+    };
     const worktrees = createWorktreeManager({
       baseDirectory: options.worktreesBaseDir ?? config.worktreesBaseDir,
       git: options.git ?? createGitClient(),
     });
     const providers = new ProviderRegistry();
+    const mcpProfiles = createHostMcpProfiles(config.mcpServers);
     if (!options.disableClaude && config.claudeEnabled) {
       const claudeProvider = options.claudeProvider ?? new ClaudeProvider({
-        timeoutMs: config.claudeTimeoutMs,
-        mcpServers: config.mcpServers,
-        defaultModel: config.defaultModel,
-        resolveProjectModel: projectName => projects.findByName(projectName)?.models?.claude,
+        resolveMcpServers: mcpProfiles.resolve,
         onRateLimit: info => {
           captureRateLimitEvent(info);
           const raw = typeof info.utilization === 'number' ? info.utilization : undefined;
@@ -149,7 +222,7 @@ export async function startRuntime(
         codexTransport ??= new AppServerTransport({ command: config.codexCliPath });
         await codexTransport.initialize();
         codexAuth ??= new CodexAuthService(codexTransport);
-        codexProvider = new CodexProvider({ transport: codexTransport, auth: codexAuth, defaultModel: config.defaultCodexModel });
+        codexProvider = new CodexProvider({ transport: codexTransport, auth: codexAuth });
       } catch (error) {
         console.warn('[runtime] Codex App Server unavailable:', redactErrorMessage(error));
         await codexTransport?.close().catch(() => undefined);
@@ -163,14 +236,34 @@ export async function startRuntime(
       providers.register(codexProvider);
     }
 
+    const settingsService = createSettingsService({
+      settings,
+      projects,
+      projectSettings,
+      hostDefaults: {
+        defaultProvider: undefined,
+        claudeModel: config.defaultModel || undefined,
+        codexModel: config.defaultCodexModel || undefined,
+        primaryAgentModel: config.primaryAgentModel || undefined,
+        claudeTimeoutMs: config.claudeTimeoutMs,
+        usageReserve: config.primaryUsageReserve,
+      },
+      isProviderAvailable: provider => providers.list().includes(provider),
+      checkProviderAvailability: async provider => providers.require(provider).checkAvailability(),
+      mcpProfileCatalog: { profiles: mcpProfiles.profiles },
+      transaction: operation => database.raw.transaction(operation)(),
+    });
+
     const coordinator = createTaskCoordinator({
       projects,
       tasks,
+      settings: settingsService,
       events,
       worktrees,
       providers,
       usage,
-      rendererFactory: () => new DiscordTaskRenderer({ notifyUserId: config.notifyUserId }),
+      capabilityPreflight,
+      rendererFactory,
       brokerFactory: () => new DiscordInteractionBroker(),
     });
 
@@ -179,33 +272,43 @@ export async function startRuntime(
     initRoborevWatcher(client);
     setTaskCoordinator(coordinator);
     let providerOnboarding: ProviderOnboardingService | undefined;
-    setAgentRuntimeServices({ providers, tasks, pendingTasks, ...(codexAuth ? { codexAuth } : {}) });
+    setAgentRuntimeServices({ providers, tasks, pendingTasks, settingsService, ...(codexAuth ? { codexAuth } : {}) });
     setUsageAdmissionService(usage);
     let primaryAgent: PrimaryAgentService | undefined;
-    let primaryProviderActivator: ((provider: AgentProviderId) => Promise<void>) | undefined;
+    let primaryProviderActivator: ((provider: AgentProviderId) => Promise<PrimaryProviderActivationResult>) | undefined;
     const selectedProvider = settings.getDefaultProvider();
     if (!options.disablePrimaryAgent && config.authorizedUserId) {
       const guild = await client.guilds.fetch(config.guildId);
-      const primaryChannel = await ensurePrimaryAgentChannel(guild, config.authorizedRoleIds);
+      const configuredPrimaryChannelId = settings.get('primary_channel_id');
+      const primaryChannel = await ensurePrimaryAgentChannel(guild, config.authorizedRoleIds, config.authorizedUserId, configuredPrimaryChannelId);
+      if (configuredPrimaryChannelId !== primaryChannel.id) settings.set('primary_channel_id', primaryChannel.id);
       const context = createContextAssembler({ projects, tasks, messages, memories, usage });
       const createPrimaryModel = (provider: AgentProviderId): PrimaryModel | undefined => {
         if (options.primaryModel) return options.primaryModel;
-        const configuredModel = settings.getModel(provider);
+        const globalSettings = settingsService.global();
+        const configuredModel = provider === 'claude' ? globalSettings.claudeModel : globalSettings.codexModel;
         const configuredReasoning = settings.getReasoningEffort(provider);
+        const primaryAgentModel = resolvePrimaryAgentModel({
+          persistedPrimaryModel: globalSettings.primaryAgentModel,
+          configuredProviderModel: configuredModel,
+          configuredPrimaryModel: config.primaryAgentModel || undefined,
+          providerDefaultModel: (provider === 'claude' ? config.defaultModel : config.defaultCodexModel) || undefined,
+        });
         if (provider === 'claude' && providers.list().includes('claude')) {
-          return new ClaudePrimaryModel({ model: configuredModel ?? config.primaryAgentModel });
+          return new ClaudePrimaryModel({ model: primaryAgentModel });
         }
         if (provider === 'codex' && codexTransport && codexAuth) {
           return new CodexPrimaryModel({
             transport: codexTransport,
             auth: codexAuth,
-            model: (configuredModel ?? config.primaryAgentModel) || config.defaultCodexModel,
+            ...(primaryAgentModel ? { model: primaryAgentModel } : {}),
             ...(configuredReasoning ? { reasoningEffort: configuredReasoning } : {}),
           });
         }
         return undefined;
       };
-      const activatePrimaryProvider = async (provider: AgentProviderId): Promise<void> => {
+      const activatePrimaryProvider = async (provider: AgentProviderId): Promise<PrimaryProviderActivationResult> => {
+        const wasActive = primaryAgent !== undefined;
         const model = createPrimaryModel(provider);
         if (!model) throw new Error(`Provider ${provider} is not available for the PM chat on this host.`);
         primaryAgent = createPrimaryAgentService({
@@ -215,20 +318,33 @@ export async function startRuntime(
           fetchProjectChannel: async id => { const channel = await client.channels.fetch(id).catch(() => null); return channel?.isTextBased() && !channel.isDMBased() && !channel.isThread() ? channel as import('discord.js').TextChannel : null; },
         });
         setPrimaryAgentService(primaryAgent);
+        return wasActive ? 'reconfigured' : 'activated';
       };
       primaryProviderActivator = activatePrimaryProvider;
-      setAgentRuntimeServices({ providers, tasks, pendingTasks, primaryProviderActivator, ...(codexAuth ? { codexAuth } : {}) });
+      providerOnboarding = createProviderOnboardingService({
+        ownerId: config.authorizedUserId,
+        settings: settingsService,
+        metadata: settings,
+        providers,
+        channel: primaryChannel,
+        botUserId: client.user?.id ?? '',
+        onSelected: activatePrimaryProvider,
+        captureSelectionState: capturePrimaryProviderState,
+      });
+      setAgentRuntimeServices({ providers, tasks, pendingTasks, settingsService, providerOnboarding, primaryProviderActivator, primaryChannelId: primaryChannel.id, primaryOwnerId: config.authorizedUserId, ...(codexAuth ? { codexAuth } : {}) });
       if (!selectedProvider) {
-        providerOnboarding = createProviderOnboardingService({
-          ownerId: config.authorizedUserId,
-          settings,
-          providers,
-          channel: primaryChannel,
-          onSelected: activatePrimaryProvider,
-        });
         await providerOnboarding.ensurePrompt();
       } else {
-        await activatePrimaryProvider(selectedProvider);
+        const selected = providers.list().includes(selectedProvider) ? providers.require(selectedProvider) : undefined;
+        const availability = selected ? await selected.checkAvailability() : { available: false, reason: `Persisted provider "${selectedProvider}" is not registered on this host.` };
+        if (!selected || !availability.available) {
+          settings.set('default_provider_unavailable', selectedProvider);
+          await providerOnboarding.ensurePrompt({ forceSelection: true });
+        } else {
+          settings.set('default_provider_unavailable', '');
+          await activatePrimaryProvider(selectedProvider);
+          await providerOnboarding.ensurePrompt();
+        }
       }
     }
     if (providerOnboarding || primaryProviderActivator) {
@@ -236,6 +352,7 @@ export async function startRuntime(
         providers,
         tasks,
         pendingTasks,
+        settingsService,
         ...(providerOnboarding ? { providerOnboarding } : {}),
         ...(primaryProviderActivator ? { primaryProviderActivator } : {}),
         ...(codexAuth ? { codexAuth } : {}),
@@ -280,9 +397,9 @@ export async function startRuntime(
         try { usage.release(reservation.id); } catch { /* already finalized */ }
       }
     }
-    await notifyRecoveredTasks(client, recoveredTasks, events);
+    await notifyRecoveredTasks(client, recoveredTasks, events, tasks, rendererFactory);
 
-    return { database, projects, settings, tasks, events, messages, memories, worktrees, providers, coordinator, usage, pendingTasks, ...(providerOnboarding ? { providerOnboarding } : {}), ...(usagePoll ? { usagePoll } : {}), ...(usageUnsubscribe ? { usageUnsubscribe } : {}), ...(primaryAgent ? { primaryAgent } : {}), ...(codexTransport ? { codexTransport } : {}), ...(codexAuth ? { codexAuth } : {}) };
+    return { database, projects, settings, settingsService, tasks, events, messages, memories, worktrees, providers, coordinator, renderers: runtimeRenderers, usage, pendingTasks, ...(providerOnboarding ? { providerOnboarding } : {}), ...(usagePoll ? { usagePoll } : {}), ...(usageUnsubscribe ? { usageUnsubscribe } : {}), ...(primaryAgent ? { primaryAgent } : {}), ...(codexTransport ? { codexTransport } : {}), ...(codexAuth ? { codexAuth } : {}) };
   } catch (error) {
     clearTaskCoordinator();
     clearAgentRuntimeServices();
@@ -298,6 +415,10 @@ export async function startRuntime(
 }
 
 export async function stopRuntime(runtime: RuntimeServices): Promise<void> {
+  await runtime.coordinator.shutdown();
+  await Promise.all([...runtime.renderers].map(renderer => Promise.resolve(renderer.dispose?.()).catch(error => {
+    console.warn('[runtime] Failed to dispose task renderer:', redactErrorMessage(error));
+  })));
   clearTaskCoordinator();
   clearAgentRuntimeServices();
   clearPrimaryAgentService();
@@ -315,10 +436,36 @@ async function notifyRecoveredTasks(
   client: Client,
   recoveredTasks: readonly import('../types.js').TaskRecord[],
   events: EventRepository,
+  tasks: import('../repositories/taskRepository.js').TaskRepository,
+  rendererFactory: (thread: AnyThreadChannel) => TaskRenderer,
 ): Promise<void> {
   for (const task of recoveredTasks) {
-    const channel = await client.channels?.fetch(task.threadId).catch(() => null);
-    if (!channel || !('send' in channel) || typeof channel.send !== 'function') continue;
+    let channel: ({ send(payload: unknown): Promise<unknown> } & object) | null = null;
+    let fetchError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        channel = await client.channels?.fetch(task.threadId) as typeof channel;
+        fetchError = undefined;
+        break;
+      } catch (error) {
+        fetchError = error;
+        if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 25 * attempt));
+      }
+    }
+    if (fetchError) {
+      console.warn(`[runtime] Recovery checkpoint for task ${task.id} remains pending; Discord channel fetch failed:`, redactErrorMessage(fetchError));
+    }
+    if (!channel) continue;
+
+    const renderer = rendererFactory(channel as AnyThreadChannel);
+    try {
+      await Promise.resolve(renderer.start(channel as AnyThreadChannel, {
+        task,
+        ...(tasks.getWorktree(task.id) ? { worktree: tasks.getWorktree(task.id) } : {}),
+        phase: 'Recovery checkpoint',
+      })).catch((error: unknown) => {
+        console.warn('[runtime] Failed to reconstruct task control card:', redactErrorMessage(error));
+      });
 
     const storedEvents = events.list(task.id);
     let detail: string | undefined;
@@ -336,8 +483,13 @@ async function notifyRecoveredTasks(
       'Send a new message in this thread when you are ready to resume.',
     ].join('\n');
 
-    await channel.send({ content }).catch(error => {
-      console.warn(`[runtime] Failed to post recovery checkpoint for task ${task.id}:`, redactErrorMessage(error));
-    });
+      await channel.send({ content }).catch((error: unknown) => {
+        console.warn(`[runtime] Failed to post recovery checkpoint for task ${task.id}:`, redactErrorMessage(error));
+      });
+    } finally {
+      await Promise.resolve(renderer.dispose?.()).catch(error => {
+        console.warn(`[runtime] Failed to dispose recovery renderer for task ${task.id}:`, redactErrorMessage(error));
+      });
+    }
   }
 }

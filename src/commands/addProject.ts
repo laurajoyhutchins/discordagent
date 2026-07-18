@@ -1,11 +1,17 @@
 import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { existsSync, statSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { AgentProviderId } from '../agents/contracts.js';
 import { addProject, getDefaultProvider, getProject } from '../services/projectStore.js';
-import { createProjectChannels } from '../services/channelManager.js';
+import { createProjectChannels, deleteProjectChannels } from '../services/channelManager.js';
 import { config } from '../config.js';
+import { getProviderRegistry } from '../services/agentRuntimeService.js';
+
+export function isPathWithinBase(base: string, candidate: string, pathApi = { relative, isAbsolute, sep }): boolean {
+  const relativePath = pathApi.relative(base, candidate);
+  return relativePath !== '..' && !relativePath.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(relativePath);
+}
 
 /**
  * Check if roborev is installed and available on this machine
@@ -39,9 +45,25 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   const roborevOption = interaction.options.getBoolean('roborev'); // null if not provided
   const defaultProvider: AgentProviderId | undefined = getDefaultProvider();
 
-  if (!defaultProvider) {
+  if (!defaultProvider || getProviderRegistry().list().length === 0) {
     await interaction.reply({
       content: 'Choose a provider in **#agent-chat** first. The selected global provider will be inherited by this project.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  if (getProviderRegistry().list().includes(defaultProvider)) {
+    const availability = await getProviderRegistry().availability(defaultProvider);
+    if (!availability.available) {
+      await interaction.reply({
+        content: `The stored global provider **${defaultProvider}** is unavailable. Choose an available provider in **#agent-chat** before adding a project.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+  } else {
+    await interaction.reply({
+      content: `The stored global provider **${defaultProvider}** is not available on this host. Choose an available provider in **#agent-chat** before adding a project.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -69,7 +91,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
       await interaction.reply({ content: 'Server misconfiguration: PROJECTS_BASE_DIR could not be resolved.', flags: MessageFlags.Ephemeral });
       return;
     }
-    if (!resolvedPath.startsWith(resolvedBase + '/') && resolvedPath !== resolvedBase) {
+    if (!isPathWithinBase(resolvedBase, resolvedPath)) {
       await interaction.reply({
         content: `Path must be within the allowed base directory: \`${config.projectsBaseDir}\``,
         flags: MessageFlags.Ephemeral,
@@ -107,9 +129,10 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     includeRoborev = isGitRepo && isRoborevAvailable() && hasRoborevSetup(resolvedPath);
   }
 
+  let channels: Awaited<ReturnType<typeof createProjectChannels>> | undefined;
   try {
     const guild = interaction.guild!;
-    const channels = await createProjectChannels(guild, name, includeRoborev);
+    channels = await createProjectChannels(guild, name, includeRoborev, config.authorizedRoleIds);
 
     addProject({
       name,
@@ -134,6 +157,16 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     await interaction.editReply(replyMsg);
 
   } catch (err) {
+    if (channels && !getProject(name)) {
+      try {
+        await deleteProjectChannels(interaction.guild!, channels.categoryId, channels.agentChannelId, channels.roborevChannelId, { strict: true });
+      } catch (compensationError) {
+        const original = err instanceof Error ? err.message : String(err);
+        const compensation = compensationError instanceof Error ? compensationError.message : String(compensationError);
+        await interaction.editReply(`Failed to create project: ${original}. Compensation also failed: ${compensation}`);
+        return;
+      }
+    }
     const msg = err instanceof Error ? err.message : String(err);
     await interaction.editReply(`Failed to create project: ${msg}`);
   }

@@ -67,7 +67,6 @@ describe('loopRunner durable task reuse', () => {
       prompt: 'run the tests',
       thread,
       provider: 'claude',
-      model: 'sonnet',
     });
     expect(coordinator.continueInThread).not.toHaveBeenCalled();
     expect(schedule).toHaveBeenCalledTimes(1);

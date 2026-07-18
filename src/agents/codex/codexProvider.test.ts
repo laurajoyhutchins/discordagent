@@ -28,7 +28,7 @@ describe('CodexProvider', () => {
     const run = await provider.startTask(startInput, createHost({ emit: async event => { events.push(event); } }));
     expect(run.session.sessionId).toBe('thread-1');
     expect(transport.request).toHaveBeenNthCalledWith(1, 'thread/start', {
-      cwd: '/repo', model: 'gpt-5.4', approvalPolicy: 'onRequest', sandbox: 'workspaceWrite', serviceName: 'discord-agent',
+      cwd: '/repo', model: 'gpt-5.4', effort: 'xhigh', approvalPolicy: 'onRequest', sandbox: 'workspaceWrite', serviceName: 'discord-agent',
     });
     expect(transport.request).toHaveBeenNthCalledWith(2, 'turn/start', {
       threadId: 'thread-1', input: [{ type: 'text', text: 'hello' }], cwd: '/repo', model: 'gpt-5.4',
@@ -46,9 +46,58 @@ describe('CodexProvider', () => {
     const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
     await provider.continueTask({ ...startInput, session: { provider: 'codex', sessionId: 'thread-1', createdAt: 1 } }, createHost());
     expect(transport.request).toHaveBeenNthCalledWith(1, 'thread/resume', {
-      threadId: 'thread-1', cwd: '/repo', model: 'gpt-5.4', approvalPolicy: 'onRequest', sandbox: 'workspaceWrite', serviceName: 'discord-agent',
+      threadId: 'thread-1', cwd: '/repo', model: 'gpt-5.4', effort: 'xhigh', approvalPolicy: 'onRequest', sandbox: 'workspaceWrite', serviceName: 'discord-agent',
     });
     expect(transport.request).toHaveBeenNthCalledWith(2, 'turn/start', expect.objectContaining({ threadId: 'thread-1' }));
+  });
+
+  it('uses the settings snapshot for thread and turn model and reasoning requests', async () => {
+    const transport = new FakeTransport();
+    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
+    await provider.startTask({ ...startInput, model: 'legacy-model', reasoningEffort: 'low', settings: {
+      model: 'snapshot-model', reasoningEffort: 'high',
+    } }, createHost());
+
+    expect(transport.request).toHaveBeenNthCalledWith(1, 'thread/start', expect.objectContaining({ model: 'snapshot-model', effort: 'high' }));
+    expect(transport.request).toHaveBeenNthCalledWith(2, 'turn/start', expect.objectContaining({ model: 'snapshot-model', effort: 'high' }));
+  });
+
+  it('uses a one-message override layered above the snapshot on resume', async () => {
+    const transport = new FakeTransport();
+    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
+    await provider.continueTask({ ...startInput, model: 'legacy-model', reasoningEffort: 'low', settings: {
+      model: 'snapshot-model', reasoningEffort: 'medium',
+    }, turnSettings: { model: 'one-turn-model', reasoningEffort: 'xhigh' },
+    session: { provider: 'codex', sessionId: 'thread-1', createdAt: 1 } }, createHost());
+
+    expect(transport.request).toHaveBeenNthCalledWith(1, 'thread/resume', expect.objectContaining({ model: 'snapshot-model', effort: 'medium' }));
+    expect(transport.request).toHaveBeenNthCalledWith(2, 'turn/start', expect.objectContaining({ model: 'one-turn-model', effort: 'xhigh' }));
+  });
+
+  it('rejects unsupported timeout and MCP settings before App Server thread start', async () => {
+    const transport = new FakeTransport();
+    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
+
+    await expect(provider.startTask({ ...startInput, settings: { timeoutMs: 60_000 } }, createHost()))
+      .rejects.toThrow(/Codex.*timeoutMs.*support/i);
+    await expect(provider.startTask({ ...startInput, settings: { mcpProfile: 'browser' } }, createHost()))
+      .rejects.toThrow(/Codex.*mcpProfile.*support/i);
+    await expect(provider.startTask({ ...startInput, settings: { unexpected: true } as never }, createHost()))
+      .rejects.toThrow(/Codex.*unexpected.*support/i);
+    expect(transport.request).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported continuation turn settings before App Server thread resume', async () => {
+    const transport = new FakeTransport();
+    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
+
+    await expect(provider.continueTask({
+      ...startInput,
+      settings: { model: 'snapshot-model', reasoningEffort: 'medium' },
+      turnSettings: { timeoutMs: 60_000 } as never,
+      session: { provider: 'codex', sessionId: 'existing-thread', createdAt: 1 },
+    }, createHost())).rejects.toThrow(/Codex.*timeoutMs.*support/i);
+    expect(transport.request).not.toHaveBeenCalled();
   });
 
   it('maps command and file approvals to App Server decisions', async () => {

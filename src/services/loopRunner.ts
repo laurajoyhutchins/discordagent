@@ -239,9 +239,6 @@ export async function startLoop(
           prompt,
           thread,
           provider: project.defaultProvider,
-          ...(project.models?.[project.defaultProvider]
-            ? { model: project.models[project.defaultProvider] }
-            : {}),
         });
       } else {
         await loop.coordinator.continueInThread({ prompt, thread });

@@ -23,6 +23,30 @@ describe('complete provider-neutral workspace architecture', () => {
     }
   });
 
+  it('does not collapse every non-Claude provider into Codex', () => {
+    const forbidden = [
+      /\['claude',\s*'codex'\]\s+as const/,
+      /value\s*===\s*['"]claude['"]\s*\|\|\s*value\s*===\s*['"]codex['"]/,
+      /provider\s*===\s*['"]claude['"]\s*\?\s*['"]claudeModel['"]\s*:\s*['"]codexModel['"]/,
+      /provider must be [`'"]claude[`'"] or [`'"]codex[`'"]/i,
+      /use [`'"]\/provider claude[`'"] or [`'"]\/provider codex[`'"]/i,
+    ];
+
+    for (const path of productionTypeScriptFiles(join(root, 'src'))) {
+      const source = readFileSync(path, 'utf8');
+      for (const pattern of forbidden) {
+        expect(source, `${path} matched ${String(pattern)}`).not.toMatch(pattern);
+      }
+    }
+  });
+
+  it('keeps every provider in persistent schema constraints', () => {
+    const schema = readFileSync(join(root, 'src/db/schema.ts'), 'utf8');
+    expect(schema).toMatch(/default_provider IN \('claude', 'codex', 'opencode'\)/);
+    expect(schema).toMatch(/provider IN \('claude', 'codex', 'opencode'\)/);
+    expect(schema).toMatch(/version:\s*9[\s\S]*allow OpenCode in provider-constrained tables/i);
+  });
+
   it('registers Discord work handlers only after the durable runtime starts', () => {
     const source = readFileSync(join(root, 'src/index.ts'), 'utf8');
     const readyHandler = source.indexOf("client.once('clientReady'");

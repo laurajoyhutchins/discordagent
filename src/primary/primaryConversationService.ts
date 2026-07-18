@@ -12,6 +12,7 @@ export interface PrimaryConversationInput {
   userId: string;
   text: string;
   createdAt?: number;
+  currentProjectName?: string;
 }
 
 export type ProcessResult =
@@ -26,12 +27,37 @@ export interface DecisionResolutionInput {
   decisionPrompt: string;
   selectedOption: string;
   createdAt?: number;
+  currentProjectName?: string;
 }
 
 export interface PrimaryConversationService {
   process(input: PrimaryConversationInput): Promise<ProcessResult>;
   resolveDecision(input: DecisionResolutionInput): Promise<ProcessResult>;
   launchTask(proposal: PrimaryTaskProposal): Promise<void>;
+}
+
+/**
+ * A delegating wrapper whose inner service can be swapped at runtime.
+ * The REPL and Discord adapter both hold a reference to the same delegator,
+ * so provider/model reconfiguration updates both transparently.
+ */
+export function createDelegatingConversationService(): {
+  service: PrimaryConversationService;
+  setTarget(target: PrimaryConversationService): void;
+} {
+  let target: PrimaryConversationService = {
+    process: () => Promise.reject(new Error('Conversation service not yet initialized')),
+    resolveDecision: () => Promise.reject(new Error('Conversation service not yet initialized')),
+    launchTask: () => Promise.reject(new Error('Conversation service not yet initialized')),
+  };
+  return {
+    service: {
+      process(input) { return target.process(input); },
+      resolveDecision(input) { return target.resolveDecision(input); },
+      launchTask(proposal) { return target.launchTask(proposal); },
+    },
+    setTarget(newTarget) { target = newTarget; },
+  };
 }
 
 export function createPrimaryConversationService(deps: {
@@ -93,8 +119,8 @@ export function createPrimaryConversationService(deps: {
     }
   }
 
-  async function runModel(conversationId: string, query: string): Promise<PrimaryResponse> {
-    const context = deps.context.assemble({ channelId: conversationId, query });
+  async function runModel(conversationId: string, query: string, currentProjectName?: string): Promise<PrimaryResponse> {
+    const context = deps.context.assemble({ channelId: conversationId, query, currentProjectName });
     return sanitizeResponse(await deps.model.respond({ context, message: query }));
   }
 
@@ -111,7 +137,7 @@ export function createPrimaryConversationService(deps: {
         createdAt: input.createdAt ?? Date.now(),
       });
 
-      const response = await runModel(input.conversationId, input.text);
+      const response = await runModel(input.conversationId, input.text, input.currentProjectName);
       const replyText = response.reply;
 
       deps.messages.append({
@@ -149,9 +175,10 @@ export function createPrimaryConversationService(deps: {
 
     async resolveDecision(input): Promise<ProcessResult> {
       const decisionText = `Decision: ${input.decisionPrompt} — ${input.selectedOption}`;
+      const decisionMessageId = randomUUID();
 
       deps.messages.append({
-        id: randomUUID(),
+        id: decisionMessageId,
         channelId: input.conversationId,
         authorId: input.userId,
         role: 'user',
@@ -159,7 +186,7 @@ export function createPrimaryConversationService(deps: {
         createdAt: input.createdAt ?? Date.now(),
       });
 
-      const response = await runModel(input.conversationId, decisionText);
+      const response = await runModel(input.conversationId, decisionText, input.currentProjectName);
       const replyText = response.reply;
 
       deps.messages.append({
@@ -171,7 +198,7 @@ export function createPrimaryConversationService(deps: {
         createdAt: Date.now(),
       });
 
-      persistMemory(response, decisionText, input.conversationId);
+      persistMemory(response, decisionText, decisionMessageId);
 
       if (response.taskProposal && !response.decision) {
         return {

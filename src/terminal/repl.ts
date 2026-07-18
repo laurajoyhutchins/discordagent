@@ -6,6 +6,7 @@ import type { ProjectRepository } from '../repositories/projectRepository.js';
 import type { TaskRepository } from '../repositories/taskRepository.js';
 import type { ProviderRegistry } from '../agents/providerRegistry.js';
 import type { SettingsService } from '../services/settingsService.js';
+import type { AgentProviderId } from '../agents/contracts.js';
 import { UsageAdmissionError } from '../services/usageAdmission.js';
 import { handleCommand, type CommandContext } from './commands.js';
 import { sanitizeTerminalError, renderUserReply } from './renderer.js';
@@ -15,11 +16,14 @@ export const TERMINAL_CONVERSATION_ID = 'terminal:primary';
 export interface ReplDependencies {
   conversationService: PrimaryConversationService;
   ownerId: string;
+  displayName?: string;
   projects: ProjectRepository;
   tasks: TaskRepository;
   providers: ProviderRegistry;
   settings: SettingsService;
   onShutdown?: () => void;
+  activatePrimaryProvider?: (provider: AgentProviderId) => Promise<unknown>;
+  isDiscordConnected?: () => boolean;
 }
 
 enum ReplState {
@@ -49,7 +53,8 @@ export class Repl {
   private currentProject: string | undefined;
   private pending: PendingInteraction | null = null;
   private deps: ReplDependencies;
-  private turnLock = false;
+  private inputQueue: Array<() => Promise<void>> = [];
+  private processing = false;
   private output: NodeJS.WritableStream;
   private input: NodeJS.ReadableStream;
 
@@ -61,6 +66,10 @@ export class Repl {
 
   get isRunning(): boolean {
     return this.state !== ReplState.Stopped;
+  }
+
+  get currentProjectName(): string | undefined {
+    return this.currentProject;
   }
 
   setStreams(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): void {
@@ -77,15 +86,20 @@ export class Repl {
     this.rl = readline.createInterface({
       input: this.input,
       output: this.output,
-      prompt: renderUserReply(this.deps.ownerId),
+      prompt: renderUserReply(this.deps.displayName ?? this.deps.ownerId),
       terminal: true,
+    });
+
+    this.rl.on('SIGINT', () => {
+      this.writeLine('^C');
+      this.deps.onShutdown?.();
     });
 
     this.writeLine('Terminal REPL connected. Type /help for commands.');
     this.rl.prompt();
 
     this.rl.on('line', (line: string) => {
-      this.handleLine(line);
+      this.enqueueLine(line);
     });
 
     this.rl.on('close', () => {
@@ -94,18 +108,48 @@ export class Repl {
   }
 
   async processLine(line: string): Promise<void> {
-    await this.handleLine(line);
+    return new Promise<void>((resolve, reject) => {
+      this.inputQueue.push(async () => {
+        try {
+          await this.handleLine(line);
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
+      void this.drainQueue();
+    });
   }
 
   async stop(): Promise<void> {
     if (this.state === ReplState.Stopped) return;
     this.state = ReplState.ShuttingDown;
+    this.inputQueue.length = 0;
     const rl = this.rl;
     this.rl = null;
     if (rl) {
       rl.close();
     }
     this.state = ReplState.Stopped;
+  }
+
+  private enqueueLine(line: string): void {
+    this.inputQueue.push(() => this.handleLine(line));
+    void this.drainQueue();
+  }
+
+  private async drainQueue(): Promise<void> {
+    if (this.processing) return;
+    this.processing = true;
+    try {
+      while (this.inputQueue.length > 0) {
+        if (this.state === ReplState.ShuttingDown || this.state === ReplState.Stopped) break;
+        const task = this.inputQueue.shift()!;
+        await task();
+      }
+    } finally {
+      this.processing = false;
+    }
   }
 
   private writeLine(text: string): void {
@@ -119,9 +163,6 @@ export class Repl {
   private async handleLine(line: string): Promise<void> {
     if (this.state === ReplState.ShuttingDown || this.state === ReplState.Stopped) return;
 
-    if (this.turnLock) return;
-    this.turnLock = true;
-
     try {
       if (this.state === ReplState.WaitingForTaskConfirm) {
         await this.handleTaskConfirm(line);
@@ -134,7 +175,6 @@ export class Repl {
 
       await this.handleNormalInput(line);
     } finally {
-      this.turnLock = false;
       const currentState: number = this.state;
       if (this.rl && currentState !== ReplState.Stopped && currentState !== ReplState.ShuttingDown) {
         this.rl.prompt();
@@ -154,6 +194,7 @@ export class Repl {
       providers: this.deps.providers,
       settings: this.deps.settings,
       currentProject: this.currentProject,
+      isDiscordConnected: this.deps.isDiscordConnected,
     };
 
     const cmdResult = await handleCommand(trimmed, commandCtx);
@@ -171,6 +212,24 @@ export class Repl {
       if (cmdResult.projectChanged !== undefined) {
         this.currentProject = cmdResult.projectChanged;
       }
+      if (cmdResult.providerChanged !== undefined && this.deps.activatePrimaryProvider) {
+        try {
+          await this.deps.activatePrimaryProvider(cmdResult.providerChanged as AgentProviderId);
+        } catch (error) {
+          this.writeLine(`agent> Failed to activate provider: ${sanitizeTerminalError(error)}`);
+        }
+      }
+      if (cmdResult.modelChanged !== undefined && this.deps.activatePrimaryProvider) {
+        const globalSetting = this.deps.settings.global();
+        const provider = globalSetting.defaultProvider as AgentProviderId | undefined;
+        if (provider) {
+          try {
+            await this.deps.activatePrimaryProvider(provider);
+          } catch (error) {
+            this.writeLine(`agent> Model change will apply next time: ${sanitizeTerminalError(error)}`);
+          }
+        }
+      }
       if (cmdResult.text) {
         this.writeLine(cmdResult.text);
       }
@@ -181,6 +240,7 @@ export class Repl {
       conversationId: TERMINAL_CONVERSATION_ID,
       userId: this.deps.ownerId,
       text: trimmed,
+      currentProjectName: this.currentProject,
     });
 
     await this.renderProcessResult(result);
@@ -333,12 +393,9 @@ export class Repl {
       userId: this.deps.ownerId,
       decisionPrompt: pending.prompt,
       selectedOption,
+      currentProjectName: this.currentProject,
     });
 
-    await this.renderProcessResult(result);
-  }
-
-  private async handleProcessResult(result: ProcessResult): Promise<void> {
     await this.renderProcessResult(result);
   }
 

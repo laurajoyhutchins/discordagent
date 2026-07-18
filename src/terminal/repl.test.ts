@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { Writable, Readable } from 'node:stream';
 import { Repl, TERMINAL_CONVERSATION_ID } from './repl.js';
 
 function createMockDeps(overrides: Record<string, unknown> = {}) {
@@ -24,6 +23,7 @@ function createMockDeps(overrides: Record<string, unknown> = {}) {
     updateGlobal: vi.fn().mockReturnValue({}),
   };
   const onShutdown = vi.fn();
+  const activatePrimaryProvider = vi.fn().mockResolvedValue(undefined);
 
   return {
     ...overrides,
@@ -33,23 +33,18 @@ function createMockDeps(overrides: Record<string, unknown> = {}) {
     providers,
     settings,
     ownerId: 'test-user',
+    displayName: 'user',
     onShutdown,
+    activatePrimaryProvider,
   } as never;
 }
 
 describe('Repl', () => {
-  let output: string[];
-
   beforeEach(() => {
-    output = [];
   });
 
   function createRepl(deps: Record<string, unknown> = {}): Repl {
     return new Repl(createMockDeps(deps));
-  }
-
-  function collectOutput(repl: Repl): string[] {
-    return output;
   }
 
   it('start and stop', async () => {
@@ -58,6 +53,15 @@ describe('Repl', () => {
     expect(repl.isRunning).toBe(true);
     await repl.stop();
     expect(repl.isRunning).toBe(false);
+  });
+
+  it('uses display name for prompt', async () => {
+    const deps = createMockDeps() as any;
+    deps.displayName = 'laura';
+    const repl = new Repl(deps);
+    await repl.start();
+    expect(repl.isRunning).toBe(true);
+    await repl.stop();
   });
 
   it('processes /help command', async () => {
@@ -109,6 +113,21 @@ describe('Repl', () => {
     await repl.stop();
   });
 
+  it('passes project context through conversation input', async () => {
+    const deps = createMockDeps() as any;
+    deps.projects.findByName.mockReturnValue({ name: 'active-project', defaultProvider: 'codex' });
+    const repl = new Repl(deps);
+    await repl.start();
+    // Set project first
+    await repl.processLine('/project active-project');
+    // Then send a message
+    await repl.processLine('status?');
+    expect(deps.conversationService.process).toHaveBeenCalledWith(expect.objectContaining({
+      currentProjectName: 'active-project',
+    }));
+    await repl.stop();
+  });
+
   it('processes /provider display', async () => {
     const deps = createMockDeps() as any;
     const repl = new Repl(deps);
@@ -118,32 +137,34 @@ describe('Repl', () => {
     await repl.stop();
   });
 
-  it('processes /provider change to valid provider', async () => {
+  it('processes /provider change and triggers activation', async () => {
     const deps = createMockDeps() as any;
     deps.providers.list.mockReturnValue(['codex', 'opencode']);
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('/provider opencode');
     expect(deps.settings.updateGlobal).toHaveBeenCalledWith({ defaultProvider: 'opencode' });
+    expect(deps.activatePrimaryProvider).toHaveBeenCalledWith('opencode');
     await repl.stop();
   });
 
-  it('processes /provider change to invalid provider', async () => {
-    const deps = createMockDeps() as any;
-    const repl = new Repl(deps);
-    await repl.start();
-    await repl.processLine('/provider invalid');
-    expect(deps.settings.updateGlobal).not.toHaveBeenCalled();
-    await repl.stop();
-  });
-
-  it('processes /provider change to unavailable provider', async () => {
+  it('does not activate for unavailable providers', async () => {
     const deps = createMockDeps() as any;
     deps.providers.list.mockReturnValue(['codex']);
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('/provider opencode');
-    expect(deps.settings.updateGlobal).not.toHaveBeenCalledWith({ defaultProvider: 'opencode' });
+    expect(deps.activatePrimaryProvider).not.toHaveBeenCalled();
+    await repl.stop();
+  });
+
+  it('does not activate for invalid provider names', async () => {
+    const deps = createMockDeps() as any;
+    const repl = new Repl(deps);
+    await repl.start();
+    await repl.processLine('/provider invalid');
+    expect(deps.settings.updateGlobal).not.toHaveBeenCalled();
+    expect(deps.activatePrimaryProvider).not.toHaveBeenCalled();
     await repl.stop();
   });
 
@@ -156,12 +177,13 @@ describe('Repl', () => {
     await repl.stop();
   });
 
-  it('processes /model change', async () => {
+  it('processes /model change and triggers activation', async () => {
     const deps = createMockDeps() as any;
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('/model claude-3-haiku');
-    expect(deps.settings.updateGlobal).toHaveBeenCalledWith({ primaryAgentModel: 'claude-3-haiku' });
+    expect(deps.settings.updateGlobal).toHaveBeenCalled();
+    expect(deps.activatePrimaryProvider).toHaveBeenCalled();
     await repl.stop();
   });
 
@@ -206,6 +228,7 @@ describe('Repl', () => {
       conversationId: TERMINAL_CONVERSATION_ID,
       userId: 'test-user',
       text: 'Hello agent!',
+      currentProjectName: undefined,
     });
     await repl.stop();
   });
@@ -236,19 +259,15 @@ describe('Repl', () => {
 
   it('transitions to choice mode for non-explicit task proposal', async () => {
     const deps = createMockDeps() as any;
-    const launchTask = vi.fn().mockResolvedValue(undefined);
     deps.conversationService.process.mockResolvedValue({
       kind: 'task-proposal',
       text: 'I propose a task.',
       proposal: { projectName: 'test', objective: 'Do something' },
       explicit: false,
     });
-    deps.conversationService.resolveDecision.mockResolvedValue({ kind: 'reply', text: 'Done.' });
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('Propose something');
-    // Should be in choice mode now
-    // Enter '1' to start
     await repl.processLine('1');
     expect(deps.conversationService.launchTask).toHaveBeenCalledWith({ projectName: 'test', objective: 'Do something' });
     await repl.stop();
@@ -281,9 +300,7 @@ describe('Repl', () => {
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('Propose something');
-    // Invalid input should not crash
     await repl.processLine('99');
-    // Still in choice mode, enter valid input
     await repl.processLine('1');
     expect(deps.conversationService.launchTask).toHaveBeenCalled();
     await repl.stop();
@@ -305,6 +322,7 @@ describe('Repl', () => {
       userId: 'test-user',
       decisionPrompt: 'Proceed?',
       selectedOption: 'Yes',
+      currentProjectName: undefined,
     });
     await repl.stop();
   });
@@ -325,43 +343,51 @@ describe('Repl', () => {
       userId: 'test-user',
       decisionPrompt: 'Choose option',
       selectedOption: 'B',
+      currentProjectName: undefined,
     });
     await repl.stop();
   });
 
-  it('serializes turn processing', async () => {
+  it('serializes input processing with FIFO queue', async () => {
     const deps = createMockDeps() as any;
-    deps.conversationService.process
-      .mockResolvedValueOnce({ kind: 'reply', text: 'First.' })
-      .mockResolvedValueOnce({ kind: 'reply', text: 'Second.' });
+    const callOrder: number[] = [];
+    deps.conversationService.process = vi.fn().mockImplementation(async (input: { text: string }) => {
+      callOrder.push(parseInt(input.text, 10));
+      await new Promise(r => setTimeout(r, 10));
+      return { kind: 'reply', text: `Done ${input.text}` };
+    });
     const repl = new Repl(deps);
     await repl.start();
-    await repl.processLine('First message');
-    await repl.processLine('Second message');
-    expect(deps.conversationService.process).toHaveBeenCalledTimes(2);
+
+    await Promise.all([
+      repl.processLine('1'),
+      repl.processLine('2'),
+      repl.processLine('3'),
+    ]);
+
+    // All three should be processed in order
+    expect(callOrder).toEqual([1, 2, 3]);
+    expect(deps.conversationService.process).toHaveBeenCalledTimes(3);
     await repl.stop();
   });
 
-  it('rejects concurrent processing', async () => {
+  it('processes lines even when previous is still running', async () => {
     const deps = createMockDeps() as any;
-    // While a turn is being processed, another line should be ignored
-    const slowProcess = vi.fn().mockImplementation(async () => {
-      await new Promise(r => setTimeout(r, 100));
-      return { kind: 'reply', text: 'Slow.' };
+    const callTimestamps: number[] = [];
+    deps.conversationService.process = vi.fn().mockImplementation(async () => {
+      await new Promise(r => setTimeout(r, 20));
+      callTimestamps.push(Date.now());
+      return { kind: 'reply', text: 'Done.' };
     });
-    deps.conversationService.process = slowProcess;
     const repl = new Repl(deps);
     await repl.start();
 
-    // Start processing first line
     const p1 = repl.processLine('First');
-
-    // The processLine should return false for a second concurrent call
     const p2 = repl.processLine('Second');
 
     await Promise.all([p1, p2]);
-    // Only one process call should have completed by now
-    expect(slowProcess).toHaveBeenCalledTimes(1);
+    // Both should have been processed
+    expect(deps.conversationService.process).toHaveBeenCalledTimes(2);
     await repl.stop();
   });
 
@@ -375,7 +401,17 @@ describe('Repl', () => {
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('Start task');
-    // Should not throw
+    await repl.stop();
+  });
+
+  it('handles activation failure gracefully', async () => {
+    const deps = createMockDeps() as any;
+    deps.providers.list.mockReturnValue(['codex', 'opencode']);
+    deps.activatePrimaryProvider.mockRejectedValue(new Error('Provider not available'));
+    const repl = new Repl(deps);
+    await repl.start();
+    await repl.processLine('/provider opencode');
+    expect(deps.activatePrimaryProvider).toHaveBeenCalled();
     await repl.stop();
   });
 

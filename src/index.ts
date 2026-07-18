@@ -13,6 +13,7 @@ import { getAllProjects } from './services/projectStore.js';
 import { createRoborevReviewSource, buildReviewEmbed } from './integrations/roborev/index.js';
 import type { Disposable, ReviewNotification } from './integrations/reviewSource.js';
 import { Repl } from './terminal/repl.js';
+import { activatePrimaryProvider } from './services/agentRuntimeService.js';
 
 // ── Single-instance lock ─────────────────────────────────────────────
 // Multiple bot processes sharing one token cause duplicate message
@@ -108,13 +109,20 @@ client.once('clientReady', async () => {
       if (!ownerId) {
         console.warn('[repl] No primary agent owner configured; terminal REPL requires AUTHORIZED_USER_ID');
       } else {
+        const globalSetting = runtime.settingsService.global();
+        const provider = globalSetting.defaultProvider;
+        const providerLabel = provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'none';
+        console.log(`Primary provider: ${providerLabel}`);
         repl = new Repl({
           conversationService: runtime.conversationService,
           ownerId,
+          displayName: 'user',
           projects: runtime.projects,
           tasks: runtime.tasks,
           providers: runtime.providers,
           settings: runtime.settingsService,
+          isDiscordConnected: () => client.isReady(),
+          activatePrimaryProvider,
           onShutdown: () => {
             // /exit was entered — just stop the REPL, leave the bot running
           },
@@ -122,7 +130,6 @@ client.once('clientReady', async () => {
         repl.start().catch((err: unknown) => {
           console.error('[repl] Failed to start terminal REPL:', redactErrorMessage(err));
         });
-        console.log(`Primary provider: ${runtime.primaryAgent.ownerId}`);
       }
     }
   }

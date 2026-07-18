@@ -5,7 +5,6 @@ import type { SettingsService } from '../services/settingsService.js';
 import type { AgentProviderId } from '../agents/contracts.js';
 import { isAgentProviderId } from '../agents/contracts.js';
 import { providerLabel } from '../agents/providerLabels.js';
-import { getProviderRegistry } from '../services/agentRuntimeService.js';
 import { redactErrorMessage } from '../utils/redaction.js';
 
 export interface CommandContext {
@@ -14,6 +13,7 @@ export interface CommandContext {
   providers: ProviderRegistry;
   settings: SettingsService;
   currentProject?: string;
+  isDiscordConnected?: () => boolean;
 }
 
 export interface CommandResult {
@@ -95,9 +95,11 @@ export async function handleCommand(
 
 function buildStatus(ctx: CommandContext): string {
   const lines: string[] = ['Discord Agent'];
+  const discordStatus = ctx.isDiscordConnected?.() ?? true;
+  lines.push(`  Discord: ${discordStatus ? 'connected' : 'disconnected'}`);
   const globalSetting = ctx.settings.global();
   const provider = globalSetting.defaultProvider;
-  lines.push(`  Primary provider: ${provider ?? 'not configured'}`);
+  lines.push(`  Primary provider: ${provider ? providerLabel(provider) : 'not configured'}`);
   if (ctx.currentProject) {
     const project = ctx.projects.findByName(ctx.currentProject);
     if (project) {
@@ -105,6 +107,12 @@ function buildStatus(ctx: CommandContext): string {
     } else {
       lines.push(`  Terminal project: ${ctx.currentProject} (not found)`);
     }
+  }
+  try {
+    const liveProviders = ctx.providers.list();
+    lines.push(`  Available providers: ${liveProviders.map(p => providerLabel(p)).join(', ') || 'none'}`);
+  } catch {
+    lines.push('  Available providers: unknown');
   }
   const activeTasks = ctx.tasks.listActive();
   if (activeTasks.length > 0) {
@@ -164,7 +172,7 @@ async function handleProvider(args: string[], ctx: CommandContext): Promise<Comm
   }
 
   ctx.settings.updateGlobal({ defaultProvider: requested });
-  return { text: `Primary provider set to ${providerLabel(requested)}.`, providerChanged: requested };
+  return { text: `Primary provider set to ${providerLabel(requested)}. Activating...`, providerChanged: requested };
 }
 
 async function handleModel(args: string[], ctx: CommandContext): Promise<CommandResult> {
@@ -174,13 +182,27 @@ async function handleModel(args: string[], ctx: CommandContext): Promise<Command
   if (args.length === 0) {
     if (!provider) return { text: 'No provider configured. Use /provider first.' };
     const modelKey = provider === 'claude' ? 'claudeModel' : provider === 'codex' ? 'codexModel' : 'openCodeModel';
-    const current = globalSetting[modelKey] ?? globalSetting.primaryAgentModel ?? 'provider default';
+    const record = globalSetting as Record<string, string | undefined>;
+    const current = record[modelKey] ?? record.primaryAgentModel ?? 'provider default';
     return { text: `Current ${providerLabel(provider)} model: ${current}` };
   }
+  if (!provider) return { text: 'No provider configured. Use /provider first.' };
 
   const modelName = args[0];
-  ctx.settings.updateGlobal({ primaryAgentModel: modelName });
-  return { text: `Primary agent model set to "${modelName}".`, modelChanged: modelName };
+
+  // Determine which model setting to update based on the current provider
+  if (provider === 'claude') {
+    ctx.settings.updateGlobal({ claudeModel: modelName });
+  } else if (provider === 'codex') {
+    ctx.settings.updateGlobal({ codexModel: modelName });
+  } else if (provider === 'opencode') {
+    ctx.settings.updateGlobal({ openCodeModel: modelName });
+  } else {
+    ctx.settings.updateGlobal({ primaryAgentModel: modelName });
+  }
+
+  const label = provider ? providerLabel(provider) : 'primary agent';
+  return { text: `${label} model set to "${modelName}". Activating...`, modelChanged: modelName };
 }
 
 function buildTaskList(ctx: CommandContext): string {

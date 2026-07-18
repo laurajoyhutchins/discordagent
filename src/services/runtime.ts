@@ -44,7 +44,7 @@ import { ClaudePrimaryModel } from '../agents/claude/claudePrimaryModel.js';
 import type { PrimaryModel } from '../primary/primaryModel.js';
 import { createContextAssembler } from '../primary/contextAssembler.js';
 import { createPrimaryAgentService, type PrimaryAgentService } from '../primary/primaryAgentService.js';
-import { createPrimaryConversationService, type PrimaryConversationService } from '../primary/primaryConversationService.js';
+import { createDelegatingConversationService, createPrimaryConversationService, type PrimaryConversationService } from '../primary/primaryConversationService.js';
 import type { PrimaryTaskProposal } from '../primary/primaryModel.js';
 import { ensurePrimaryAgentChannel } from './channelManager.js';
 import { clearPrimaryAgentService, setPrimaryAgentService } from './primaryAgentServiceRegistry.js';
@@ -326,7 +326,8 @@ export async function startRuntime(
     setAgentRuntimeServices({ providers, tasks, pendingTasks, settingsService, ...(codexAuth ? { codexAuth } : {}) });
     setUsageAdmissionService(usage);
     let primaryAgent: PrimaryAgentService | undefined;
-    let conversationService: PrimaryConversationService | undefined;
+    const delegatingConversationService = createDelegatingConversationService();
+    const conversationService = delegatingConversationService.service;
     let primaryProviderActivator: ((provider: AgentProviderId) => Promise<PrimaryProviderActivationResult>) | undefined;
     const selectedProvider = settings.getDefaultProvider();
     if (!options.disablePrimaryAgent && config.authorizedUserId) {
@@ -395,17 +396,20 @@ export async function startRuntime(
         const wasActive = primaryAgent !== undefined;
         const model = createPrimaryModel(provider);
         if (!model) throw new Error(`Provider ${provider} is not available for the PM chat on this host.`);
-        conversationService = createPrimaryConversationService({
+        const realService = createPrimaryConversationService({
           context, messages, memories, projects, coordinator, model,
           launchTask: sharedLaunchTask,
         });
-        primaryAgent = createPrimaryAgentService({
-          channelId: primaryChannel.id, ownerId: config.authorizedUserId!,
-          conversationService,
-          model, context, messages, memories, projects, coordinator,
-          fetchProjectChannel,
-        });
-        setPrimaryAgentService(primaryAgent);
+        delegatingConversationService.setTarget(realService);
+        if (!primaryAgent) {
+          primaryAgent = createPrimaryAgentService({
+            channelId: primaryChannel.id, ownerId: config.authorizedUserId!,
+            conversationService,
+            model, context, messages, memories, projects, coordinator,
+            fetchProjectChannel,
+          });
+          setPrimaryAgentService(primaryAgent);
+        }
         return wasActive ? 'reconfigured' : 'activated';
       };
       primaryProviderActivator = activatePrimaryProvider;

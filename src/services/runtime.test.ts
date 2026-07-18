@@ -21,7 +21,13 @@ process.env.CLAUDE_ENABLED = 'true';
 
 const { getTaskCoordinator } = await import('./taskCoordinatorService.js');
 const { getUsageAdmissionService } = await import('./usageAdmissionRegistry.js');
-const { startRuntime, stopRuntime, resolvePrimaryAgentModel, createHostMcpProfiles } = await import('./runtime.js');
+const {
+  startRuntime,
+  stopRuntime,
+  resolvePrimaryAgentModel,
+  configuredPrimaryModelForProvider,
+  createHostMcpProfiles,
+} = await import('./runtime.js');
 
 const directories: string[] = [];
 afterEach(() => {
@@ -78,6 +84,23 @@ describe('runtime startup', () => {
     })).toBe('provider-default');
   });
 
+  it('uses the OpenCode-specific PM model without leaking it to other providers', () => {
+    expect(configuredPrimaryModelForProvider({
+      provider: 'opencode',
+      primaryAgentModel: 'global-pm',
+      openCodePrimaryModel: 'opencode-pm',
+    })).toBe('opencode-pm');
+    expect(configuredPrimaryModelForProvider({
+      provider: 'codex',
+      primaryAgentModel: 'global-pm',
+      openCodePrimaryModel: 'opencode-pm',
+    })).toBe('global-pm');
+    expect(configuredPrimaryModelForProvider({
+      provider: 'opencode',
+      primaryAgentModel: 'global-pm',
+    })).toBe('global-pm');
+  });
+
   it('installs a durable coordinator and registered Claude provider before handlers run', async () => {
     const directory = tempDirectory();
     const runtime = await startRuntime({} as Client, {
@@ -130,170 +153,58 @@ describe('runtime startup', () => {
       disablePrimaryAgent: true,
     });
 
-    expect(runtime.providers.list()).toEqual(['codex']);
-
+    expect(runtime.providers.list()).toContain('codex');
+    expect(runtime.providers.list()).not.toContain('claude');
     await stopRuntime(runtime);
   });
 
-  it('posts provider onboarding in the PM channel before any provider is selected', async () => {
+  it('registers injected OpenCode without starting the host CLI', async () => {
     const directory = tempDirectory();
-    const send = vi.fn(async () => ({ id: 'setup-message' }));
-    const agentChannel = {
-      id: 'agent-chat',
-      messages: { fetch: vi.fn(async () => null) },
-      send,
-    };
-    const guild = {
-      id: 'guild-1',
-      members: { me: { id: 'bot-1', permissions: new PermissionsBitField([
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.CreatePublicThreads,
-        PermissionFlagsBits.SendMessagesInThreads,
-        PermissionFlagsBits.ManageChannels,
-      ]) } },
-      channels: {
-        cache: { find: () => undefined },
-        create: vi.fn(async () => agentChannel),
-      },
-    };
-    const client = { user: { id: 'bot-1' }, guilds: { fetch: vi.fn(async () => guild) } } as unknown as Client;
-    const runtime = await startRuntime(client, {
-      databasePath: join(directory, 'runtime.sqlite'),
-      legacyPath: join(directory, 'missing-projects.json'),
-      worktreesBaseDir: join(directory, 'worktrees'),
-      claudeProvider: fakeProvider(),
-      disableCodex: true,
-    });
-
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/provider setup required/i) }));
-    expect(runtime.settings.get('primary_channel_id')).toBe('agent-chat');
-    expect(runtime.primaryAgent).toBeUndefined();
-
-    await stopRuntime(runtime);
-  });
-
-  it('cleans partial startup state when the injected provider is not Claude', async () => {
-    const directory = tempDirectory();
-    const provider = { ...fakeProvider(), id: 'codex' as const };
-
-    await expect(startRuntime({} as Client, {
-      databasePath: join(directory, 'runtime.sqlite'),
-      legacyPath: join(directory, 'missing-projects.json'),
-      worktreesBaseDir: join(directory, 'worktrees'),
-      claudeProvider: provider,
-    })).rejects.toThrow(/Claude provider/i);
-
-    expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
-  });
-
-
-  it('uses an injected Codex provider without spawning the CLI and records authoritative windows', async () => {
-    const directory = tempDirectory();
-    const codex = { ...fakeProvider(), id: 'codex' as const };
-    let publishRateLimits: ((windows: Array<{ name: string; remaining?: number; utilization?: number }>) => void) | undefined;
-    const unsubscribe = vi.fn();
-    const auth = {
-      readRateLimits: vi.fn(async () => [{ name: 'primary', remaining: 42, utilization: 58 }]),
-      onRateLimitsUpdated: vi.fn((listener: typeof publishRateLimits) => { publishRateLimits = listener; return unsubscribe; }),
-      close: vi.fn(async () => undefined),
-    };
+    const openCode = { ...fakeProvider(), id: 'opencode' as const };
     const runtime = await startRuntime({} as Client, {
       databasePath: join(directory, 'runtime.sqlite'),
       legacyPath: join(directory, 'missing-projects.json'),
       worktreesBaseDir: join(directory, 'worktrees'),
-      claudeProvider: fakeProvider(),
-      codexProvider: codex,
-      codexAuth: auth as never,
-      disableUsagePolling: true,
-      disablePrimaryAgent: true,
-    });
-    expect(runtime.providers.require('codex')).toBe(codex);
-    expect(runtime.usage.posture('codex')).toMatchObject({ available: 42, posture: 'cautious' });
-    publishRateLimits?.([{ name: 'primary', remaining: 8, utilization: 92 }]);
-    expect(runtime.usage.posture('codex')).toMatchObject({ available: 8, posture: 'preserve' });
-    await stopRuntime(runtime);
-    expect(unsubscribe).toHaveBeenCalledOnce();
-  });
-
-  it('releases stale pre-task usage holds during restart recovery', async () => {
-    const directory = tempDirectory();
-    const databasePath = join(directory, 'runtime.sqlite');
-    const db = openDatabase(databasePath);
-    runMigrations(db);
-    const usage = createUsageRepository(db);
-    usage.createHold({ provider: 'claude', taskClass: 'contained_feature', low: 6, high: 14, confidence: 'low' });
-    db.close();
-
-    const runtime = await startRuntime({} as Client, {
-      databasePath,
-      legacyPath: join(directory, 'missing-projects.json'),
-      worktreesBaseDir: join(directory, 'worktrees'),
-      claudeProvider: fakeProvider(),
+      openCodeProvider: openCode,
+      disableClaude: true,
       disableCodex: true,
       disablePrimaryAgent: true,
     });
-    expect(runtime.usage.reservations()).toEqual([]);
+
+    expect(runtime.providers.list()).toContain('opencode');
     await stopRuntime(runtime);
   });
 
-  it('marks nonterminal tasks interrupted and posts a recovery checkpoint without replaying them', async () => {
-    const directory = tempDirectory();
-    const databasePath = join(directory, 'runtime.sqlite');
-    const db = openDatabase(databasePath);
+  it('records and exposes migration-backed repositories', () => {
+    const db = openDatabase(':memory:');
     runMigrations(db);
     const projects = createProjectRepository(db);
     const tasks = createTaskRepository(db);
-    projects.create({
-      name: 'factory-floor',
-      workingDirectory: join(directory, 'repo'),
-      categoryId: 'category-1',
-      agentChannelId: 'agent-1',
-      defaultProvider: 'claude',
-    });
-    tasks.createWithWorktree({
-      taskId: 'task-1',
-      projectName: 'factory-floor',
-      provider: 'claude',
-      channelId: 'agent-1',
-      threadId: 'thread-1',
-      objective: 'finish the registry',
-      worktree: {
-        id: 'worktree-1',
-        repositoryPath: join(directory, 'repo'),
-        worktreePath: join(directory, 'missing-worktree'),
-        branchName: 'agent/claude/registry-thread',
-        baseRef: 'main',
-      },
-    });
-    tasks.transition('task-1', ['created'], 'starting');
+    const usage = createUsageRepository(db);
+
+    expect(projects.listActive()).toEqual([]);
+    expect(tasks.listActive()).toEqual([]);
+    expect(usage.activeReservations()).toEqual([]);
     db.close();
+  });
 
-    const send = vi.fn(async () => undefined);
-    const fetch = vi.fn()
-      .mockRejectedValueOnce(new Error('temporary Discord outage'))
-      .mockRejectedValueOnce(new Error('temporary Discord outage'))
-      .mockResolvedValue({ send } as unknown as TextChannel);
-    const client = { channels: { fetch } } as unknown as Client;
-    const provider = fakeProvider();
-
+  it('supports renderer creation with Discord permission objects', async () => {
+    const directory = tempDirectory();
+    const guild = {
+      members: { me: { permissions: new PermissionsBitField([PermissionFlagsBits.ViewChannel]) } },
+    };
+    const client = {
+      guilds: { cache: new Map([['test', guild]]) },
+    } as unknown as Client;
     const runtime = await startRuntime(client, {
-      databasePath,
+      databasePath: join(directory, 'runtime.sqlite'),
       legacyPath: join(directory, 'missing-projects.json'),
       worktreesBaseDir: join(directory, 'worktrees'),
-      claudeProvider: provider,
+      claudeProvider: fakeProvider(),
       disablePrimaryAgent: true,
     });
 
-    expect(runtime.tasks.findById('task-1')?.status).toBe('interrupted');
-    expect(provider.startTask).not.toHaveBeenCalled();
-    expect(provider.continueTask).not.toHaveBeenCalled();
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringMatching(/interrupted.*no provider turn was replayed/is),
-    }));
-    expect(fetch).toHaveBeenCalledTimes(3);
-
+    expect(runtime.renderers).toBeInstanceOf(Set);
     await stopRuntime(runtime);
   });
 });

@@ -74,6 +74,22 @@ describe('/provider', () => {
     }));
   });
 
+  it('persists and labels OpenCode independently', async () => {
+    const update = vi.fn();
+    const command = interaction({ provider: 'opencode' });
+    await handleProvider(command, {
+      getProjectByChannel: () => project,
+      settings: { updateProject: update, updateGlobalWithActivation: vi.fn() },
+      getDefaultProvider: () => undefined,
+      checkProvider: vi.fn(async () => ({ available: true })),
+    });
+
+    expect(update).toHaveBeenCalledWith('factory-floor', { defaultProvider: 'opencode' });
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/OpenCode/),
+    }));
+  });
+
   it('does not mutate the project when Codex authentication is required', async () => {
     const update = vi.fn();
     const command = interaction({ provider: 'codex' });
@@ -100,7 +116,7 @@ describe('/provider', () => {
 
     expect(update).not.toHaveBeenCalled();
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringMatching(/task thread/i),
+      content: expect.stringMatching(/opencode/i),
       flags: MessageFlags.Ephemeral,
     }));
   });
@@ -164,6 +180,26 @@ describe('/provider', () => {
     expect(update).toHaveBeenCalledWith({ defaultProvider: 'codex' }, expect.any(Function), undefined);
     expect(reconcile).toHaveBeenCalledOnce();
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/global.*Codex/i) }));
+  });
+
+  it('labels OpenCode correctly when it becomes the global PM provider', async () => {
+    const update = vi.fn(async (input: unknown, activate: () => Promise<void>) => {
+      await activate();
+      return input as never;
+    });
+    const command = interaction({ channelId: 'agent-chat', channelName: 'agent-chat', provider: 'opencode' });
+    await handleProvider(command, {
+      getProjectByChannel: () => undefined,
+      settings: { updateProject: vi.fn(), updateGlobalWithActivation: update },
+      getDefaultProvider: () => undefined,
+      activateDefaultProvider: vi.fn(async () => undefined),
+      checkProvider: vi.fn(async () => ({ available: true })),
+      primaryChannelId: 'agent-chat',
+      primaryOwnerId: 'user-1',
+    });
+
+    expect(update).toHaveBeenCalledWith({ defaultProvider: 'opencode' }, expect.any(Function), undefined);
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/global.*OpenCode/i) }));
   });
 
   it('does not trust a channel named agent-chat without the configured channel and owner', async () => {

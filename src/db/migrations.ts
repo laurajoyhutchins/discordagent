@@ -5,6 +5,14 @@ export interface Migration {
   version: number;
   name: string;
   statements: readonly string[];
+  /**
+   * Disable foreign-key enforcement around this migration's transaction.
+   *
+   * SQLite requires this for table rebuilds that preserve child rows while a
+   * referenced table is dropped and recreated. The runner performs an explicit
+   * foreign_key_check before committing and restores the prior pragma value.
+   */
+  disableForeignKeys?: boolean;
 }
 
 const BOOTSTRAP_SQL = `
@@ -41,6 +49,19 @@ function validateMigrations(migrations: readonly Migration[]): void {
   }
 }
 
+interface ForeignKeyViolation {
+  table: string;
+  rowid: number | null;
+  parent: string;
+  fkid: number;
+}
+
+function describeForeignKeyViolations(violations: readonly ForeignKeyViolation[]): string {
+  return violations
+    .map(item => `${item.table}[${item.rowid ?? 'unknown'}] -> ${item.parent} (fk ${item.fkid})`)
+    .join('; ');
+}
+
 export function runMigrations(
   db: DatabaseHandle,
   migrations: readonly Migration[] = SCHEMA_MIGRATIONS,
@@ -63,9 +84,28 @@ export function runMigrations(
       for (const statement of migration.statements) {
         db.raw.exec(statement);
       }
+      if (migration.disableForeignKeys) {
+        const violations = db.raw.pragma('foreign_key_check') as ForeignKeyViolation[];
+        if (violations.length > 0) {
+          throw new Error(
+            `Migration ${migration.version} introduced foreign-key violations: ${describeForeignKeyViolations(violations)}`,
+          );
+        }
+      }
       recordMigration.run(migration.version, migration.name, Date.now());
     });
 
-    apply();
+    if (!migration.disableForeignKeys) {
+      apply();
+      continue;
+    }
+
+    const foreignKeysWereEnabled = Number(db.raw.pragma('foreign_keys', { simple: true })) === 1;
+    if (foreignKeysWereEnabled) db.raw.pragma('foreign_keys = OFF');
+    try {
+      apply();
+    } finally {
+      if (foreignKeysWereEnabled) db.raw.pragma('foreign_keys = ON');
+    }
   }
 }

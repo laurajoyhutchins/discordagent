@@ -20,7 +20,9 @@ const view: TaskControlCardView = {
 };
 
 function componentIds(payload: ReturnType<typeof renderTaskControlCard>): string[] {
-  return payload.components?.flatMap(row => row.toJSON().components.map(component => component.custom_id ?? '')) ?? [];
+  return payload.components?.flatMap(row => row.toJSON().components.map(component =>
+    'custom_id' in component ? component.custom_id : '',
+  )) ?? [];
 }
 
 describe('task control card rendering', () => {

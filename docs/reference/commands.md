@@ -4,80 +4,82 @@
 
 | Command | Scope | Description |
 |---|---|---|
-| `/add-project` | Any channel | Register a new project directory and create Discord channels |
-| `/remove-project` | Project channel | Soft-archive a project |
-| `/list-projects` | Any channel | Show all registered projects |
-| `/provider` | Project channel or `#agent-chat` | View or set the default provider |
-| `/model` | Project channel or `#agent-chat` | View or set the model and reasoning depth |
+| `/add-project` | Any guild channel | Register a project directory and create its Discord channels |
+| `/remove-project` | Project channel | Soft-archive a project and remove its Discord channels |
+| `/list-projects` | Any guild channel | Show registered projects |
+| `/provider` | Project channel or `#agent-chat` | View or set the default Claude, Codex, or OpenCode provider |
+| `/model` | Project channel or `#agent-chat` | View or set the active provider's model; Codex also supports reasoning depth |
 | `/settings` | `#agent-chat` only | View and edit global agent and PM settings |
 | `/project-settings` | Project channel | View and edit project-scoped settings |
-| `/capabilities` | Any channel | Show effective Discord capabilities and fallbacks |
-| `/agents` | Any channel | Show active task threads, providers, and status |
-| `/usage` | Any channel | Show provider rate limit usage and task stats |
-| `/cancel` | Task thread | Cancel the running task |
-| `/close` | Task thread | Remove the completed task's worktree |
+| `/capabilities` | Guild channel | Show effective Discord capabilities and fallbacks |
+| `/agents` | Guild channel | Show active task threads, providers, and status |
+| `/usage` | Guild channel | Show provider usage posture and reservations |
+| `/cancel` | Task thread | Cancel the durable task while preserving its worktree |
+| `/close` | Completed task thread | Remove a clean completed task worktree |
 | `/loop` | Project channel | Start periodic task execution |
 | `/stop-loop` | Project channel or loop thread | Stop periodic task execution |
 | `/codex-auth` | `#agent-chat` only | Check, establish, or revoke Codex authentication |
-| `/help` | Any channel | Show available commands |
 
 ## Text commands
 
-These work when typed as a message in a project channel.
+These work when typed as messages in a project channel or task thread where noted.
 
-| Command | Description |
-|---|---|
-| `/provider claude\|codex` | Set the project's default provider |
-| `/model [name]` | View or set the project's model for the current provider |
-| `/loop` | Start periodic task execution |
-| `/stop-loop` | Stop periodic task execution |
-| `/status` | Show project and task status |
+| Command | Scope | Description |
+|---|---|---|
+| `/provider claude\|codex\|opencode` | Project channel | Set the project's default provider |
+| `/provider claude\|codex\|opencode` | Task thread | Request a confirmed sibling handoff to a fresh provider session |
+| `/model [name]` | Project channel | View or set the project's model for its current provider |
+| `/model <name> <prompt>` | Project channel or task thread | Use a one-turn model override without changing stored settings |
+| `/loop [interval] <prompt>` | Project channel | Start periodic task execution |
+| `/stop-loop` | Project channel or loop thread | Stop periodic task execution |
+| `/status` | Project channel or loop thread | Show loop status |
 
 ## Command details
 
 ### `/settings`
 
-Opens an ephemeral panel with select menus and buttons for:
+Opens an owner-only ephemeral panel with controls for:
 
-- Default provider
-- Claude model override
-- Codex model override
-- Primary agent model
-- Claude timeout (5–3600 seconds)
-- Usage reserve (0–50%)
-- Per-provider reasoning effort
+- default provider;
+- Claude, Codex, and OpenCode model overrides;
+- PM model;
+- Claude timeout;
+- usage reserve;
+- provider-supported reasoning effort.
 
-Provider changes activate the PM agent immediately. Model and timeout changes persist silently.
+Changing the default provider or PM model reconfigures the PM service transactionally. A failed activation rolls back the persisted setting.
 
 ### `/project-settings`
 
-Opens an ephemeral panel for:
+Opens an authorized ephemeral panel for:
 
-- Default provider
-- Claude / Codex model override
-- Per-provider reasoning effort (Codex only)
-- Base branch
-- MCP profile
-- Roborev enable/disable
+- default provider;
+- Claude, Codex, and OpenCode model overrides;
+- Codex reasoning effort;
+- base branch;
+- Claude MCP profile;
+- channel-managed Roborev state.
+
+Existing task threads keep their immutable provider and task-settings snapshot.
 
 ### `/capabilities`
 
-Reports effective Discord permission state, Gateway intents, and fallback behavior for the current channel. Uses plain text so it works without `Embed Links`.
+Reports effective Discord permission state, Gateway intents, and fallback behavior for the current channel. The report uses plain text so it remains available without `Embed Links`.
 
 ### `/provider`
 
-When used in a project channel, sets the project's default provider. When used in `#agent-chat` by the configured owner, sets the global default.
+In a project channel, this changes the provider used by new tasks. In `#agent-chat`, the configured owner changes the global PM/default provider. In a task thread, a provider change is never in-place: after confirmation, Discord Agent creates a sibling task with a new provider session and worktree.
 
 ### `/model`
 
-In a project channel, sets project-level model and thinking depth. In `#agent-chat`, sets global defaults for the PM agent.
+In a project channel, this changes the model for the project's current provider. In `#agent-chat`, it changes PM/global settings. `thinking` is supported only for Codex; Claude and OpenCode retain provider-managed reasoning behavior.
 
 ## Message-based task creation
 
-Any non-command message in a project's `#agent` channel creates a new task. Replies in a task thread continue that task. A one-shot model override can be prefixed:
+Any non-command message in a project's `#agent` channel creates a new task. Replies in a task thread continue that task. A one-shot model override uses the `/model` prefix:
 
-```
-gpt-5-codex: Implement the authentication flow
+```text
+/model gpt-5-codex Implement the authentication flow
 ```
 
-This uses `gpt-5-codex` for that turn only without changing the stored settings.
+This uses `gpt-5-codex` for that turn only without changing the stored project or global model.

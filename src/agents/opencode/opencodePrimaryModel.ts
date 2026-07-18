@@ -40,7 +40,7 @@ export class OpenCodePrimaryModel implements PrimaryModel {
     this.workingDirectory = options.workingDirectory ?? tmpdir();
     this.timeoutMs = options.timeoutMs ?? 120_000;
     this.createConnection = options.createConnection ?? (handlers => Promise.resolve(new OpenCodeAcpTransport({
-      cliPath: options.cliPath,
+      ...(options.cliPath ? { cliPath: options.cliPath } : {}),
       handlers,
       env: openCodePrimaryEnvironment(),
     })));

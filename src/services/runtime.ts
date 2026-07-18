@@ -24,7 +24,6 @@ import {
   initializeProjectStore,
 } from './projectStore.js';
 import type { SettingsRepository } from '../repositories/settingsRepository.js';
-import { initRoborevWatcher } from './roborevWatcher.js';
 import {
   clearTaskCoordinator,
   setTaskCoordinator,
@@ -319,7 +318,6 @@ export async function startRuntime(
 
     const pendingTasks = createPendingTaskService(coordinator);
     initUsageTracker(client);
-    initRoborevWatcher(client);
     setTaskCoordinator(coordinator);
     let providerOnboarding: ProviderOnboardingService | undefined;
     setAgentRuntimeServices({ providers, tasks, pendingTasks, settingsService, ...(codexAuth ? { codexAuth } : {}) });

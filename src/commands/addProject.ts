@@ -1,42 +1,20 @@
 import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { existsSync, statSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import type { AgentProviderId } from '../agents/contracts.js';
 import { addProject, getDefaultProvider, getProject } from '../services/projectStore.js';
 import { createProjectChannels, deleteProjectChannels } from '../services/channelManager.js';
 import { config } from '../config.js';
 import { getProviderRegistry } from '../services/agentRuntimeService.js';
+import {
+  isRoborevCliAvailable,
+  hasRoborevSetup,
+  notifyRoborevConfigurationChanged,
+} from '../integrations/roborev/index.js';
 
 export function isPathWithinBase(base: string, candidate: string, pathApi = { relative, isAbsolute, sep }): boolean {
   const relativePath = pathApi.relative(base, candidate);
   return relativePath !== '..' && !relativePath.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(relativePath);
-}
-
-/**
- * Check if roborev is installed and available on this machine
- */
-function isRoborevAvailable(): boolean {
-  try {
-    execFileSync(config.roborevCliPath, ['version'], {
-      timeout: 5000,
-      stdio: 'ignore',
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Check if a project directory has roborev set up (has a .roborev config or git hook)
- */
-function hasRoborevSetup(projectPath: string): boolean {
-  return (
-    existsSync(join(projectPath, '.roborev')) ||
-    existsSync(join(projectPath, '.roborev.json')) ||
-    existsSync(join(projectPath, '.git', 'hooks', 'post-commit'))
-  );
 }
 
 export async function handleAddProject(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -48,7 +26,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   if (!defaultProvider || getProviderRegistry().list().length === 0) {
     await interaction.reply({
       content: 'Choose a provider in **#agent-chat** first. The selected global provider will be inherited by this project.',
-      flags: MessageFlags.Ephemeral,
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -57,14 +35,14 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     if (!availability.available) {
       await interaction.reply({
         content: `The stored global provider **${defaultProvider}** is unavailable. Choose an available provider in **#agent-chat** before adding a project.`,
-        flags: MessageFlags.Ephemeral,
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
   } else {
     await interaction.reply({
       content: `The stored global provider **${defaultProvider}** is not available on this host. Choose an available provider in **#agent-chat** before adding a project.`,
-      flags: MessageFlags.Ephemeral,
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -94,7 +72,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     if (!isPathWithinBase(resolvedBase, resolvedPath)) {
       await interaction.reply({
         content: `Path must be within the allowed base directory: \`${config.projectsBaseDir}\``,
-        flags: MessageFlags.Ephemeral,
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
@@ -105,7 +83,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   if (!isGitRepo && !config.allowNonGit) {
     await interaction.reply({
       content: `Path is not a git repository (no .git directory).\n\nTo allow non-git directories, set \`ALLOW_NON_GIT=true\` in your \`.env\` file. See the README for details on the risks.`,
-      flags: MessageFlags.Ephemeral,
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -126,7 +104,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   if (roborevOption !== null) {
     includeRoborev = roborevOption;
   } else {
-    includeRoborev = isGitRepo && isRoborevAvailable() && hasRoborevSetup(resolvedPath);
+    includeRoborev = isGitRepo && await isRoborevCliAvailable(config.roborevCliPath) && hasRoborevSetup(resolvedPath);
   }
 
   let channels: Awaited<ReturnType<typeof createProjectChannels>> | undefined;
@@ -140,18 +118,19 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
       defaultProvider,
       ...channels,
     });
+    if (channels.roborevChannelId) notifyRoborevConfigurationChanged();
 
     let replyMsg = `Project **${name}** created!\n` +
       `- <#${channels.agentChannelId}> — talk to the project agent here`;
 
     if (!isGitRepo) {
-      replyMsg += `\n\n⚠️ **Warning:** This non-Git project was registered, but agent tasks cannot start until the directory is initialized as a Git repository. Run \`git init && git add -A && git commit -m \"initial\"\` before sending a task.`;
+      replyMsg += `\n\n⚠️ **Warning:** This non-Git project was registered, but agent tasks cannot start until the directory is initialized as a Git repository. Run \`git init && git add -A && git commit -m "initial"\` before sending a task.`;
     }
 
     if (channels.roborevChannelId) {
       replyMsg += `\n- <#${channels.roborevChannelId}> — code reviews appear here`;
     } else {
-      replyMsg += `\n\n💡 Roborev not enabled. To add it later, remove this project and re-add with \`/add-project name:${name} path:${resolvedPath} roborev:true\``;
+      replyMsg += `\n\n💡 RoboRev not enabled. To add it later, use \`/roborev project:${name} enable:true\`.`;
     }
 
     await interaction.editReply(replyMsg);

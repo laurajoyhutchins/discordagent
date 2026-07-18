@@ -14,6 +14,7 @@ export interface ProjectRepository {
   updateModel(name: string, provider: AgentProviderId, model?: string): Project;
   updateReasoning(name: string, provider: AgentProviderId, effort?: ReasoningEffort): Project;
   updateBaseBranch(name: string, baseBranch: string): Project;
+  updateRoborevChannel(name: string, roborevChannelId: string | undefined): Project;
   archive(name: string): Project | undefined;
 }
 
@@ -241,6 +242,14 @@ export function createProjectRepository(db: DatabaseHandle): ProjectRepository {
       db.raw.prepare(`
         UPDATE projects SET base_branch = ?, updated_at = ? WHERE id = ?
       `).run(baseBranch, Date.now(), row.id);
+      return this.findByName(name)!;
+    },
+
+    updateRoborevChannel(name: string, roborevChannelId: string | undefined): Project {
+      const row = requireActive(name);
+      db.raw.prepare(`
+        UPDATE projects SET roborev_channel_id = ?, updated_at = ? WHERE id = ?
+      `).run(roborevChannelId ?? null, Date.now(), row.id);
       return this.findByName(name)!;
     },
 

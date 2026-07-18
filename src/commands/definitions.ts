@@ -1,6 +1,14 @@
-import { SlashCommandBuilder } from 'discord.js';
+import {
+  ApplicationCommandType,
+  ContextMenuCommandBuilder,
+  SlashCommandBuilder,
+} from 'discord.js';
 
 export const commands = [
+  new ContextMenuCommandBuilder()
+    .setName('Turn into task')
+    .setType(ApplicationCommandType.Message),
+
   new SlashCommandBuilder()
     .setName('add-project')
     .setDescription('Register a project for agent orchestration')
@@ -63,7 +71,6 @@ export const commands = [
     .setName('project-settings')
     .setDescription('View and edit settings for the current project channel'),
 
-
   new SlashCommandBuilder()
     .setName('provider')
     .setDescription('Show or change the default agent provider globally or for this project')
@@ -77,8 +84,6 @@ export const commands = [
           { name: 'OpenCode', value: 'opencode' },
         )
     ),
-
-
 
   new SlashCommandBuilder()
     .setName('codex-auth')

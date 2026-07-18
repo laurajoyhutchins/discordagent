@@ -2,63 +2,74 @@
 
 ## Task statuses
 
-| Status | Description | Terminal |
-|---|---|---|
-| `created` | Task record created, provider not yet started | No |
-| `starting` | Provider initializing | No |
-| `running` | Provider executing | No |
-| `waiting_for_user` | Provider awaiting approval or input | No |
-| `completed` | Provider reported successful completion | Yes |
-| `failed` | Provider reported failure | Yes |
-| `cancelled` | Task cancelled by user or system | Yes |
-| `interrupted` | Nonterminal task at last startup; not replayed | Yes |
+| Status | Description | Turn active |
+|---|---|---:|
+| `created` | Durable task and worktree records exist; provider startup has not begun | No |
+| `starting` | Provider availability, session startup, or continuation startup is in progress | Yes |
+| `running` | Provider is executing the current turn | Yes |
+| `waiting_for_user` | Provider is waiting for an approval or answer | Yes |
+| `completed` | The most recent turn completed successfully | No |
+| `failed` | The most recent turn failed | No |
+| `cancelled` | The task was cancelled | No |
+| `interrupted` | The bot restarted while the task was nonterminal; no provider turn was replayed | No |
 
-### State transitions
+`completed`, `failed`, `cancelled`, and `interrupted` are terminal outcomes for the current turn. A valid continuation may reopen a task that still has its provider session and active worktree. An interrupted task can also be explicitly resumed, transitioning back through `starting`.
 
+## Legal transitions
+
+```text
+created ───────────────→ starting ───────────────→ running ───────────────→ completed
+  │                         │                       │  ↑
+  └────────────────────────→ cancelled             │  └── waiting_for_user
+                            │                       │
+                            ├──→ failed             ├──→ failed
+                            ├──→ cancelled          ├──→ cancelled
+                            └──→ interrupted        └──→ interrupted
+
+waiting_for_user ──→ running | completed | failed | cancelled | interrupted
+interrupted ───────→ starting | cancelled
 ```
-created → starting → running → completed
-                          ↓
-                    waiting_for_user → running (resumed)
-                      
-starting → failed
-running → interrupted  (on restart)
-running → cancelled
-```
 
-### Persistence
+The repository enforces transitions with compare-and-set semantics. A stale or illegal transition fails instead of silently overwriting newer state.
 
-- Task records are stored in the `tasks` SQLite table.
-- Each task is associated with exactly one project, one immutable provider, and one Discord thread.
-- Settings are snapshotted at task creation in `settings_json`.
-- Provider session identity is stored before awaiting completion.
+## Persistence invariants
 
-## Project status
+- Task records are stored in SQLite.
+- Each task belongs to one project and one Discord thread.
+- The provider is immutable within a durable task.
+- Provider-scoped task settings are snapshotted durably.
+- Provider session identity is stored before Discord Agent awaits turn completion.
+- A continuation must return the same provider session identity.
 
-Projects have an `archived_at` timestamp:
+## Project state
 
-- **Active** — `archived_at IS NULL`
-- **Archived** — `archived_at` is set (soft delete)
+Projects use an `archived_at` timestamp:
 
-Archived projects no longer appear in `/list-projects`, but all task records and worktree data remain in SQLite for referential integrity.
+- **Active:** `archived_at IS NULL`
+- **Archived:** `archived_at` contains the archive time
 
-## Worktree state
+Archived projects no longer appear in `/list-projects`, and their Discord channels have normally been deleted by `/remove-project`. Historical tasks, events, results, sessions, and worktree records remain in SQLite.
 
-Worktrees are associated with tasks through the `worktrees` table:
+## Worktree records
 
-| Column | Description |
+Each task has one recorded worktree:
+
+| Field | Description |
 |---|---|
-| `branch` | Branch name (`agent/<provider>/<slug>-<thread-suffix>`) |
-| `worktree_path` | Absolute filesystem path |
-| `base_ref` | The base branch or commit used |
-| `removed_at` | Null while active; set after removal |
+| `repository_path` | Original registered Git repository |
+| `worktree_path` | Absolute path to the isolated task worktree |
+| `branch_name` | Task branch, normally `agent/<provider>/<slug>-<thread-suffix>` |
+| `base_ref` | Branch or commit from which the worktree was created |
+| `removed_at` | Absent while the recorded worktree is active; set after managed cleanup succeeds |
 
-Dirty worktrees are never force-removed by the runtime. Removal sets `removed_at` but does not delete files.
+Project removal does not remove task worktrees. When an explicit managed cleanup is performed, Discord Agent first refuses paths outside its managed worktree directory and refuses dirty worktrees. A successful cleanup uses `git worktree remove`; the corresponding record can then be marked removed.
 
 ## Provider session identity
 
 | Invariant | Description |
 |---|---|
-| Per-task uniqueness | One session per durable task |
-| Composite uniqueness | `(provider, session_id)` must be unique in `provider_sessions` |
-| Immutable provider | Provider identity cannot change within a task |
-| Continuation | Must return the same session identity or fail |
+| One session per durable task | A task attaches one provider session identity |
+| Composite uniqueness | `(provider, session_id)` is unique in `provider_sessions` |
+| Immutable provider | The provider cannot change inside the task |
+| Continuation identity | A continuation returning a different session ID fails |
+| Provider change | A confirmed sibling handoff creates a separate task and provider session |

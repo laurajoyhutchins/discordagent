@@ -23,9 +23,13 @@ function coordinator() {
   return {
     startFromMessage: vi.fn(async () => ({ id: 'task-1' })),
     continueFromMessage: vi.fn(async () => undefined),
+    estimateHandoff: vi.fn(async () => ({ estimatedInputTokens: 100, confidence: 'high', explanation: 'test' })),
+    handoffFromThread: vi.fn(async () => ({ id: 'task-handoff' })),
   } as unknown as TaskCoordinator & {
     startFromMessage: ReturnType<typeof vi.fn>;
     continueFromMessage: ReturnType<typeof vi.fn>;
+    estimateHandoff: ReturnType<typeof vi.fn>;
+    handoffFromThread: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -55,10 +59,11 @@ function dependencies(taskCoordinator: ReturnType<typeof coordinator>, authorize
   return {
     coordinator: taskCoordinator,
     getProjectByChannel: (channelId: string) => channelId === 'agent-1' ? project : undefined,
-    updateProjectModel: vi.fn(),
-    updateProjectProvider: vi.fn(),
+    settings: { updateProject: vi.fn() },
     isAuthorized: () => authorized,
     defaultClaudeModel: '',
+    defaultCodexModel: '',
+    defaultOpenCodeModel: '',
     startLoop: vi.fn(async () => undefined),
     stopLoop: vi.fn(async () => undefined),
     getLoopStatus: vi.fn(() => null),
@@ -78,7 +83,6 @@ describe('messageHandler coordinator routing', () => {
       prompt: 'Implement the worker registry',
       message: input,
       provider: 'claude',
-      model: 'sonnet',
     });
     expect(taskCoordinator.continueFromMessage).not.toHaveBeenCalled();
   });
@@ -106,7 +110,6 @@ describe('messageHandler coordinator routing', () => {
     expect(input.reply).toHaveBeenCalledWith('You are not authorized to use this bot.');
   });
 
-
   it('redacts sensitive values from pickup logs', async () => {
     const taskCoordinator = coordinator();
     const input = message({ content: 'run with API_KEY=pickup-secret' });
@@ -123,18 +126,95 @@ describe('messageHandler coordinator routing', () => {
     }
   });
 
-  it('redacts sensitive values from coordinator errors before replying', async () => {
+  it('uses a generic Discord error while keeping secrets out of the reply', async () => {
     const taskCoordinator = coordinator();
     taskCoordinator.startFromMessage.mockRejectedValueOnce(
-      new Error('Provider failed with API_KEY=reply-secret'),
+      new Error('Provider failed at C:\\secrets\\provider.json with API_KEY=reply-secret'),
     );
     const input = message({});
 
     await handleMessage(input, dependencies(taskCoordinator));
 
     const reply = JSON.stringify(input.reply.mock.calls[0]?.[0]);
-    expect(reply).toContain('[REDACTED]');
     expect(reply).not.toContain('reply-secret');
+    expect(reply).not.toContain('C:\\secrets');
+    expect(reply).toMatch(/could not be completed|request could not be completed/i);
+  });
+
+  it('passes an explicit one-shot model override without resolving project defaults', async () => {
+    const taskCoordinator = coordinator();
+    const input = message({ content: '/model opus Implement the worker registry' });
+
+    await handleMessage(input, dependencies(taskCoordinator));
+
+    expect(taskCoordinator.startFromMessage).toHaveBeenCalledWith({
+      projectName: 'factory-floor',
+      prompt: 'Implement the worker registry',
+      message: input,
+      provider: 'claude',
+      model: 'opus',
+    });
+  });
+
+  it('stores an OpenCode model from the project text command', async () => {
+    const taskCoordinator = coordinator();
+    const input = message({ content: '/model openai/gpt-5.4' });
+    const updateProject = vi.fn();
+    const openCodeProject: Project = { ...project, defaultProvider: 'opencode', models: {} };
+
+    await handleMessage(input, {
+      ...dependencies(taskCoordinator),
+      getProjectByChannel: channelId => channelId === 'agent-1' ? openCodeProject : undefined,
+      settings: { updateProject },
+      checkProvider: vi.fn(async () => ({ available: true })),
+    });
+
+    expect(updateProject).toHaveBeenCalledWith('factory-floor', { openCodeModel: 'openai/gpt-5.4' });
+    expect(input.reply).toHaveBeenCalledWith(expect.stringMatching(/OpenCode model/));
+  });
+
+  it('selects OpenCode from the project text command', async () => {
+    const taskCoordinator = coordinator();
+    const input = message({ content: '/provider opencode' });
+    const updateProject = vi.fn();
+
+    await handleMessage(input, {
+      ...dependencies(taskCoordinator),
+      settings: { updateProject },
+      checkProvider: vi.fn(async () => ({ available: true })),
+    });
+
+    expect(updateProject).toHaveBeenCalledWith('factory-floor', { defaultProvider: 'opencode' });
+    expect(input.reply).toHaveBeenCalledWith(expect.stringMatching(/OpenCode/));
+  });
+
+  it('allows a confirmed sibling handoff to OpenCode', async () => {
+    const taskCoordinator = coordinator();
+    const input = message({ content: '/provider opencode', thread: true });
+    const update = vi.fn(async () => undefined);
+    input.reply.mockResolvedValueOnce({
+      awaitMessageComponent: vi.fn(async () => ({ customId: 'handoff_confirm:opencode', update })),
+    });
+
+    await handleMessage(input, dependencies(taskCoordinator));
+
+    expect(taskCoordinator.estimateHandoff).toHaveBeenCalledWith('thread-1', 'opencode');
+    expect(taskCoordinator.handoffFromThread).toHaveBeenCalledWith({ sourceThread: input.channel, targetProvider: 'opencode' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/OpenCode/) }));
+  });
+
+  it('reports an unavailable project provider before reading or writing model settings', async () => {
+    const taskCoordinator = coordinator();
+    const input = message({ content: '/model sonnet' });
+    const updateProject = vi.fn();
+    await handleMessage(input, {
+      ...dependencies(taskCoordinator),
+      settings: { updateProject },
+      checkProvider: vi.fn(async () => ({ available: false, reason: 'Claude is unavailable on this host.' })),
+    });
+
+    expect(updateProject).not.toHaveBeenCalled();
+    expect(input.reply).toHaveBeenCalledWith(expect.stringMatching(/unavailable/i));
   });
 
   it('renders structured coordinator errors as an embed instead of raw JSON', async () => {
@@ -152,7 +232,7 @@ describe('messageHandler coordinator routing', () => {
     const payload = input.reply.mock.calls[0]?.[0] as { embeds: Array<{ toJSON(): Record<string, unknown> }> };
     const rendered = JSON.stringify(payload.embeds[0].toJSON());
     expect(payload).toHaveProperty('embeds');
-    expect(rendered).toContain('The selected model is unavailable.');
+    expect(rendered).toContain('request could not be completed');
     expect(rendered).not.toContain(rawError);
   });
 
@@ -182,9 +262,8 @@ describe('messageHandler coordinator routing', () => {
 
     expect(taskCoordinator.startFromMessage).not.toHaveBeenCalled();
     expect(deferPendingTask).toHaveBeenCalledWith({
-      userId: 'user-1', projectName: 'factory-floor', prompt: 'Implement the worker registry', message: input, model: 'gpt-5.4',
+      userId: 'user-1', projectName: 'factory-floor', prompt: 'Implement the worker registry', message: input,
     });
     expect(input.reply).toHaveBeenCalledWith(expect.stringContaining('without creating a thread or worktree'));
   });
-
 });

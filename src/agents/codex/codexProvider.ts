@@ -3,6 +3,7 @@ import type {
   AgentProvider, AgentRunHost, ContinueTaskInput, HandoffEstimate, HandoffEstimateInput,
   ProviderAvailability, ProviderRun, StartTaskInput, TaskResult,
 } from '../contracts.js';
+import { normalizeAgentTaskSettings, validateSupportedAgentSettings } from '../contracts.js';
 import { redactErrorMessage } from '../../utils/redaction.js';
 import type { AppServerTransport } from './appServerTransport.js';
 import type { CodexAuthService } from './codexAuthService.js';
@@ -22,7 +23,6 @@ interface ActiveTurn {
 export interface CodexProviderOptions {
   transport: AppServerTransport;
   auth: CodexAuthService;
-  defaultModel?: string;
 }
 
 const THREAD_POLICY = {
@@ -85,12 +85,24 @@ export class CodexProvider implements AgentProvider {
     this.active.clear();
   }
 
-  private async startOrContinue(input: StartTaskInput, host: AgentRunHost, existingThreadId?: string): Promise<ProviderRun> {
-    const model = input.model ?? this.options.defaultModel;
+  private async startOrContinue(input: StartTaskInput | ContinueTaskInput, host: AgentRunHost, existingThreadId?: string): Promise<ProviderRun> {
+    const settings = normalizeAgentTaskSettings(input);
+    validateSupportedAgentSettings(this.id, settings, 'task');
+    if ('turnSettings' in input && input.turnSettings) {
+      validateSupportedAgentSettings(this.id, input.turnSettings, 'turn');
+    }
+    const turnSettings = ('turnSettings' in input && input.turnSettings)
+      ? { ...settings, ...input.turnSettings }
+      : settings;
+    const model = settings.model;
+    const reasoningEffort = settings.reasoningEffort;
+    const turnModel = turnSettings.model;
+    const turnReasoningEffort = turnSettings.reasoningEffort;
     const threadParams = {
       ...(existingThreadId ? { threadId: existingThreadId } : {}),
       cwd: input.workingDirectory,
       ...(model ? { model } : {}),
+      ...(reasoningEffort ? { effort: reasoningEffort } : {}),
       ...THREAD_POLICY,
     };
     const threadResponse = await this.options.transport.request(existingThreadId ? 'thread/resume' : 'thread/start', threadParams);
@@ -119,7 +131,8 @@ export class CodexProvider implements AgentProvider {
         threadId,
         input: [{ type: 'text', text: input.prompt }],
         cwd: input.workingDirectory,
-        ...(model ? { model } : {}),
+        ...(turnModel ? { model: turnModel } : {}),
+        ...(turnReasoningEffort ? { effort: turnReasoningEffort } : {}),
         approvalPolicy: 'onRequest',
         sandboxPolicy: {
           type: 'workspaceWrite',

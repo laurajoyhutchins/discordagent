@@ -4,21 +4,39 @@ import {
   type Message,
 } from 'discord.js';
 import type { AgentEvent, TaskResult } from '../agents/contracts.js';
+import type { TaskRecord, WorktreeRecord } from '../types.js';
 import { chunkText } from '../utils/chunker.js';
+import { redactErrorMessage } from '../utils/redaction.js';
 import { buildErrorEmbed, isStructuredErrorMessage } from './errorCard.js';
+import { renderTaskControlCard, type TaskControlCardMessage, type TaskControlCardStore, type TaskControlCardView } from './taskControlCard.js';
 
 const DEFAULT_EDIT_INTERVAL_MS = 1_500;
 const MESSAGE_LIMIT = 1_800;
+const DISCORD_MESSAGE_LIMIT = 2_000;
 
 export interface TaskRenderer {
-  start(thread: AnyThreadChannel): void;
+  start(thread: AnyThreadChannel, context?: TaskRenderContext): void | Promise<void>;
+  updateCard?(context: TaskRenderContext): Promise<void>;
   handle(event: AgentEvent): Promise<void>;
   finish(result: TaskResult): Promise<void>;
+  dispose?(): void | Promise<void>;
+}
+
+export interface TaskRenderContext {
+  readonly task: TaskRecord;
+  readonly worktree?: WorktreeRecord;
+  readonly result?: TaskResult;
+  readonly phase?: string;
+  readonly usagePosture?: string;
 }
 
 export interface DiscordTaskRendererOptions {
   editIntervalMs?: number;
   notifyUserId?: string;
+  controlCardStore?: TaskControlCardStore;
+  controlCardCanEmbed?: (thread: AnyThreadChannel) => boolean;
+  controlCardCanPin?: (thread: AnyThreadChannel) => boolean;
+  logger?: (message: string) => void;
 }
 
 export class DiscordTaskRenderer implements TaskRenderer {
@@ -29,15 +47,41 @@ export class DiscordTaskRenderer implements TaskRenderer {
   private currentMessage: Message | null = null;
   private editTimer: ReturnType<typeof setInterval> | null = null;
   private finalized = false;
+  private disposed = false;
   private dirty = false;
   private flushing = false;
+  private readonly controlCardStore?: TaskControlCardStore;
+  private readonly controlCardCanEmbed: (thread: AnyThreadChannel) => boolean;
+  private readonly controlCardCanPin: (thread: AnyThreadChannel) => boolean;
+  private readonly logger: (message: string) => void;
+  private controlCardMessage: TaskControlCardMessage | null = null;
+  private controlCardTaskId: string | null = null;
+  private controlCardPinAttempted = false;
+  private controlCardEmbedsDisabled = false;
+  private latestCardContext: TaskRenderContext | null = null;
+  private cardQueue: Promise<void> = Promise.resolve();
+  private cardUpdateScheduled = false;
+
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.editTimer) {
+      clearInterval(this.editTimer);
+      this.editTimer = null;
+    }
+    await this.cardQueue.catch(() => undefined);
+  }
 
   constructor(options: DiscordTaskRendererOptions = {}) {
     this.editIntervalMs = options.editIntervalMs ?? DEFAULT_EDIT_INTERVAL_MS;
     this.notifyUserId = options.notifyUserId ?? '';
+    this.controlCardStore = options.controlCardStore;
+    this.controlCardCanEmbed = options.controlCardCanEmbed ?? (() => true);
+    this.controlCardCanPin = options.controlCardCanPin ?? (() => false);
+    this.logger = options.logger ?? (message => console.warn(message));
   }
 
-  start(thread: AnyThreadChannel): void {
+  async start(thread: AnyThreadChannel, context?: TaskRenderContext): Promise<void> {
     if (this.thread) throw new Error('Task renderer has already been started');
     this.thread = thread;
     if (this.editIntervalMs > 0) {
@@ -45,9 +89,27 @@ export class DiscordTaskRenderer implements TaskRenderer {
         void this.flush();
       }, this.editIntervalMs);
     }
+    if (context) await this.updateCard(context);
+  }
+
+  async updateCard(context: TaskRenderContext): Promise<void> {
+    if (this.disposed) return;
+    this.latestCardContext = context;
+    if (this.cardUpdateScheduled) return this.cardQueue;
+    this.cardUpdateScheduled = true;
+    const queued = this.cardQueue.then(async () => {
+      this.cardUpdateScheduled = false;
+      const latest = this.latestCardContext;
+      if (latest) await this.renderControlCard(latest);
+    });
+    this.cardQueue = queued.catch(error => {
+      this.logger(`[taskRenderer] Card update failed; queue recovered: ${redactErrorMessage(error)}`);
+    });
+    return queued;
   }
 
   async handle(event: AgentEvent): Promise<void> {
+    if (this.disposed || this.finalized) return;
     this.requireThread();
 
     switch (event.type) {
@@ -116,6 +178,7 @@ export class DiscordTaskRenderer implements TaskRenderer {
   }
 
   async finish(result: TaskResult): Promise<void> {
+    if (this.disposed) return;
     const thread = this.requireThread();
     this.finalized = true;
     if (this.editTimer) {
@@ -127,6 +190,10 @@ export class DiscordTaskRenderer implements TaskRenderer {
       await delay(5);
     }
     await this.flushFinalText();
+
+    if (this.latestCardContext) {
+      await this.updateCard({ ...this.latestCardContext, result });
+    }
 
     const presentation = terminalPresentation(result);
     const errorText = result.error?.message ?? result.summary;
@@ -160,7 +227,7 @@ export class DiscordTaskRenderer implements TaskRenderer {
     }
 
     const content = this.notifyUserId ? `<@${this.notifyUserId}>` : undefined;
-    await thread.send({ content, embeds: [embed] }).catch(() => undefined);
+    await this.sendEmbed(embed, content);
   }
 
   private async append(text: string): Promise<void> {
@@ -227,8 +294,101 @@ export class DiscordTaskRenderer implements TaskRenderer {
     this.dirty = false;
   }
 
-  private async sendEmbed(embed: EmbedBuilder): Promise<void> {
-    await this.requireThread().send({ embeds: [embed] }).catch(() => undefined);
+  private async sendEmbed(embed: EmbedBuilder, content?: string): Promise<void> {
+    const thread = this.requireThread();
+    try {
+      await thread.send({ ...(content === undefined ? {} : { content }), embeds: [embed] });
+    } catch (error) {
+      this.logger(`[taskRenderer] Embed send failed; sending plain text: ${redactErrorMessage(error)}`);
+      const fallback = truncateDiscordMessage([content, plainTextFromEmbed(embed)].filter(Boolean).join('\n') || 'Task update');
+      await thread.send(fallback).catch(fallbackError => {
+        this.logger(`[taskRenderer] Plain-text fallback failed: ${redactErrorMessage(fallbackError)}`);
+      });
+    }
+  }
+
+  private async renderControlCard(context: TaskRenderContext): Promise<void> {
+    const thread = this.requireThread();
+    this.controlCardTaskId = context.task.id;
+    const stored = this.controlCardStore?.getControlCard(context.task.id);
+    let persistedPinState = stored?.pinState;
+    if (!this.controlCardMessage && stored?.messageId && 'messages' in thread && thread.messages && typeof thread.messages.fetch === 'function') {
+      this.controlCardMessage = await thread.messages.fetch(stored.messageId).catch(error => {
+        if (isMessageNotFound(error)) return null;
+        throw error;
+      }) as TaskControlCardMessage | null;
+      if (!this.controlCardMessage && persistedPinState !== 'failed') {
+        persistedPinState = 'unknown';
+        this.controlCardPinAttempted = false;
+      }
+    }
+
+    const view: TaskControlCardView = {
+      taskId: context.task.id,
+      objective: context.task.objective,
+      projectName: context.task.projectName,
+      provider: context.task.provider,
+      ...(context.task.settings?.model ? { model: context.task.settings.model } : {}),
+      status: context.task.status,
+      ...(context.worktree?.branchName ? { branchName: context.worktree.branchName } : {}),
+      sessionState: context.task.status === 'interrupted'
+        ? 'preserved'
+        : context.task.providerSessionId ? 'active' : 'not_started',
+      ...(context.phase ? { phase: context.phase } : {}),
+      ...(context.usagePosture ? { usagePosture: context.usagePosture } : {}),
+      ...(context.result ? { result: context.result } : {}),
+    };
+    const payload = renderTaskControlCard(view, { embeds: !this.controlCardEmbedsDisabled && this.controlCardCanEmbed(thread) });
+    if (!this.controlCardMessage) {
+      try {
+        this.controlCardMessage = await thread.send(payload) as unknown as TaskControlCardMessage;
+      } catch (error) {
+        if (!payload.embeds?.length) throw error;
+        this.logger(`[taskRenderer] Control-card embed send failed; using plain text: ${redactErrorMessage(error)}`);
+        this.controlCardEmbedsDisabled = true;
+        this.controlCardMessage = await thread.send({ content: truncateDiscordMessage(plainTextFromEmbed(payload.embeds[0])) }) as unknown as TaskControlCardMessage;
+      }
+      if (this.controlCardStore && this.controlCardMessage.id) {
+        this.controlCardStore.saveControlCard(context.task.id, {
+          messageId: this.controlCardMessage.id,
+          pinState: persistedPinState ?? 'unknown',
+        });
+      }
+    } else {
+      try {
+        await this.controlCardMessage.edit(payload);
+      } catch (error) {
+        this.logger(`[taskRenderer] Control-card edit failed; sending plain text: ${redactErrorMessage(error)}`);
+        this.controlCardEmbedsDisabled = true;
+        try {
+          await this.controlCardMessage.edit(payload.embeds?.length
+            ? { content: truncateDiscordMessage(plainTextFromEmbed(payload.embeds[0])) }
+            : payload);
+        } catch (fallbackError) {
+          this.logger(`[taskRenderer] Plain-text control-card edit failed; refreshing the card: ${redactErrorMessage(fallbackError)}`);
+          this.controlCardMessage = null;
+          throw fallbackError;
+        }
+      }
+    }
+
+    if (!this.controlCardPinAttempted && this.controlCardStore && this.controlCardMessage
+      && persistedPinState !== 'pinned' && persistedPinState !== 'not_pinned' && persistedPinState !== 'failed') {
+      this.controlCardPinAttempted = true;
+      if (!this.controlCardCanPin(thread)) {
+        this.controlCardStore.saveControlCard(context.task.id, { messageId: this.controlCardMessage.id, pinState: 'not_pinned' });
+      } else if (this.controlCardMessage.pin) {
+        try {
+          await this.controlCardMessage.pin();
+          this.controlCardStore.saveControlCard(context.task.id, { messageId: this.controlCardMessage.id, pinState: 'pinned' });
+        } catch (error) {
+          this.logger(`[taskRenderer] Control-card pin failed: ${redactErrorMessage(error)}`);
+          this.controlCardStore.saveControlCard(context.task.id, { messageId: this.controlCardMessage.id, pinState: 'failed' });
+        }
+      } else {
+        this.controlCardStore.saveControlCard(context.task.id, { messageId: this.controlCardMessage.id, pinState: 'failed' });
+      }
+    }
   }
 
   private requireThread(): AnyThreadChannel {
@@ -252,6 +412,23 @@ function truncate(text: string, max: number): string {
 
 function wrapCodeBlock(text: string): string {
   return `\`\`\`\n${text.replace(/\`\`\`/g, '\`\u200b\`\`')}\n\`\`\``;
+}
+
+function isMessageNotFound(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; status?: unknown; statusCode?: unknown };
+  return candidate.code === 10008 || candidate.status === 404 || candidate.statusCode === 404;
+}
+
+function plainTextFromEmbed(embed: EmbedBuilder): string {
+  const data = embed.toJSON();
+  return [data.title, data.description, ...(data.fields ?? []).map(field => `${field.name}: ${field.value}`)]
+    .filter(Boolean)
+    .join('\n') || 'Task update';
+}
+
+function truncateDiscordMessage(text: string): string {
+  return text.length <= DISCORD_MESSAGE_LIMIT ? text : `${text.slice(0, DISCORD_MESSAGE_LIMIT - 1)}…`;
 }
 
 function delay(ms: number): Promise<void> {

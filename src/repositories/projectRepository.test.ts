@@ -53,6 +53,9 @@ describe('ProjectRepository', () => {
     expect(projects.updateModel('factory-floor', 'claude', undefined).models).toEqual({
       codex: 'gpt-5.6-codex',
     });
+    expect(projects.updateReasoning('factory-floor', 'codex', 'xhigh').reasoningEfforts).toEqual({
+      codex: 'xhigh',
+    });
 
     const originalId = (db.raw.prepare('SELECT id FROM projects WHERE name = ?')
       .get('factory-floor') as { id: string }).id;
@@ -81,6 +84,7 @@ describe('ProjectRepository', () => {
     expect(projects.archive('missing')).toBeUndefined();
     expect(() => projects.updateDefaultProvider('missing', 'codex')).toThrow(/not found/i);
     expect(() => projects.updateModel('missing', 'claude', 'opus')).toThrow(/not found/i);
+    expect(() => projects.updateReasoning('missing', 'codex', 'high')).toThrow(/not found/i);
   });
 });
 

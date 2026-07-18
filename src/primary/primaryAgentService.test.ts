@@ -51,6 +51,18 @@ describe('primary agent service', () => {
     expect(context.put).toHaveBeenCalledWith(expect.objectContaining({ key: 'review_style', sourceType: 'direct_user' }));
   });
 
+  it('redacts sensitive memory values before persistence', async () => {
+    const context = base({
+      model: { respond: async () => ({
+        reply: 'Noted.',
+        memoryWrites: [{ namespace: 'user', key: 'credential', value: { apiKey: 'sk-secret-value' }, sourceQuote: 'my credential' }],
+      }) },
+    });
+    await context.service.handleMessage(message(context.reply, 'Please remember my credential.'));
+
+    expect(context.put).toHaveBeenCalledWith(expect.objectContaining({ value: { apiKey: '[REDACTED]' } }));
+  });
+
   it('records select-menu decisions and gives them back to the primary model', async () => {
     const update = vi.fn(async () => undefined);
     const edit = vi.fn(async () => undefined);

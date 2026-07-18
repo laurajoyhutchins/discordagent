@@ -57,7 +57,7 @@ function fakeUsage(overrides: Partial<UsageAdmissionService> = {}): UsageAdmissi
   };
 }
 
-function setup(usage: UsageAdmissionService) {
+function setup(usage: UsageAdmissionService, capabilityPreflight?: { assertCanCreateTaskThread(channel: unknown): void }) {
   const directory = mkdtempSync(join(tmpdir(), 'discordagent-usage-coordinator-'));
   directories.push(directory);
   const db = openDatabase(join(directory, 'runtime.sqlite'));
@@ -112,11 +112,13 @@ function setup(usage: UsageAdmissionService) {
   const message = { startThread, channel: thread } as unknown as Message;
   const coordinator = createTaskCoordinator({
     projects,
+    settings: { resolveTaskSettings: () => ({}) } as never,
     tasks,
     events,
     worktrees,
     providers,
     usage,
+    ...(capabilityPreflight ? { capabilityPreflight } : {}),
     rendererFactory: () => ({ start() {}, async handle() {}, async finish() {} }),
     brokerFactory: () => ({
       async requestApproval() { return 'allow' as const; },
@@ -136,6 +138,25 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 }
 
 describe('TaskCoordinator usage admission', () => {
+  it('rejects Discord capability failures before reserving usage or creating task state', async () => {
+    const usage = fakeUsage();
+    const capabilityPreflight = {
+      assertCanCreateTaskThread: vi.fn(() => { throw new Error('Create Public Threads is unavailable'); }),
+    };
+    const context = setup(usage, capabilityPreflight);
+
+    await expect(context.coordinator.startFromMessage({
+      projectName: 'factory-floor',
+      prompt: 'cannot start without Discord capability',
+      message: context.message,
+    })).rejects.toThrow(/Create Public Threads/);
+
+    expect(capabilityPreflight.assertCanCreateTaskThread).toHaveBeenCalledOnce();
+    expect(usage.reserve).not.toHaveBeenCalled();
+    expect(context.startThread).not.toHaveBeenCalled();
+    expect(context.createWorktree).not.toHaveBeenCalled();
+  });
+
   it('rejects before creating a Discord thread or Git worktree', async () => {
     const usage = fakeUsage({
       reserve: vi.fn(async () => { throw new UsageAdmissionError('capacity unavailable', 'restricted', 'defer'); }),

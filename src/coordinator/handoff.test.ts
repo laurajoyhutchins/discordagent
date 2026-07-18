@@ -10,6 +10,7 @@ describe('provider handoff', () => {
     providers.register(target);
     const coordinator = createTaskCoordinator({
       projects: { findByName: () => undefined } as never,
+      settings: { resolveTaskSettings: () => ({}) } as never,
       tasks: { findByThreadId: () => ({ id: 't', provider: 'claude', status: 'completed', objective: 'x' }), getResult: () => ({ summary: 'done' }) } as never,
       events: { list: () => [{ event: { type: 'text_delta', text: 'abc' } }, { event: { type: 'file_change', paths: ['a.ts'] } }] } as never,
       worktrees: {} as never, providers,

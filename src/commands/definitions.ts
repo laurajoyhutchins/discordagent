@@ -51,6 +51,18 @@ export const commands = [
     .setName('usage')
     .setDescription('Show provider rate limit usage and task stats'),
 
+  new SlashCommandBuilder()
+    .setName('capabilities')
+    .setDescription('Show effective Discord capabilities in this channel'),
+
+  new SlashCommandBuilder()
+    .setName('settings')
+    .setDescription('View and edit global agent and PM settings in the primary channel'),
+
+  new SlashCommandBuilder()
+    .setName('project-settings')
+    .setDescription('View and edit settings for the current project channel'),
+
 
   new SlashCommandBuilder()
     .setName('provider')
@@ -77,13 +89,27 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName('model')
-    .setDescription("Pick the model for this project's active provider")
+    .setDescription("Set this project's model and thinking depth")
     .addStringOption(opt =>
       opt.setName('model')
-        .setDescription('Provider-scoped model alias or exact model ID')
+        .setDescription('Set a provider-scoped model alias or exact model ID (use custom for provider-specific choices)')
         .setRequired(false)
     )
     .addStringOption(opt =>
       opt.setName('custom').setDescription('Set a custom model name directly (alias or exact model ID)').setRequired(false)
+    )
+    .addStringOption(opt =>
+      opt.setName('thinking')
+        .setDescription('Codex reasoning effort for new and continued task turns')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Default (model/provider)', value: '__default__' },
+          { name: 'None', value: 'none' },
+          { name: 'Low', value: 'low' },
+          { name: 'Medium', value: 'medium' },
+          { name: 'High', value: 'high' },
+          { name: 'Extra high', value: 'xhigh' },
+          { name: 'Maximum', value: 'max' },
+        )
     ),
 ];

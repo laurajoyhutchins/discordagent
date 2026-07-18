@@ -17,7 +17,9 @@ import type {
   StartTaskInput,
   TaskResult,
   UserQuestion,
+  HostMcpServers,
 } from '../contracts.js';
+import { normalizeAgentTaskSettings, validateSupportedAgentSettings } from '../contracts.js';
 import {
   adaptClaudeMessage,
   classifyClaudeError,
@@ -29,10 +31,7 @@ export type ClaudeQueryFunction = (request: ClaudeQueryRequest) => AsyncIterable
 
 export interface ClaudeProviderOptions {
   queryFn?: ClaudeQueryFunction;
-  timeoutMs: number;
-  mcpServers?: Record<string, McpServerConfig>;
-  defaultModel?: string;
-  resolveProjectModel?: (projectName: string) => string | undefined;
+  resolveMcpServers: (profile?: string) => HostMcpServers | undefined;
   env?: Record<string, string | undefined>;
   onRateLimit?: (info: Record<string, unknown>) => void;
   onSessionResult?: (projectName: string, result: Record<string, unknown>) => Promise<void> | void;
@@ -178,6 +177,14 @@ export class ClaudeProvider implements AgentProvider {
     host: AgentRunHost,
     resumedSession?: ProviderSession,
   ): Promise<ProviderRun> {
+    const settings = normalizeAgentTaskSettings(input);
+    validateSupportedAgentSettings(this.id, settings, 'task');
+    if ('turnSettings' in input && input.turnSettings) {
+      validateSupportedAgentSettings(this.id, input.turnSettings, 'turn');
+    }
+    const turnSettings = ('turnSettings' in input && input.turnSettings)
+      ? { ...settings, ...input.turnSettings }
+      : settings;
     const startedAt = this.now();
     const abortController = new AbortController();
     const sessionDeferred = deferred<ProviderSession>();
@@ -191,15 +198,15 @@ export class ClaudeProvider implements AgentProvider {
     }
 
     const completion = (async (): Promise<TaskResult> => {
-      const timeout = setTimeout(() => abortController.abort(), this.options.timeoutMs);
+      const timeout = turnSettings.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => abortController.abort(), turnSettings.timeoutMs);
       try {
         if (resumedSession) {
           await host.emit({ type: 'session_started', session: resumedSession });
         }
 
-        const model = input.model
-          ?? this.options.resolveProjectModel?.(input.projectName)
-          ?? this.options.defaultModel;
+        const model = turnSettings.model;
         const request: ClaudeQueryRequest = {
           prompt: sanitizePrompt(input.prompt),
           options: {
@@ -207,7 +214,14 @@ export class ClaudeProvider implements AgentProvider {
             abortController,
             permissionMode: 'default',
             settingSources: ['user'],
-            ...(this.options.mcpServers ? { mcpServers: this.options.mcpServers } : {}),
+            ...(() => {
+              const mcpProfile = settings.mcpProfile;
+              const mcpServers = this.options.resolveMcpServers(mcpProfile);
+              const unknownProfile = typeof mcpProfile === 'string' && mcpProfile.trim().length > 0 && mcpServers === undefined;
+              return mcpServers !== undefined || unknownProfile
+                ? { mcpServers: (mcpServers ?? {}) as Record<string, McpServerConfig> }
+                : {};
+            })(),
             ...(model ? { model } : {}),
             env: this.environment,
             ...(resumedSession ? { resume: resumedSession.sessionId } : {}),
@@ -279,7 +293,7 @@ export class ClaudeProvider implements AgentProvider {
         else await host.emit({ type: 'failed', error: normalized });
         return result;
       } finally {
-        clearTimeout(timeout);
+        if (timeout) clearTimeout(timeout);
         this.controllers.delete(input.taskId);
         if (activeSession && this.controllers.get(activeSession.sessionId) === abortController) {
           this.controllers.delete(activeSession.sessionId);

@@ -9,7 +9,7 @@ import type {
 } from '../agents/contracts.js';
 
 const REDACTED = '[REDACTED]';
-const SENSITIVE_ASSIGNMENT = /(\b(?:[a-z0-9_]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|cookie|credential)[a-z0-9_]*|api[-_]?key|access[-_]?token)\b\s*[:=]\s*)(?:Bearer\s+[^\s,;]+|"[^"]*"|'[^']*'|[^\s,;]+)/gi;
+const SENSITIVE_ASSIGNMENT = /((?:["']?)(?:[a-z0-9_]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|cookie|credential)[a-z0-9_]*|api[-_]?key|access[-_]?token|user[_-]?code|device[_-]?code|verification(?:[_-]?(?:url|uri|code))?)(?:["']?)\s*[:=]\s*)(?:Bearer\s+[^\s,;]+|"[^"]*"|'[^']*'|[^\s,;]+)/gi;
 const BEARER_TOKEN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const OPENAI_TOKEN = /\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b/g;
 const GITHUB_TOKEN = /\b(?:gh[pousr]_[A-Za-z0-9_-]{8,}|github_pat_[A-Za-z0-9_-]{8,})\b/g;
@@ -25,6 +25,12 @@ function sensitiveKey(key: string): boolean {
     'authorization',
     'cookie',
     'credential',
+    'usercode',
+    'devicecode',
+    'verification',
+    'verificationurl',
+    'verificationuri',
+    'verificationcode',
   ].some(fragment => normalized.includes(fragment));
 }
 
@@ -53,6 +59,14 @@ export function redactSensitiveValue(value: unknown): unknown {
 
 export function safeStringify(value: unknown): string {
   return JSON.stringify(redactSensitiveValue(value));
+}
+
+export function redactStructuredText(text: string): string {
+  try {
+    return safeStringify(JSON.parse(text));
+  } catch {
+    return redactSensitiveText(text);
+  }
 }
 
 function redactError(error: NormalizedAgentError): NormalizedAgentError {
@@ -125,7 +139,7 @@ export function redactAgentEvent(event: AgentEvent): AgentEvent {
       return {
         ...event,
         command: redactSensitiveText(event.command),
-        ...(event.output ? { output: redactSensitiveText(event.output) } : {}),
+        ...(event.output ? { output: redactStructuredText(event.output) } : {}),
       };
     case 'file_change':
       return {

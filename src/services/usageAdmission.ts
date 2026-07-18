@@ -1,4 +1,4 @@
-import type { AgentProviderId, ProviderUsage, TaskResult } from '../agents/contracts.js';
+import { AGENT_PROVIDER_IDS, type AgentProviderId, type ProviderUsage, type TaskResult } from '../agents/contracts.js';
 import type {
   UsageRepository,
   UsageReservation,
@@ -70,9 +70,11 @@ function normalizePercent(value: number | undefined): number | undefined {
 
 export function createUsageAdmissionService(
   repository: UsageRepository,
-  options: { primaryReserve?: number } = {},
+  options: { primaryReserve?: number | (() => number) } = {},
 ): UsageAdmissionService {
-  const primaryReserve = options.primaryReserve ?? 10;
+  const primaryReserve = () => typeof options.primaryReserve === 'function'
+    ? options.primaryReserve()
+    : options.primaryReserve ?? 10;
 
   function posture(provider: AgentProviderId): UsagePostureState {
     const remaining = repository.latestSnapshots(provider)
@@ -111,7 +113,7 @@ export function createUsageAdmissionService(
       const state = posture(input.provider);
       const uncommitted = state.available === undefined ? undefined : state.available - state.reserved;
 
-      if (uncommitted !== undefined && high + primaryReserve > uncommitted) {
+      if (uncommitted !== undefined && high + primaryReserve() > uncommitted) {
         const recommendation = uncommitted > low
           ? 'Narrow the scope or split planning from implementation.'
           : 'Defer the task or use another authenticated provider.';
@@ -182,7 +184,7 @@ export function createUsageAdmissionService(
     },
 
     detail() {
-      return (['claude', 'codex'] as const).map(provider => {
+      return AGENT_PROVIDER_IDS.map(provider => {
         const state = posture(provider);
         const availability = state.available === undefined ? '' : `, ${state.available.toFixed(1)} available`;
         return `${provider}: ${state.posture}${availability}, ${state.reserved.toFixed(1)} reserved`;

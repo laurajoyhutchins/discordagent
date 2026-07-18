@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feat/provider-neutral-foundation
   pull_request:
 
 permissions:
@@ -13,9 +12,12 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Use Node.js 22
         uses: actions/setup-node@v4
@@ -27,7 +29,33 @@ jobs:
         run: npm ci
 
       - name: Run tests
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test.log
 
       - name: Build
-        run: npm run build
+        if: success()
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee build.log
+
+      - name: Check whitespace
+        if: success()
+        shell: bash
+        run: |
+          set -o pipefail
+          git diff --check "${{ github.event.pull_request.base.sha }}"...HEAD 2>&1 | tee whitespace.log
+
+      - name: Upload verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-logs
+          path: |
+            test.log
+            build.log
+            whitespace.log
+          if-no-files-found: ignore
+          retention-days: 7

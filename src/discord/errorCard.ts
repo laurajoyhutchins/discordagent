@@ -24,9 +24,9 @@ export function buildErrorEmbed(error: unknown, title = 'Error'): EmbedBuilder {
     .setDescription(truncate(redactSensitiveText(description), DESCRIPTION_LIMIT))
     .setTimestamp();
 
-  if (details?.status) embed.addFields({ name: 'Status', value: details.status, inline: true });
-  if (details?.type) embed.addFields({ name: 'Type', value: details.type, inline: true });
-  if (details?.code) embed.addFields({ name: 'Code', value: details.code, inline: true });
+  if (details?.status) embed.addFields({ name: 'Status', value: redactSensitiveText(details.status), inline: true });
+  if (details?.type) embed.addFields({ name: 'Type', value: redactSensitiveText(details.type), inline: true });
+  if (details?.code) embed.addFields({ name: 'Code', value: redactSensitiveText(details.code), inline: true });
   return embed;
 }
 

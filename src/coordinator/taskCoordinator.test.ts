@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AnyThreadChannel, Message } from 'discord.js';
 import type {
   AgentProvider,
@@ -15,12 +15,15 @@ import { ProviderRegistry } from '../agents/providerRegistry.js';
 import { openDatabase, type DatabaseHandle } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import type { InteractionBroker } from '../discord/interactionBroker.js';
-import type { TaskRenderer } from '../discord/taskRenderer.js';
+import type { TaskRenderer, TaskRenderContext } from '../discord/taskRenderer.js';
 import type { CreatedWorktree, WorktreeManager } from '../git/worktreeManager.js';
 import { createEventRepository } from '../repositories/eventRepository.js';
 import { createProjectRepository } from '../repositories/projectRepository.js';
 import { createTaskRepository, type TaskRepository } from '../repositories/taskRepository.js';
 import type { TaskRecord } from '../types.js';
+import type { SettingsService } from '../services/settingsService.js';
+import type { UsageAdmissionService } from '../services/usageAdmission.js';
+import type { TaskCapabilityPreflight } from './capabilityPreflight.js';
 import { createTaskCoordinator } from './taskCoordinator.js';
 
 const directories: string[] = [];
@@ -62,10 +65,14 @@ class FakeMessage {
 class FakeRenderer implements TaskRenderer {
   readonly events: unknown[] = [];
   readonly results: TaskResult[] = [];
+  readonly cards: TaskRenderContext[] = [];
   started = false;
-  start(): void { this.started = true; }
+  disposeCount = 0;
+  start(_thread?: AnyThreadChannel, context?: TaskRenderContext): void { this.started = true; if (context) this.cards.push(context); }
+  async updateCard(context: TaskRenderContext): Promise<void> { this.cards.push(context); }
   async handle(event: unknown): Promise<void> { this.events.push(event); }
   async finish(result: TaskResult): Promise<void> { this.results.push(result); }
+  async dispose(): Promise<void> { this.disposeCount += 1; }
 }
 
 class FakeBroker implements InteractionBroker {
@@ -93,6 +100,7 @@ class FakeProvider implements AgentProvider {
   readonly cancelled: string[] = [];
   startImpl?: (input: StartTaskInput, host: AgentRunHost) => Promise<ProviderRun>;
   continueImpl?: (input: ContinueTaskInput, host: AgentRunHost) => Promise<ProviderRun>;
+  cancelImpl?: Promise<void>;
 
   async checkAvailability() {
     this.onAvailability?.();
@@ -106,7 +114,7 @@ class FakeProvider implements AgentProvider {
     if (!this.continueImpl) throw new Error('continueImpl not configured');
     return this.continueImpl(input, host);
   }
-  async cancelTask(sessionId: string) { this.cancelled.push(sessionId); }
+  async cancelTask(sessionId: string) { this.cancelled.push(sessionId); await this.cancelImpl; }
   async estimateHandoff() {
     return { estimatedInputTokens: 1, confidence: 'high' as const, explanation: 'test' };
   }
@@ -126,7 +134,7 @@ function completed(sessionId: string, overrides: Partial<TaskResult> = {}): Task
   };
 }
 
-function setup(order: string[] = []) {
+function setup(order: string[] = [], usage?: UsageAdmissionService, capabilityPreflight?: { assertCanUseTaskThread?: (channel: unknown) => void }) {
   const directory = mkdtempSync(join(tmpdir(), 'discordagent-coordinator-'));
   directories.push(directory);
   const db = openDatabase(join(directory, 'coordinator.sqlite'));
@@ -166,6 +174,7 @@ function setup(order: string[] = []) {
   let removeCount = 0;
   const removedInputs: unknown[] = [];
   const worktrees: WorktreeManager = {
+    async validateBaseBranch() { order.push('base-ref'); return 'main'; },
     async create() { order.push('worktree'); return worktree; },
     async inspect(path) { return { path, exists: true, dirty: false, branchName: worktree.branchName }; },
     async remove(input) { removeCount += 1; removedInputs.push(input); },
@@ -175,11 +184,23 @@ function setup(order: string[] = []) {
   provider.onAvailability = () => order.push('availability');
   const providers = new ProviderRegistry();
   providers.register(provider);
+  const settingsService = {
+    resolveTaskSettings: vi.fn(({ projectName, provider }: { projectName: string; provider: 'claude' | 'codex' }) => {
+      const project = baseProjects.findByName(projectName);
+      const result: Record<string, unknown> = {};
+      const model = project?.models?.[provider];
+      const reasoningEffort = provider === 'codex' ? project?.reasoningEfforts?.[provider] : undefined;
+      if (model) result.model = model;
+      if (reasoningEffort) result.reasoningEffort = reasoningEffort;
+      return result;
+    }),
+  } as unknown as SettingsService;
   const renderers: FakeRenderer[] = [];
   const broker = new FakeBroker();
   let id = 0;
   const coordinator = createTaskCoordinator({
     projects,
+    settings: settingsService,
     tasks,
     events,
     worktrees,
@@ -191,10 +212,12 @@ function setup(order: string[] = []) {
     },
     brokerFactory: () => broker,
     idFactory: prefix => `${prefix}-${++id}`,
+    ...(usage ? { usage } : {}),
+    ...(capabilityPreflight ? { capabilityPreflight: capabilityPreflight as TaskCapabilityPreflight } : {}),
   });
   return {
-    coordinator, tasks: baseTasks, events, provider, renderers, broker,
-    worktree, worktrees, removeCount: () => removeCount, removedInputs,
+    coordinator, projects: baseProjects, tasks: baseTasks, events, provider, renderers, broker, settingsService,
+    worktree, worktrees, removeCount: () => removeCount, removedInputs, database: db, providers,
   };
 }
 
@@ -212,6 +235,29 @@ afterEach(() => {
 });
 
 describe('TaskCoordinator', () => {
+  it('updates one renderer card across provider lifecycle transitions', async () => {
+    const context = setup();
+    const completion = deferred<TaskResult>();
+    context.provider.startImpl = async (_input, _host) => ({
+      session: { provider: 'claude', sessionId: 'card-session', createdAt: 1 },
+      completion: completion.promise,
+    });
+    const running = context.coordinator.startFromMessage({
+      projectName: 'factory-floor',
+      prompt: 'render lifecycle card',
+      message: new FakeMessage(new FakeThread()) as unknown as Message,
+    });
+    await waitUntil(() => context.tasks.listActive().some(task => task.status === 'running'));
+    const task = context.tasks.listActive()[0];
+    expect(context.renderers[0].cards.map(card => card.task.status)).toEqual(expect.arrayContaining(['starting', 'running']));
+    const active = context.tasks.findById(task.id);
+    expect(active?.status).toBe('running');
+    await context.coordinator.cancelByThread(task.threadId);
+    completion.resolve({ provider: 'claude', outcome: 'cancelled', exitType: 'cancelled', startedAt: 1, completedAt: 2, summary: 'Cancelled' });
+    await running;
+    expect(context.renderers[0].cards.map(card => card.task.status)).toContain('cancelled');
+  });
+
   it('persists worktree and provider session in the required order before awaiting completion', async () => {
     const order: string[] = [];
     const context = setup(order);
@@ -232,10 +278,10 @@ describe('TaskCoordinator', () => {
     });
     await waitUntil(() => order.includes('running'));
     expect(order.filter(item => [
-      'project', 'availability', 'thread', 'worktree', 'persist', 'starting',
+      'project', 'availability', 'base-ref', 'thread', 'worktree', 'persist', 'starting',
       'provider', 'session', 'running', 'completed', 'result',
     ].includes(item))).toEqual([
-      'project', 'availability', 'thread', 'worktree', 'persist', 'starting',
+      'project', 'availability', 'base-ref', 'thread', 'worktree', 'persist', 'starting',
       'provider', 'session', 'running',
     ]);
     expect(context.tasks.findByThreadId(thread.id)).toMatchObject({
@@ -251,6 +297,7 @@ describe('TaskCoordinator', () => {
     expect(context.renderers[0].results[0]).toMatchObject({
       outcome: 'completed', branchName: context.worktree.branchName,
     });
+    expect(context.renderers[0].disposeCount).toBe(1);
   });
 
   it('rejects an unavailable provider before creating a Discord thread or worktree', async () => {
@@ -264,6 +311,66 @@ describe('TaskCoordinator', () => {
     })).rejects.toThrow(/offline/i);
     expect(message.startCount).toBe(0);
     expect(order).toEqual(['project', 'availability']);
+  });
+
+  it('checks provider availability before resolving start settings', async () => {
+    const context = setup();
+    context.provider.available = false;
+    const resolveSettings = vi.mocked(context.settingsService.resolveTaskSettings);
+    resolveSettings.mockImplementation(() => { throw new Error('settings must not resolve'); });
+    const message = new FakeMessage(new FakeThread());
+
+    await expect(context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Unavailable provider', message: message as unknown as Message,
+    })).rejects.toThrow(/offline/i);
+    expect(resolveSettings).not.toHaveBeenCalled();
+    expect(message.startCount).toBe(0);
+  });
+
+  it('does not create unsupported Claude reasoning settings at task start', async () => {
+    const context = setup();
+    context.projects.updateReasoning('factory-floor', 'claude', 'high');
+    let startedInput: StartTaskInput | undefined;
+    context.provider.startImpl = async (input) => {
+      startedInput = input;
+      return {
+        session: { provider: 'claude', sessionId: 'reasoning-session', createdAt: 11 },
+        completion: Promise.resolve(completed('reasoning-session')),
+      };
+    };
+
+    await context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Use the configured reasoning depth',
+      message: new FakeMessage(new FakeThread('thread-reasoning')) as unknown as Message,
+    });
+
+    expect(startedInput?.reasoningEffort).toBeUndefined();
+  });
+
+  it('resolves and persists effective global/project settings before provider start', async () => {
+    const context = setup();
+    const resolved = { model: 'resolved-project-model', timeoutMs: 60_000 };
+    vi.mocked(context.settingsService.resolveTaskSettings).mockReturnValue(resolved);
+    let startedInput: StartTaskInput | undefined;
+    context.provider.startImpl = async input => {
+      startedInput = input;
+      return {
+        session: { provider: 'claude', sessionId: 'settings-session', createdAt: 11 },
+        completion: Promise.resolve(completed('settings-session')),
+      };
+    };
+
+    const task = await context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Use resolved settings',
+      message: new FakeMessage(new FakeThread('thread-settings')) as unknown as Message,
+    });
+
+    expect(context.settingsService.resolveTaskSettings).toHaveBeenCalledWith({
+      projectName: 'factory-floor', provider: 'claude',
+      modelOverride: undefined, reasoningOverride: undefined,
+    });
+    expect(task.settings).toEqual(resolved);
+    expect(startedInput?.settings).toEqual(resolved);
   });
 
   it('moves into waiting_for_user for approvals and returns to running without losing the session', async () => {
@@ -356,11 +463,240 @@ describe('TaskCoordinator', () => {
       prompt: 'Continue', thread: thread as unknown as AnyThreadChannel,
     });
 
+    expect(context.settingsService.resolveTaskSettings).toHaveBeenCalledTimes(2);
+
     expect(continuedInput).toMatchObject({
       session: { provider: 'claude', sessionId: 'continue-session' },
       workingDirectory: context.worktree.worktreePath,
     });
     expect(context.tasks.findByThreadId(thread.id)).toMatchObject({ status: 'completed' });
+  });
+
+  it('layers a continuation model and reasoning override without changing the stored snapshot', async () => {
+    const context = setup();
+    vi.mocked(context.settingsService.resolveTaskSettings).mockReturnValue({
+      model: 'snapshot-model', timeoutMs: 60_000,
+    });
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'snapshot-session', createdAt: 11 },
+      completion: Promise.resolve(completed('snapshot-session')),
+    });
+    const thread = new FakeThread('thread-snapshot');
+    await context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Initial work',
+      message: new FakeMessage(thread) as unknown as Message,
+    });
+    const before = context.tasks.findByThreadId(thread.id);
+
+    let continuedInput: ContinueTaskInput | undefined;
+    context.provider.continueImpl = async input => {
+      continuedInput = input;
+      return { session: input.session, completion: Promise.resolve(completed(input.session.sessionId)) };
+    };
+    await context.coordinator.continueInThread({
+      prompt: 'Use a sharper model for this turn', thread: thread as unknown as AnyThreadChannel,
+      model: 'one-turn-model',
+    });
+
+    expect(continuedInput).toMatchObject({
+      settings: { model: 'snapshot-model', timeoutMs: 60_000 },
+      turnSettings: { model: 'one-turn-model' },
+    });
+    expect(continuedInput?.settings).not.toBe(before?.settings);
+    expect(context.tasks.findByThreadId(thread.id)?.settings).toEqual(before?.settings);
+    expect(context.settingsService.resolveTaskSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects unsupported continuation settings before reopening or reserving usage', async () => {
+    const reserve = vi.fn(async () => undefined);
+    const usage = {
+      reserve,
+      posture: vi.fn(() => ({ posture: 'normal' })),
+    } as unknown as UsageAdmissionService;
+    const context = setup([], usage);
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'terminal-session', createdAt: 11 },
+      completion: Promise.resolve(completed('terminal-session')),
+    });
+    const thread = new FakeThread('thread-preflight');
+    await context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Initial work',
+      message: new FakeMessage(thread) as unknown as Message,
+    });
+    reserve.mockClear();
+
+    const providerContinue = vi.fn<NonNullable<FakeProvider['continueImpl']>>();
+    context.provider.continueImpl = providerContinue;
+    await expect(context.coordinator.continueInThread({
+      prompt: 'Unsupported Claude turn',
+      thread: thread as unknown as AnyThreadChannel,
+      reasoningEffort: 'high',
+    })).rejects.toThrow(/Claude.*reasoningEffort.*support/i);
+
+    expect(context.tasks.findByThreadId(thread.id)).toMatchObject({ status: 'completed' });
+    expect(providerContinue).not.toHaveBeenCalled();
+    expect(reserve).not.toHaveBeenCalled();
+  });
+
+  it('rejects an incompatible durable snapshot before continuation side effects', async () => {
+    const reserve = vi.fn(async () => undefined);
+    const usage = {
+      reserve,
+      posture: vi.fn(() => ({ posture: 'normal' })),
+    } as unknown as UsageAdmissionService;
+    const order: string[] = [];
+    const context = setup(order, usage);
+    const task = context.tasks.createWithWorktree({
+      taskId: 'incompatible-task', projectName: 'factory-floor', provider: 'claude',
+      channelId: 'agent-1', threadId: 'thread-incompatible', objective: 'Existing task',
+      settings: { reasoningEffort: 'high' },
+      worktree: { id: 'worktree-incompatible', repositoryPath: '/repo', worktreePath: '/worktree', branchName: 'agent/claude/incompatible', baseRef: 'main' },
+    });
+    context.tasks.attachProviderSession(task.id, { provider: 'claude', sessionId: 'incompatible-session', createdAt: 1 });
+    context.tasks.transition(task.id, ['created'], 'starting');
+    context.tasks.transition(task.id, ['starting'], 'running');
+    context.tasks.transition(task.id, ['running'], 'completed');
+
+    const providerContinue = vi.fn<NonNullable<FakeProvider['continueImpl']>>();
+    context.provider.continueImpl = providerContinue;
+    await expect(context.coordinator.continueInThread({
+      prompt: 'Continue incompatible task', thread: new FakeThread('thread-incompatible') as unknown as AnyThreadChannel,
+    })).rejects.toThrow(/Claude.*reasoningEffort.*support/i);
+
+    expect(context.tasks.findById(task.id)).toMatchObject({ status: 'completed' });
+    expect(providerContinue).not.toHaveBeenCalled();
+    expect(reserve).not.toHaveBeenCalled();
+    expect(order).not.toContain('worktree');
+  });
+
+  it('rejects a malformed non-empty snapshot without adopting current settings', async () => {
+    const reserve = vi.fn(async () => undefined);
+    const usage = { reserve, posture: vi.fn(() => ({ posture: 'normal' })) } as unknown as UsageAdmissionService;
+    const context = setup([], usage);
+    const task = context.tasks.createWithWorktree({
+      taskId: 'malformed-task', projectName: 'factory-floor', provider: 'claude',
+      channelId: 'agent-1', threadId: 'thread-malformed', objective: 'Malformed task',
+      settings: { model: 'snapshot-model' },
+      worktree: { id: 'worktree-malformed', repositoryPath: '/repo', worktreePath: '/worktree', branchName: 'agent/claude/malformed', baseRef: 'main' },
+    });
+    context.database.raw.prepare('UPDATE tasks SET settings_json = ? WHERE id = ?').run('{"timeoutMs":1}', task.id);
+    context.tasks.attachProviderSession(task.id, { provider: 'claude', sessionId: 'malformed-session', createdAt: 1 });
+    context.tasks.transition(task.id, ['created'], 'starting');
+    context.tasks.transition(task.id, ['starting'], 'running');
+    context.tasks.transition(task.id, ['running'], 'completed');
+
+    await expect(context.coordinator.continueInThread({
+      prompt: 'Continue malformed task', thread: new FakeThread('thread-malformed') as unknown as AnyThreadChannel,
+    })).rejects.toThrow(/malformed.*settings/i);
+    expect(context.tasks.findById(task.id)).toMatchObject({ status: 'completed' });
+    expect(reserve).not.toHaveBeenCalled();
+  });
+
+  it('rejects an incompatible start snapshot before usage, thread, worktree, or provider effects', async () => {
+    const reserve = vi.fn(async () => undefined);
+    const usage = { reserve, posture: vi.fn(() => ({ posture: 'normal' })) } as unknown as UsageAdmissionService;
+    const order: string[] = [];
+    const context = setup(order, usage);
+    vi.mocked(context.settingsService.resolveTaskSettings).mockReturnValue({ reasoningEffort: 'high' });
+    const start = vi.fn<NonNullable<FakeProvider['startImpl']>>();
+    context.provider.startImpl = start;
+    const message = new FakeMessage(new FakeThread(), order);
+
+    await expect(context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Unsupported start', message: message as unknown as Message,
+    })).rejects.toThrow(/Claude.*reasoningEffort.*support/i);
+    expect(reserve).not.toHaveBeenCalled();
+    expect(message.startCount).toBe(0);
+    expect(order).not.toContain('worktree');
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('rejects incompatible handoff settings before usage or sibling creation', async () => {
+    const reserve = vi.fn(async () => undefined);
+    const usage = { reserve, posture: vi.fn(() => ({ posture: 'normal' })) } as unknown as UsageAdmissionService;
+    const context = setup([], usage);
+    const sourceThread = new FakeThread('thread-handoff');
+    const siblingCreate = vi.fn(async () => new FakeThread('sibling-thread'));
+    (sourceThread as unknown as { parent: unknown }).parent = { threads: { create: siblingCreate } };
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'handoff-session', createdAt: 11 },
+      completion: Promise.resolve(completed('handoff-session')),
+    });
+    await context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Source', message: new FakeMessage(sourceThread) as unknown as Message,
+    });
+    reserve.mockClear();
+    const target = {
+      id: 'codex',
+      checkAvailability: vi.fn(async () => ({ available: true })),
+      startTask: vi.fn(),
+      estimateHandoff: vi.fn(async () => ({ estimatedInputTokens: 1, confidence: 'low', explanation: 'test' })),
+    } as unknown as AgentProvider;
+    context.providers.register(target);
+    vi.mocked(context.settingsService.resolveTaskSettings).mockReturnValue({ timeoutMs: 60_000 });
+
+    await expect(context.coordinator.handoffFromThread({ sourceThread: sourceThread as unknown as AnyThreadChannel, targetProvider: 'codex' }))
+      .rejects.toThrow(/Codex.*timeoutMs.*support/i);
+    expect(reserve).not.toHaveBeenCalled();
+    expect(siblingCreate).not.toHaveBeenCalled();
+    expect(target.checkAvailability).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs Discord task capability preflight before continuation reservation or reopen', async () => {
+    const reserve = vi.fn(async () => undefined);
+    const usage = { reserve, posture: vi.fn(() => ({ posture: 'normal' })) } as unknown as UsageAdmissionService;
+    const capabilityPreflight = { assertCanUseTaskThread: vi.fn(() => { throw new Error('task thread capability denied'); }) };
+    const context = setup([], usage, capabilityPreflight);
+    const task = context.tasks.createWithWorktree({
+      taskId: 'capability-task', projectName: 'factory-floor', provider: 'claude',
+      channelId: 'agent-1', threadId: 'thread-capability', objective: 'Capability task',
+      settings: { model: 'snapshot-model' },
+      worktree: { id: 'worktree-capability', repositoryPath: '/repo', worktreePath: '/worktree', branchName: 'agent/claude/capability', baseRef: 'main' },
+    });
+    context.tasks.attachProviderSession(task.id, { provider: 'claude', sessionId: 'capability-session', createdAt: 1 });
+    context.tasks.transition(task.id, ['created'], 'starting');
+    context.tasks.transition(task.id, ['starting'], 'running');
+    context.tasks.transition(task.id, ['running'], 'completed');
+
+    await expect(context.coordinator.continueInThread({
+      prompt: 'Denied continuation', thread: new FakeThread('thread-capability') as unknown as AnyThreadChannel,
+    })).rejects.toThrow(/capability denied/i);
+    expect(capabilityPreflight.assertCanUseTaskThread).toHaveBeenCalled();
+    expect(reserve).not.toHaveBeenCalled();
+    expect(context.tasks.findById(task.id)).toMatchObject({ status: 'completed' });
+  });
+
+  it('resolves safe defaults when continuing a legacy task with an empty snapshot', async () => {
+    const context = setup();
+    const resolved = { model: 'resolved-legacy-model', timeoutMs: 60_000 };
+    vi.mocked(context.settingsService.resolveTaskSettings)
+      .mockReturnValueOnce({})
+      .mockReturnValueOnce(resolved);
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'legacy-session', createdAt: 11 },
+      completion: Promise.resolve(completed('legacy-session')),
+    });
+    const thread = new FakeThread('thread-legacy');
+    await context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Initial legacy work',
+      message: new FakeMessage(thread) as unknown as Message,
+    });
+
+    let continuedInput: ContinueTaskInput | undefined;
+    context.provider.continueImpl = async input => {
+      continuedInput = input;
+      return { session: input.session, completion: Promise.resolve(completed(input.session.sessionId)) };
+    };
+    await context.coordinator.continueInThread({
+      prompt: 'Continue legacy work', thread: thread as unknown as AnyThreadChannel,
+      model: 'turn-only-model',
+    });
+
+    expect(continuedInput).toMatchObject({
+      settings: resolved,
+      turnSettings: { model: 'turn-only-model' },
+    });
+    expect(context.tasks.findByThreadId(thread.id)?.settings).toBeUndefined();
   });
 
   it('cancels the provider session, preserves the worktree, and records cancellation', async () => {
@@ -381,11 +717,56 @@ describe('TaskCoordinator', () => {
     expect(context.provider.cancelled).toEqual(['cancel-session']);
     expect(context.removeCount()).toBe(0);
     expect(context.tasks.findByThreadId(thread.id)?.status).toBe('cancelled');
+    expect(context.renderers[0].disposeCount).toBe(1);
 
     completion.resolve(completed('cancel-session', {
       outcome: 'cancelled', exitType: 'cancelled', summary: 'Cancelled',
     }));
     await expect(running).resolves.toMatchObject({ status: 'cancelled' });
+  });
+
+  it('interrupts a provider as soon as a late startup session arrives after cancellation', async () => {
+    const context = setup();
+    const start = deferred<ProviderRun>();
+    context.provider.startImpl = async () => start.promise;
+    const thread = new FakeThread('thread-cancel-starting');
+    const running = context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Cancel before session',
+      message: new FakeMessage(thread) as unknown as Message,
+    });
+    await waitUntil(() => context.tasks.findByThreadId(thread.id)?.status === 'starting');
+
+    await expect(context.coordinator.cancelByThread(thread.id)).resolves.toBe(true);
+    expect(context.provider.cancelled).toEqual([]);
+    start.resolve({
+      session: { provider: 'claude', sessionId: 'late-start-session', createdAt: 12 },
+      completion: Promise.resolve(completed('late-start-session', { outcome: 'cancelled', exitType: 'cancelled' })),
+    });
+    await expect(running).resolves.toMatchObject({ status: 'cancelled' });
+    expect(context.provider.cancelled).toEqual(['late-start-session']);
+    expect(context.tasks.findByThreadId(thread.id)?.providerSessionId).toBeUndefined();
+  });
+
+  it('disposes the renderer immediately when provider cancellation never resolves', async () => {
+    const context = setup();
+    context.provider.cancelImpl = new Promise<void>(() => undefined);
+    const completion = deferred<TaskResult>();
+    context.provider.startImpl = async () => ({
+      session: { provider: 'claude', sessionId: 'stuck-cancel-session', createdAt: 11 },
+      completion: completion.promise,
+    });
+    const thread = new FakeThread('thread-stuck-cancel');
+    const running = context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Long task', message: new FakeMessage(thread) as unknown as Message,
+    });
+    await waitUntil(() => context.tasks.findByThreadId(thread.id)?.status === 'running');
+
+    await expect(context.coordinator.cancelByThread(thread.id)).resolves.toBe(true);
+    expect(context.tasks.findByThreadId(thread.id)?.status).toBe('cancelled');
+    expect(context.renderers[0].disposeCount).toBe(1);
+    completion.resolve(completed('stuck-cancel-session', { outcome: 'cancelled', exitType: 'cancelled' }));
+    await expect(running).resolves.toMatchObject({ status: 'cancelled' });
+    expect(context.renderers[0].results).toHaveLength(1);
   });
 
 

@@ -1,15 +1,18 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
-  AGENT_PROVIDER_IDS,
   AGENT_EVENT_TYPES,
   TASK_STATUSES,
   isAgentEvent,
   isAgentProviderId,
   isTaskStatus,
+  normalizeAgentTaskSettings,
   type AgentEvent,
   type AgentProvider,
   type AgentProviderId,
+  type AgentTaskSettings,
+  type AgentTurnSettings,
   type ProviderSession,
+  type StartTaskInput,
 } from './contracts.js';
 
 describe('agent provider identifiers', () => {
@@ -18,11 +21,6 @@ describe('agent provider identifiers', () => {
     expect(isAgentProviderId('codex')).toBe(true);
     expect(isAgentProviderId('openai')).toBe(false);
     expect(isAgentProviderId(undefined)).toBe(false);
-  });
-
-  it('accepts OpenCode as a provider identifier', () => {
-    expect(isAgentProviderId('opencode')).toBe(true);
-    expect(AGENT_PROVIDER_IDS).toContain('opencode');
   });
 
   it('keeps provider sessions scoped to a supported provider', () => {
@@ -108,5 +106,48 @@ describe('normalized agent events', () => {
     expectTypeOf<ReturnType<AgentProvider['startTask']>>().toEqualTypeOf<
       Promise<import('./contracts.js').ProviderRun>
     >();
+  });
+
+  it('supports provider-neutral task settings while retaining legacy fields', () => {
+    const settings = {
+      model: 'gpt-5-codex',
+      reasoningEffort: 'high',
+      timeoutMs: 60_000,
+      mcpProfile: 'browser',
+      approvalProfile: 'default',
+    } satisfies AgentTaskSettings;
+    const input = {
+      taskId: 'task-1',
+      projectName: 'project',
+      workingDirectory: '/repo',
+      channelId: 'channel',
+      threadId: 'thread',
+      prompt: 'hello',
+      model: 'gpt-5-codex',
+      reasoningEffort: 'high',
+      settings,
+    } satisfies StartTaskInput;
+
+    expect(input.settings).toEqual(settings);
+  });
+
+  it('normalizes legacy provider fields while giving the settings snapshot precedence', () => {
+    expect(normalizeAgentTaskSettings({ model: 'legacy-model', reasoningEffort: 'low' })).toEqual({
+      model: 'legacy-model', reasoningEffort: 'low',
+    });
+    expect(normalizeAgentTaskSettings({
+      model: 'legacy-model', reasoningEffort: 'low',
+      settings: { model: 'snapshot-model', reasoningEffort: 'high' },
+    })).toEqual({ model: 'snapshot-model', reasoningEffort: 'high' });
+  });
+
+  it('narrows one-message overrides to turn-scoped settings', () => {
+    const turnSettings = {
+      model: 'turn-model', reasoningEffort: 'high', timeoutMs: 5_000,
+    } satisfies AgentTurnSettings;
+    expect(turnSettings).toEqual({ model: 'turn-model', reasoningEffort: 'high', timeoutMs: 5_000 });
+    // @ts-expect-error MCP profiles belong to the durable task snapshot.
+    const invalid: AgentTurnSettings = { mcpProfile: 'browser' };
+    expect(invalid).toEqual({ mcpProfile: 'browser' });
   });
 });

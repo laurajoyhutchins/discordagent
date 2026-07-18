@@ -1,12 +1,13 @@
 import type { GuildMember, Message } from 'discord.js';
-import type { AgentProviderId } from '../agents/contracts.js';
+import { isAgentProviderId, type AgentProviderId } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
 import type { Project } from '../types.js';
 import {
   getProjectByChannel,
-  updateProjectModel,
-  updateProjectProvider,
 } from '../services/projectStore.js';
+import { getSettingsService } from '../services/agentRuntimeService.js';
+import type { SettingsService } from '../services/settingsService.js';
 import {
   parseLoopCommand,
   startLoop,
@@ -16,37 +17,58 @@ import {
 } from '../services/loopRunner.js';
 import { getTaskCoordinator } from '../services/taskCoordinatorService.js';
 import { isAuthorized } from '../utils/permissions.js';
-import { redactSensitiveText } from '../utils/redaction.js';
+import { redactErrorMessage, redactSensitiveText } from '../utils/redaction.js';
 import { getPrimaryAgentService } from '../services/primaryAgentServiceRegistry.js';
-import { getProviderRegistry, maybeGetPendingTaskService, maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
-import { UsageAdmissionError } from '../services/usageAdmission.js';
+import { getPrimaryChannelId, getPrimaryOwnerId, getProviderRegistry, maybeGetPendingTaskService, maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
 import { buildErrorEmbed } from '../discord/errorCard.js';
 
 export interface MessageHandlerDependencies {
   coordinator: Pick<TaskCoordinator, 'startFromMessage' | 'continueFromMessage' | 'estimateHandoff' | 'handoffFromThread'>;
   getProjectByChannel(channelId: string): Project | undefined;
-  updateProjectModel(name: string, model: string, provider?: AgentProviderId): void;
-  updateProjectProvider(name: string, provider: AgentProviderId): void;
+  settings: Pick<SettingsService, 'updateProject'>;
   checkProvider?(provider: AgentProviderId): Promise<{ available: boolean; reason?: string; authenticationRequired?: boolean }>;
   deferPendingTask?(input: { userId: string; projectName: string; prompt: string; message: Message; model?: string }): void;
   isAuthorized(member: GuildMember | null | undefined): boolean;
   defaultClaudeModel: string;
+  defaultCodexModel?: string;
+  defaultOpenCodeModel?: string;
   startLoop: typeof startLoop;
   stopLoop: typeof stopLoop;
   getLoopStatus: typeof getLoopStatus;
   getLoopChannelForThread: typeof getLoopChannelForThread;
+  primaryChannelId?: string;
+  primaryOwnerId?: string;
+}
+
+type ProjectModelSettingKey = 'claudeModel' | 'codexModel' | 'openCodeModel';
+
+function modelSettingKey(provider: AgentProviderId): ProjectModelSettingKey {
+  return provider === 'claude' ? 'claudeModel' : provider === 'codex' ? 'codexModel' : 'openCodeModel';
+}
+
+function configuredDefaultModel(dependencies: MessageHandlerDependencies, provider: AgentProviderId): string | undefined {
+  if (provider === 'claude') return dependencies.defaultClaudeModel;
+  if (provider === 'codex') return dependencies.defaultCodexModel;
+  return dependencies.defaultOpenCodeModel;
 }
 
 function defaultDependencies(): MessageHandlerDependencies {
   return {
     coordinator: getTaskCoordinator(),
     getProjectByChannel,
-    updateProjectModel,
-    updateProjectProvider,
-    checkProvider: provider => getProviderRegistry().require(provider).checkAvailability(),
+    settings: getSettingsService(),
+    checkProvider: async provider => {
+      const registry = getProviderRegistry();
+      if (!registry.list().includes(provider)) {
+        return { available: false, reason: `${providerLabel(provider)} is unavailable on this host.` };
+      }
+      return registry.availability(provider);
+    },
     deferPendingTask: input => { maybeGetPendingTaskService()?.defer(input); },
     isAuthorized,
     defaultClaudeModel: process.env.CLAUDE_MODEL ?? '',
+    defaultCodexModel: process.env.CODEX_MODEL ?? '',
+    defaultOpenCodeModel: process.env.OPENCODE_MODEL ?? '',
     startLoop,
     stopLoop,
     getLoopStatus,
@@ -68,12 +90,28 @@ function logPickup(message: Message, prompt: string, lagMs: number): void {
 }
 
 function errorReply(error: unknown, title: string): { embeds: ReturnType<typeof buildErrorEmbed>[] } {
-  if (error instanceof UsageAdmissionError) {
-    return { embeds: [buildErrorEmbed(new Error(`${error.message} ${error.recommendation}`), title)] };
-  }
-  return { embeds: [buildErrorEmbed(error, title)] };
+  console.error(`[message] ${title}:`, redactErrorMessage(error));
+  return { embeds: [buildErrorEmbed(new Error('The request could not be completed. Check the bot logs for details.'), title)] };
 }
 
+function providerUnavailable(provider: AgentProviderId): string {
+  return `${providerLabel(provider)} is unavailable on this host. Try again later or contact the bot owner.`;
+}
+
+async function safeProviderCheck(
+  dependencies: MessageHandlerDependencies,
+  provider: AgentProviderId,
+  fallbackAvailable = true,
+): Promise<{ available: boolean; authenticationRequired?: boolean }> {
+  if (!dependencies.checkProvider) return { available: fallbackAvailable };
+  try {
+    const result = await dependencies.checkProvider(provider);
+    return { available: result.available, ...(result.authenticationRequired ? { authenticationRequired: true } : {}) };
+  } catch (error) {
+    console.error(`[message] Availability check failed for ${provider}:`, redactErrorMessage(error));
+    return { available: false };
+  }
+}
 
 export async function handleMessage(
   message: Message,
@@ -85,7 +123,7 @@ export async function handleMessage(
 
   const primary = getPrimaryAgentService();
   if (!injected && primary && message.channelId === primary.channelId) { await primary.handleMessage(message); return; }
-  if (!injected && !primary && 'name' in message.channel && message.channel.name === 'agent-chat') {
+  if (!injected && !primary && message.channelId === getPrimaryChannelId() && message.author.id === getPrimaryOwnerId()) {
     const onboarding = maybeGetProviderOnboardingService();
     if (onboarding) {
       await onboarding.ensurePrompt();
@@ -124,15 +162,16 @@ export async function handleMessage(
     }
 
     if (lower.startsWith('/provider')) {
-      const target = lower.split(/\s+/)[1] as AgentProviderId | undefined;
-      if (target !== 'claude' && target !== 'codex') {
-        await message.reply('Use `/provider claude` or `/provider codex`. A confirmed handoff creates a sibling thread.');
+      const targetValue = lower.split(/\s+/)[1];
+      if (!isAgentProviderId(targetValue)) {
+        await message.reply('Use `/provider claude`, `/provider codex`, or `/provider opencode`. A confirmed handoff creates a sibling thread.');
         return;
       }
+      const target = targetValue;
       try {
         const estimate = await dependencies.coordinator.estimateHandoff(message.channel.id, target);
         const confirmation = await message.reply({
-          content: `Switching providers creates a fresh **${target}** session in a sibling thread. Estimated handoff context: ~${estimate.estimatedInputTokens.toLocaleString()} input tokens (${estimate.confidence} confidence). This excludes future tool output.`,
+          content: `Switching providers creates a fresh **${providerLabel(target)}** session in a sibling thread. Estimated handoff context: ~${estimate.estimatedInputTokens.toLocaleString()} input tokens (${estimate.confidence} confidence). This excludes future tool output.`,
           components: [{ type: 1, components: [
             { type: 2, custom_id: `handoff_confirm:${target}`, label: 'Create sibling task', style: 3 },
             { type: 2, custom_id: 'handoff_cancel', label: 'Cancel', style: 2 },
@@ -143,7 +182,7 @@ export async function handleMessage(
           await decision.update({ content: 'Provider handoff cancelled. The original task is unchanged.', components: [] });
           return;
         }
-        await decision.update({ content: `Creating the ${target} sibling task…`, components: [] });
+        await decision.update({ content: `Creating the ${providerLabel(target)} sibling task…`, components: [] });
         await dependencies.coordinator.handoffFromThread({ sourceThread: message.channel, targetProvider: target });
       } catch (error) {
         await message.reply(errorReply(error, 'Unable to hand off task'));
@@ -184,23 +223,25 @@ export async function handleMessage(
 
   const { model: oneShotModel, rest: actualPrompt } = parseModelPrefix(prompt);
   if (!oneShotModel && prompt.startsWith('/')) {
-    const handled = await handleBotCommand(prompt, project, message, dependencies);
+    let handled = false;
+    try {
+      handled = await handleBotCommand(prompt, project, message, dependencies);
+    } catch (error) {
+      await message.reply(errorReply(error, 'Unable to process command'));
+      return;
+    }
     if (handled) return;
   }
 
-  const resolvedModel = oneShotModel
-    ?? project.models?.[project.defaultProvider]
-    ?? (project.defaultProvider === 'claude' ? dependencies.defaultClaudeModel : undefined);
-
-  if (project.defaultProvider === 'codex' && dependencies.checkProvider) {
-    const availability = await dependencies.checkProvider('codex');
+  if (project.defaultProvider === 'codex') {
+    const availability = await safeProviderCheck(dependencies, 'codex', false);
     if (!availability.available && availability.authenticationRequired) {
       dependencies.deferPendingTask?.({
         userId: message.author.id,
         projectName: project.name,
         prompt: actualPrompt,
         message,
-        ...(resolvedModel ? { model: resolvedModel } : {}),
+        ...(oneShotModel ? { model: oneShotModel } : {}),
       });
       await message.reply('🔐 Codex sign-in is required. Your task has been held for 30 minutes without creating a thread or worktree. Run `/codex-auth login`; after verification you can explicitly **Start task** or discard it.');
       return;
@@ -213,7 +254,7 @@ export async function handleMessage(
       prompt: actualPrompt,
       message,
       provider: project.defaultProvider,
-      ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(oneShotModel ? { model: oneShotModel } : {}),
     });
   } catch (error) {
     await message.reply(errorReply(error, 'Unable to start task'));
@@ -229,42 +270,46 @@ async function handleBotCommand(
   const lower = content.toLowerCase();
 
   if (lower === '/provider' || /^\/provider\s+\S+$/i.test(content)) {
-    const requested = content.split(/\s+/)[1]?.toLowerCase() as AgentProviderId | undefined;
-    if (!requested) {
+    const requestedValue = content.split(/\s+/)[1]?.toLowerCase();
+    if (!requestedValue) {
       await message.reply(`Default provider for **${project.name}**: \`${project.defaultProvider}\`.`);
       return true;
     }
-    if (requested !== 'claude' && requested !== 'codex') {
-      await message.reply('Provider must be `claude` or `codex`.');
+    if (!isAgentProviderId(requestedValue)) {
+      await message.reply('Provider must be `claude`, `codex`, or `opencode`.');
       return true;
     }
-    const availability = dependencies.checkProvider
-      ? await dependencies.checkProvider(requested)
-      : { available: requested === 'claude', reason: requested === 'codex' ? 'Codex is unavailable in this runtime.' : undefined };
+    const requested = requestedValue;
+    const availability = await safeProviderCheck(dependencies, requested, requested === 'claude');
     if (!availability.available) {
-      await message.reply(availability.reason ?? `${requested} is unavailable on this host.`);
+      await message.reply(providerUnavailable(requested));
       return true;
     }
-    dependencies.updateProjectProvider(project.name, requested);
-    await message.reply(`Default provider for **${project.name}** set to **${requested === 'codex' ? 'Codex' : 'Claude'}**.`);
+    dependencies.settings.updateProject(project.name, { defaultProvider: requested });
+    await message.reply(`Default provider for **${project.name}** set to **${providerLabel(requested)}**.`);
     return true;
   }
 
   if (lower === '/model' || /^\/model\s+\S+$/i.test(content)) {
     const arg = content.split(/\s+/)[1];
     const provider = project.defaultProvider;
+    const availability = await safeProviderCheck(dependencies, provider);
+    if (!availability.available) {
+      await message.reply(providerUnavailable(provider));
+      return true;
+    }
     if (!arg) {
       const current = project.models?.[provider]
-        || (provider === 'claude' ? dependencies.defaultClaudeModel : '')
+        || configuredDefaultModel(dependencies, provider)
         || 'provider default';
       await message.reply(
-        `Current ${provider} model for **${project.name}**: \`${current}\`.\n` +
+        `Current ${providerLabel(provider)} model for **${project.name}**: \`${current}\`.\n` +
         'Set it with `/model <name>`, or prefix a prompt with `/model <name>` for a one-shot override.',
       );
       return true;
     }
-    dependencies.updateProjectModel(project.name, arg, provider);
-    await message.reply(`${provider} model for **${project.name}** set to \`${arg}\`.`);
+    dependencies.settings.updateProject(project.name, { [modelSettingKey(provider)]: arg });
+    await message.reply(`${providerLabel(provider)} model for **${project.name}** set to \`${arg}\`.`);
     return true;
   }
 

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
-import { AppServerTransport, type AppServerProcess } from './appServerTransport.js';
+import { AppServerTransport, CodexCliCompatibilityError, type AppServerProcess } from './appServerTransport.js';
 
 class FakeStream extends EventEmitter {
   writeData(value: string) { this.emit('data', Buffer.from(value)); }
@@ -95,6 +95,22 @@ describe('AppServerTransport', () => {
     await expect(result).resolves.toEqual({ thread: { id: 't-2' } });
     expect(delays).toHaveLength(1);
     expect(delays[0]).toBeGreaterThanOrEqual(1);
+  });
+
+  it('classifies model-version incompatibility as a typed error', async () => {
+    const process = new FakeProcess();
+    const transport = new AppServerTransport({ process });
+    const promise = transport.request('thread/start', { model: 'gpt-5.6-luna' });
+    const request = JSON.parse(process.writes[0]);
+    process.stdout.writeData(`{"id":${request.id},"error":{"code":-32602,"message":"The 'gpt-5.6-luna' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again."}}\n`);
+
+    const error = await promise.catch(value => value);
+    expect(error).toBeInstanceOf(CodexCliCompatibilityError);
+    expect(error).toMatchObject({
+      kind: 'codex_cli_compatibility',
+      model: 'gpt-5.6-luna',
+      operation: 'thread/start',
+    });
   });
 
 });

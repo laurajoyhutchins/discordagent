@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { AgentProviderId } from '../agents/contracts.js';
+import type { AgentProviderId, ReasoningEffort } from '../agents/contracts.js';
 import { openDatabase, type DatabaseHandle } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import { importLegacyProjects } from '../repositories/legacyProjectImporter.js';
@@ -85,6 +85,22 @@ export function updateDefaultProvider(provider: AgentProviderId): void {
   getSettingsRepository().setDefaultProvider(provider);
 }
 
+export function getDefaultModel(provider: AgentProviderId): string | undefined {
+  return getSettingsRepository().getModel(provider);
+}
+
+export function updateDefaultModel(model: string, provider: AgentProviderId): void {
+  getSettingsRepository().setModel(provider, model || undefined);
+}
+
+export function getDefaultReasoning(provider: AgentProviderId): ReasoningEffort | undefined {
+  return getSettingsRepository().getReasoningEffort(provider);
+}
+
+export function updateDefaultReasoning(effort: ReasoningEffort | undefined, provider: AgentProviderId): void {
+  getSettingsRepository().setReasoningEffort(provider, effort);
+}
+
 function withEphemeral(project: Project | undefined): Project | undefined {
   if (!project) return undefined;
   const state = ephemeralState.get(projectKey(project.name));
@@ -127,6 +143,15 @@ export function updateProjectModel(
 ): void {
   if (!repository().findByName(name)) return;
   repository().updateModel(name, provider, model || undefined);
+}
+
+export function updateProjectReasoning(
+  name: string,
+  effort: ReasoningEffort | undefined,
+  provider: AgentProviderId = 'codex',
+): void {
+  if (!repository().findByName(name)) return;
+  repository().updateReasoning(name, provider, effort || undefined);
 }
 
 export function updateProjectProvider(name: string, provider: AgentProviderId): void {

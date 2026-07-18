@@ -34,7 +34,22 @@ export class AppServerRequestError extends Error {
   }
 }
 
+export class CodexCliCompatibilityError extends AppServerRequestError {
+  readonly kind = 'codex_cli_compatibility' as const;
+
+  constructor(
+    code: number,
+    message: string,
+    readonly model: string,
+    readonly operation: string,
+  ) {
+    super(code, message);
+    this.name = 'CodexCliCompatibilityError';
+  }
+}
+
 interface PendingRequest {
+  method: string;
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: NodeJS.Timeout;
@@ -103,7 +118,7 @@ export class AppServerTransport extends EventEmitter {
         this.pending.delete(id);
         reject(new Error(`Codex App Server request timed out: ${method}`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: value => resolve(value as T), reject, timer });
+      this.pending.set(id, { method, resolve: value => resolve(value as T), reject, timer });
       this.write({ id, method, ...(params === undefined ? {} : { params }) });
     });
   }
@@ -171,7 +186,10 @@ export class AppServerTransport extends EventEmitter {
       if (!pending) return;
       this.pending.delete(message.id);
       clearTimeout(pending.timer);
-      if ('error' in message) pending.reject(new AppServerRequestError(message.error.code, redactSensitiveText(message.error.message)));
+      if ('error' in message) {
+        const errorMessage = redactSensitiveText(message.error.message);
+        pending.reject(classifyCodexAppServerError(message.error.code, errorMessage, pending.method));
+      }
       else pending.resolve(message.result);
     }
   }
@@ -193,4 +211,11 @@ export class AppServerTransport extends EventEmitter {
     this.pending.clear();
     this.emit('exit', error);
   }
+}
+
+export function classifyCodexAppServerError(code: number, message: string, operation: string): AppServerRequestError {
+  const match = message.match(/The ['"]([^'"]+)['"] model requires a newer version of Codex/i);
+  return match
+    ? new CodexCliCompatibilityError(code, message, match[1]!, operation)
+    : new AppServerRequestError(code, message);
 }

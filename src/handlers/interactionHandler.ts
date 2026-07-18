@@ -14,8 +14,49 @@ import { handleProvider } from '../commands/provider.js';
 import { stopLoopFromButton } from '../services/loopRunner.js';
 import { handleCodexAuth, handleCodexAuthButton } from '../commands/codexAuth.js';
 import { maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
+import { handleCapabilities } from '../commands/capabilities.js';
+import { handleSettings, handleSettingsComponent } from '../commands/settings.js';
+import { handleProjectSettings, handleProjectSettingsComponent } from '../commands/projectSettings.js';
+
+export async function routeSettingsComponents(
+  interaction: Interaction,
+  globalHandler: typeof handleSettingsComponent = handleSettingsComponent,
+  projectHandler: typeof handleProjectSettingsComponent = handleProjectSettingsComponent,
+): Promise<boolean> {
+  if (!(interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit())) return false;
+  if (await globalHandler(interaction as Parameters<typeof handleSettingsComponent>[0])) return true;
+  if (interaction.isStringSelectMenu() || interaction.isModalSubmit()) {
+    if (await projectHandler(interaction as Parameters<typeof handleProjectSettingsComponent>[0])) return true;
+  }
+  return false;
+}
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
+  // Settings components are revalidated by their command handlers against the
+  // current channel, project, and clicking user before any state changes.
+  if (await routeSettingsComponents(interaction)) return;
+
+  // Global settings are owner-only rather than role-only, so these commands
+  // must be authorized by their scoped handlers before the generic role gate.
+  if (interaction.isChatInputCommand() && interaction.commandName === 'settings') {
+    try {
+      await handleSettings(interaction);
+    } catch (err) {
+      console.error('Error handling command settings:', redactErrorMessage(err));
+      await interaction.reply({ content: 'The settings panel could not be opened.', flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+    return;
+  }
+  if (interaction.isChatInputCommand() && interaction.commandName === 'project-settings') {
+    try {
+      await handleProjectSettings(interaction);
+    } catch (err) {
+      console.error('Error handling command project-settings:', redactErrorMessage(err));
+      await interaction.reply({ content: 'The project settings panel could not be opened.', flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+    return;
+  }
+
   // Handle button interactions (e.g., loop stop button)
   if (interaction.isButton()) {
     if (await maybeGetProviderOnboardingService()?.handleButton(interaction)) return;
@@ -70,6 +111,15 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
         break;
       case 'usage':
         await handleUsage(interaction);
+        break;
+      case 'capabilities':
+        await handleCapabilities(interaction);
+        break;
+      case 'settings':
+        await handleSettings(interaction);
+        break;
+      case 'project-settings':
+        await handleProjectSettings(interaction);
         break;
       case 'codex-auth':
         await handleCodexAuth(interaction);

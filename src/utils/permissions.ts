@@ -1,7 +1,13 @@
 import { GuildMember } from 'discord.js';
-import { config } from '../config.js';
 
-export function isAuthorized(member: GuildMember | null | undefined): boolean {
+function configuredRoleIds(): string[] {
+  return (process.env.AUTHORIZED_ROLE_IDS ?? '').split(',').map(value => value.trim()).filter(Boolean);
+}
+
+export function isAuthorized(
+  member: GuildMember | null | undefined,
+  authorizedRoleIds: readonly string[] = configuredRoleIds(),
+): boolean {
   if (!member) return false;
-  return config.authorizedRoleIds.some(roleId => member.roles.cache.has(roleId));
+  return authorizedRoleIds.some(roleId => member.roles.cache.has(roleId));
 }

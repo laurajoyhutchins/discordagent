@@ -137,7 +137,7 @@ export function evaluateHostPreflight(
 
   const ownerId = env.AUTHORIZED_USER_ID?.trim() || env.NOTIFY_USER_ID?.trim();
   if (!ownerId) {
-    checks.push(warn('Primary-agent owner', 'AUTHORIZED_USER_ID and NOTIFY_USER_ID are both empty; owner-only Codex authentication and #agent-chat are disabled.'));
+    checks.push(warn('Primary-agent owner', 'AUTHORIZED_USER_ID and NOTIFY_USER_ID are both empty; owner-only provider authentication and #agent-chat are disabled.'));
   } else if (!SNOWFLAKE.test(ownerId)) {
     checks.push(fail('Primary-agent owner', 'AUTHORIZED_USER_ID/NOTIFY_USER_ID must be a Discord snowflake.'));
   } else {
@@ -170,6 +170,7 @@ export function evaluateHostPreflight(
     ['Git CLI', 'git', ['--version'], true],
     ['Claude CLI', 'claude', ['--version'], false],
     ['Codex CLI', env.CODEX_CLI_PATH?.trim() || 'codex', ['--version'], env.CODEX_ENABLED !== 'false'],
+    ['OpenCode CLI', env.OPENCODE_CLI_PATH?.trim() || 'opencode', ['--version'], env.OPENCODE_ENABLED !== 'false'],
     ['Roborev CLI', env.ROBOREV_CLI_PATH?.trim() || 'roborev', ['version'], false],
   ] as const) {
     const result = dependencies.runCommand(command, args);

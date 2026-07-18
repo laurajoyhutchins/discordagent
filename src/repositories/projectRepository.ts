@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentProviderId } from '../agents/contracts.js';
+import { AGENT_PROVIDER_IDS, REASONING_EFFORTS, type AgentProviderId, type ReasoningEffort } from '../agents/contracts.js';
 import type { DatabaseHandle } from '../db/database.js';
-import type { Project, ProjectModels } from '../types.js';
+import type { Project, ProjectModels, ProjectReasoningEfforts } from '../types.js';
 
 export type NewProject = Omit<Project, 'legacySessionId'>;
 
@@ -12,6 +12,8 @@ export interface ProjectRepository {
   create(project: NewProject, legacyMetadata?: Record<string, unknown>): Project;
   updateDefaultProvider(name: string, provider: AgentProviderId): Project;
   updateModel(name: string, provider: AgentProviderId, model?: string): Project;
+  updateReasoning(name: string, provider: AgentProviderId, effort?: ReasoningEffort): Project;
+  updateBaseBranch(name: string, baseBranch: string): Project;
   archive(name: string): Project | undefined;
 }
 
@@ -23,6 +25,7 @@ interface ProjectRow {
   agent_channel_id: string;
   default_provider: AgentProviderId;
   models_json: string;
+  reasoning_efforts_json: string;
   base_branch: string | null;
   roborev_channel_id: string | null;
   legacy_metadata_json: string | null;
@@ -37,9 +40,28 @@ function parseModels(value: string): ProjectModels | undefined {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
     const record = parsed as Record<string, unknown>;
     const models: ProjectModels = {};
-    if (typeof record.claude === 'string' && record.claude) models.claude = record.claude;
-    if (typeof record.codex === 'string' && record.codex) models.codex = record.codex;
-    return models.claude || models.codex ? models : undefined;
+    for (const provider of AGENT_PROVIDER_IDS) {
+      if (typeof record[provider] === 'string' && record[provider]) models[provider] = record[provider] as string;
+    }
+    return Object.keys(models).length > 0 ? models : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseReasoningEfforts(value: string): ProjectReasoningEfforts | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const record = parsed as Record<string, unknown>;
+    const efforts: ProjectReasoningEfforts = {};
+    for (const provider of AGENT_PROVIDER_IDS) {
+      if (typeof record[provider] === 'string'
+        && REASONING_EFFORTS.includes(record[provider] as ReasoningEffort)) {
+        efforts[provider] = record[provider] as ReasoningEffort;
+      }
+    }
+    return Object.keys(efforts).length > 0 ? efforts : undefined;
   } catch {
     return undefined;
   }
@@ -56,6 +78,8 @@ function toProject(row: ProjectRow): Project {
 
   const models = parseModels(row.models_json);
   if (models) project.models = models;
+  const reasoningEfforts = parseReasoningEfforts(row.reasoning_efforts_json);
+  if (reasoningEfforts) project.reasoningEfforts = reasoningEfforts;
   if (row.base_branch) project.baseBranch = row.base_branch;
   if (row.roborev_channel_id) project.roborevChannelId = row.roborev_channel_id;
   return project;
@@ -63,8 +87,17 @@ function toProject(row: ProjectRow): Project {
 
 function serializeModels(models: ProjectModels | undefined): string {
   const compact: ProjectModels = {};
-  if (models?.claude) compact.claude = models.claude;
-  if (models?.codex) compact.codex = models.codex;
+  for (const provider of AGENT_PROVIDER_IDS) {
+    if (models?.[provider]) compact[provider] = models[provider];
+  }
+  return JSON.stringify(compact);
+}
+
+function serializeReasoningEfforts(efforts: ProjectReasoningEfforts | undefined): string {
+  const compact: ProjectReasoningEfforts = {};
+  for (const provider of AGENT_PROVIDER_IDS) {
+    if (efforts?.[provider]) compact[provider] = efforts[provider];
+  }
   return JSON.stringify(compact);
 }
 
@@ -113,6 +146,7 @@ export function createProjectRepository(db: DatabaseHandle): ProjectRepository {
 
       const now = Date.now();
       const modelsJson = serializeModels(project.models);
+      const reasoningEffortsJson = serializeReasoningEfforts(project.reasoningEfforts);
       const metadataJson = legacyMetadata && Object.keys(legacyMetadata).length > 0
         ? JSON.stringify(legacyMetadata)
         : null;
@@ -125,6 +159,7 @@ export function createProjectRepository(db: DatabaseHandle): ProjectRepository {
             agent_channel_id = ?,
             default_provider = ?,
             models_json = ?,
+            reasoning_efforts_json = ?,
             base_branch = ?,
             roborev_channel_id = ?,
             legacy_metadata_json = ?,
@@ -137,6 +172,7 @@ export function createProjectRepository(db: DatabaseHandle): ProjectRepository {
           project.agentChannelId,
           project.defaultProvider,
           modelsJson,
+          reasoningEffortsJson,
           project.baseBranch ?? null,
           project.roborevChannelId ?? null,
           metadataJson,
@@ -147,9 +183,9 @@ export function createProjectRepository(db: DatabaseHandle): ProjectRepository {
         db.raw.prepare(`
           INSERT INTO projects (
             id, name, working_directory, category_id, agent_channel_id,
-            default_provider, models_json, base_branch, roborev_channel_id,
+            default_provider, models_json, reasoning_efforts_json, base_branch, roborev_channel_id,
             legacy_metadata_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           randomUUID(),
           project.name,
@@ -158,6 +194,7 @@ export function createProjectRepository(db: DatabaseHandle): ProjectRepository {
           project.agentChannelId,
           project.defaultProvider,
           modelsJson,
+          reasoningEffortsJson,
           project.baseBranch ?? null,
           project.roborevChannelId ?? null,
           metadataJson,
@@ -185,6 +222,25 @@ export function createProjectRepository(db: DatabaseHandle): ProjectRepository {
       db.raw.prepare(`
         UPDATE projects SET models_json = ?, updated_at = ? WHERE id = ?
       `).run(serializeModels(models), Date.now(), row.id);
+      return this.findByName(name)!;
+    },
+
+    updateReasoning(name: string, provider: AgentProviderId, effort?: ReasoningEffort): Project {
+      const row = requireActive(name);
+      const efforts = parseReasoningEfforts(row.reasoning_efforts_json) ?? {};
+      if (effort) efforts[provider] = effort;
+      else delete efforts[provider];
+      db.raw.prepare(`
+        UPDATE projects SET reasoning_efforts_json = ?, updated_at = ? WHERE id = ?
+      `).run(serializeReasoningEfforts(efforts), Date.now(), row.id);
+      return this.findByName(name)!;
+    },
+
+    updateBaseBranch(name: string, baseBranch: string): Project {
+      const row = requireActive(name);
+      db.raw.prepare(`
+        UPDATE projects SET base_branch = ?, updated_at = ? WHERE id = ?
+      `).run(baseBranch, Date.now(), row.id);
       return this.findByName(name)!;
     },
 

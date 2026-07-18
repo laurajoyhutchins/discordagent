@@ -1,8 +1,10 @@
+import { spawn } from 'node:child_process';
 import {
   query as sdkQuery,
   type CanUseTool,
   type McpServerConfig,
 } from '@anthropic-ai/claude-agent-sdk';
+import { buildProcessInvocation } from '../../utils/processInvocation.js';
 import type {
   AgentEvent,
   AgentProvider,
@@ -24,7 +26,7 @@ import {
   adaptClaudeMessage,
   classifyClaudeError,
 } from './claudeEventAdapter.js';
-import { safeStringify } from '../../utils/redaction.js';
+import { redactErrorMessage, safeStringify } from '../../utils/redaction.js';
 
 export type ClaudeQueryRequest = Parameters<typeof sdkQuery>[0];
 export type ClaudeQueryFunction = (request: ClaudeQueryRequest) => AsyncIterable<unknown>;
@@ -143,7 +145,20 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   async checkAvailability(): Promise<ProviderAvailability> {
-    return { available: true };
+    try {
+      const { command, args } = buildProcessInvocation('claude', ['--version']);
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(command, args, { stdio: 'ignore', timeout: 10_000 });
+        child.on('error', reject);
+        child.on('exit', (code, signal) => {
+          if (code === 0) resolve();
+          else reject(new Error(`claude --version exited (code=${code} signal=${signal})`));
+        });
+      });
+      return { available: true };
+    } catch (error) {
+      return { available: false, reason: `Claude CLI ${redactErrorMessage(error)}` };
+    }
   }
 
   startTask(input: StartTaskInput, host: AgentRunHost): Promise<ProviderRun> {

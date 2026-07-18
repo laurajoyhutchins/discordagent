@@ -2,6 +2,7 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  MessageFlags,
   type ButtonInteraction,
   type Message,
   type TextChannel,
@@ -36,8 +37,21 @@ export function createProviderOnboardingService(input: {
 
   async function reconcilePrompt(options: { forceSelection?: boolean } = {}): Promise<void> {
     if (!input.botUserId) throw new Error('Provider setup reconciliation requires the configured bot identity.');
-    const selectedProvider = options.forceSelection ? undefined : input.settings.global().defaultProvider;
+    let selectedProvider = options.forceSelection ? undefined : input.settings.global().defaultProvider;
     const providers = input.providers.list();
+    const autoSelected = !selectedProvider && providers.length === 1 && input.onSelected;
+
+    if (autoSelected) {
+      try {
+        await input.settings.updateGlobalWithActivation({ defaultProvider: providers[0] }, async () => {
+          await input.onSelected!(providers[0]);
+        }, input.captureSelectionState?.());
+        selectedProvider = providers[0];
+      } catch (error) {
+        console.error('[providerOnboarding] Auto-selection failed:', redactErrorMessage(error));
+      }
+    }
+
     const components = !selectedProvider && providers.length > 0
       ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
           ...providers.map(provider => new ButtonBuilder()
@@ -47,7 +61,9 @@ export function createProviderOnboardingService(input: {
         )]
       : [];
     const content = selectedProvider
-      ? `Global provider set to **${providerLabel(selectedProvider)}**. The PM chat and new projects will use it by default.`
+      ? autoSelected
+        ? `Global provider auto-selected to **${providerLabel(selectedProvider)}**. The PM chat and new projects will use it by default.`
+        : `Global provider set to **${providerLabel(selectedProvider)}**. The PM chat and new projects will use it by default.`
       : providers.length > 0
         ? 'Provider setup required: choose the provider for the PM chat and new projects. You can change project providers later.'
         : 'Provider setup required, but no provider is currently available. Install or configure Claude, Codex, or OpenCode on the bot host, then restart the bot.';
@@ -87,7 +103,7 @@ export function createProviderOnboardingService(input: {
         return;
       }
     }
-    if (selectedProvider && !existingId) return;
+    if (selectedProvider && !autoSelected && !existingId) return;
     const message = await input.channel.send(payload);
     input.metadata.set(SETUP_MESSAGE_KEY, message.id);
   }
@@ -105,22 +121,22 @@ export function createProviderOnboardingService(input: {
       || ('message' in interaction && interaction.message?.channelId !== input.channel.id)
       || ('message' in interaction && interaction.message?.id !== persistedMessageId)
       || ('message' in interaction && (interaction.message?.author?.bot !== true || interaction.message.author.id !== input.botUserId))) {
-      await interaction.reply({ content: 'Only the configured owner may choose the global provider.', ephemeral: true });
+      await interaction.reply({ content: 'Only the configured owner may choose the global provider.', flags: MessageFlags.Ephemeral });
       return true;
     }
     if ('message' in interaction && (!interaction.message?.components?.length || !hasExpectedProviderButtonSchema(interaction.message.components))) {
-      await interaction.reply({ content: 'That setup message has unexpected controls and cannot be used.', ephemeral: true });
+      await interaction.reply({ content: 'That setup message has unexpected controls and cannot be used.', flags: MessageFlags.Ephemeral });
       return true;
     }
 
     const providerValue = interaction.customId.slice(SETUP_BUTTON_PREFIX.length);
     if (!isAgentProviderId(providerValue)) {
-      await interaction.reply({ content: 'That provider selection is invalid.', ephemeral: true });
+      await interaction.reply({ content: 'That provider selection is invalid.', flags: MessageFlags.Ephemeral });
       return true;
     }
     const provider = providerValue;
     if (!input.providers.list().includes(provider)) {
-      await interaction.reply({ content: 'That provider is no longer available. Restart the bot and choose an available provider.', ephemeral: true });
+      await interaction.reply({ content: 'That provider is no longer available. Restart the bot and choose an available provider.', flags: MessageFlags.Ephemeral });
       return true;
     }
 
@@ -129,7 +145,7 @@ export function createProviderOnboardingService(input: {
       availability = await input.providers.availability(provider);
     } catch (error) {
       console.error(`[providerOnboarding] Availability check failed for ${provider}:`, redactErrorMessage(error));
-      await interaction.reply({ content: `${providerLabel(provider)} is unavailable on the bot host. Try again later or contact the bot owner.`, ephemeral: true });
+      await interaction.reply({ content: `${providerLabel(provider)} is unavailable on the bot host. Try again later or contact the bot owner.`, flags: MessageFlags.Ephemeral });
       return true;
     }
     if (!availability.available) {
@@ -139,10 +155,14 @@ export function createProviderOnboardingService(input: {
             ? 'Codex sign-in required. Run /codex-auth login, complete the device flow, then select this button again.'
             : `${providerLabel(provider)} sign-in required. Complete the provider sign-in, then select this button again.`
           : `${providerLabel(provider)} is unavailable on the bot host. Try again later or contact the bot owner.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return true;
     }
+
+    // Acknowledge the interaction before slow work (provider activation) so
+    // we have the full 15-minute window for the deferred editReply.
+    await interaction.deferUpdate();
 
     try {
       await input.settings.updateGlobalWithActivation({ defaultProvider: provider }, async () => {
@@ -150,35 +170,30 @@ export function createProviderOnboardingService(input: {
       }, input.captureSelectionState?.());
     } catch (error) {
       console.error('[providerOnboarding] Provider activation failed:', redactErrorMessage(error));
-      await interaction.reply({
+      await interaction.editReply({
         content: `The ${providerLabel(provider)} provider could not be activated. Try again later or contact the bot owner.`,
-        ephemeral: true,
-      });
+        components: [],
+      }).catch(() => undefined);
       return true;
     }
 
-    // Persistence and PM activation have succeeded. Reconcile the durable setup
-    // message before acknowledging the component so a failed interaction update
-    // cannot leave stale controls as the only visible state.
     try {
       await ensurePrompt();
-      try {
-        await interaction.update({
-          content: `Global provider set to **${providerLabel(provider)}**. The PM chat and new projects will use it by default.`,
-          components: [],
-        });
-      } catch (error) {
+      await interaction.editReply({
+        content: `Global provider set to **${providerLabel(provider)}**. The PM chat and new projects will use it by default.`,
+        components: [],
+      }).catch(async error => {
+        console.warn('[providerOnboarding] Failed to update setup message after activation:', redactErrorMessage(error));
         await ensurePrompt().catch((reconcileError: unknown) => {
           console.warn('[providerOnboarding] Failed to reconcile setup message after interaction update failure:', redactErrorMessage(reconcileError));
         });
-        throw error;
-      }
+      });
     } catch (error) {
       console.error('[providerOnboarding] Provider setup acknowledgement failed:', redactErrorMessage(error));
-      await Promise.resolve(interaction.reply({
+      await interaction.editReply({
         content: 'The provider selection could not be completed. Try again later or contact the bot owner.',
-        ephemeral: true,
-      })).catch(() => undefined);
+        components: [],
+      }).catch(() => undefined);
       return true;
     }
     return true;

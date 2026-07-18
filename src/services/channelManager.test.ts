@@ -14,14 +14,17 @@ function guild() {
   }));
   return {
     id: 'guild-1',
-    members: { me: { id: 'bot-1', permissions: new PermissionsBitField([
-      PermissionFlagsBits.ViewChannel,
-      PermissionFlagsBits.SendMessages,
-      PermissionFlagsBits.ReadMessageHistory,
-      PermissionFlagsBits.CreatePublicThreads,
-      PermissionFlagsBits.SendMessagesInThreads,
-      PermissionFlagsBits.ManageChannels,
-    ]) } },
+    members: {
+      me: { id: 'bot-1', permissions: new PermissionsBitField([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.CreatePublicThreads,
+        PermissionFlagsBits.SendMessagesInThreads,
+        PermissionFlagsBits.ManageChannels,
+      ]) },
+      fetch: vi.fn().mockResolvedValue({ id: 'owner-1' }),
+    },
     channels: { cache: { find: () => undefined }, fetch: vi.fn(async () => null), create },
   } as unknown as Guild & { channels: { cache: { find: ReturnType<typeof vi.fn> }; fetch: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> } };
 }

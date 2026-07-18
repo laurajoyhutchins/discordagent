@@ -14,10 +14,24 @@ export function buildProcessInvocation(
   platform = process.platform,
   comSpec = process.env.ComSpec ?? 'cmd.exe',
 ): ProcessInvocation {
-  if (platform !== 'win32' || !/\.(?:cmd|bat)$/i.test(command)) {
+  if (platform !== 'win32') {
     return { command, args: [...args] };
   }
 
+  // .cmd/.bat files cannot be launched directly through spawn with shell:false.
+  // .exe and .com files can be launched directly.
+  // Bare command names (no extension, no path) may resolve to .cmd/.bat shims
+  // (Volta, npm, etc.) via PATHEXT, which spawn does not honor. Use ComSpec
+  // so that Windows performs proper PATH and PATHEXT resolution.
+  if (/\.(?:cmd|bat)$/i.test(command)) {
+    const commandLine = [command, ...args]
+      .map(value => /[\s"&|<>^]/.test(value) ? `"${value.replace(/["^]/g, '^$&')}"` : value)
+      .join(' ');
+    return { command: comSpec, args: ['/d', '/s', '/c', commandLine] };
+  }
+  if (/\.(?:exe|com)$/i.test(command) || command.includes('\\') || command.includes('/')) {
+    return { command, args: [...args] };
+  }
   const commandLine = [command, ...args]
     .map(value => /[\s"&|<>^]/.test(value) ? `"${value.replace(/["^]/g, '^$&')}"` : value)
     .join(' ');

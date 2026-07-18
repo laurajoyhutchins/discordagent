@@ -1,11 +1,18 @@
-import { EmbedBuilder } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+} from 'discord.js';
 import type { AgentProviderId, TaskResult, TaskStatus } from '../agents/contracts.js';
 import type { TaskControlCardRecord, TaskControlCardPinState } from '../types.js';
 import { redactSensitiveText } from '../utils/redaction.js';
 
 const PLAIN_TEXT_LIMIT = 1_900;
 const EMBED_OUTPUT_LIMIT = 4_000;
+const ACTIVE_STATUSES = new Set<TaskStatus>(['created', 'starting', 'running', 'waiting_for_user']);
 
+export type TaskControlAction = 'inspect' | 'cancel';
 export type TaskControlCardSessionState = 'not_started' | 'active' | 'preserved' | 'unavailable';
 
 export interface TaskControlCardView {
@@ -25,6 +32,7 @@ export interface TaskControlCardView {
 export interface TaskControlCardPayload {
   readonly content: string;
   readonly embeds?: readonly EmbedBuilder[];
+  readonly components?: readonly ActionRowBuilder<ButtonBuilder>[];
 }
 
 export interface TaskControlCardStore {
@@ -49,6 +57,16 @@ const STATUS_LABELS: Readonly<Record<TaskStatus, string>> = {
   interrupted: 'interrupted',
 };
 
+export function taskControlCustomId(action: TaskControlAction): string {
+  return `task-control:${action}`;
+}
+
+export function parseTaskControlCustomId(customId: string): TaskControlAction | undefined {
+  if (customId === taskControlCustomId('inspect')) return 'inspect';
+  if (customId === taskControlCustomId('cancel')) return 'cancel';
+  return undefined;
+}
+
 function safe(value: string | undefined): string | undefined {
   return value === undefined ? undefined : redactSensitiveText(value);
 }
@@ -72,13 +90,32 @@ function linesFor(view: TaskControlCardView): string[] {
   ];
 }
 
+function controlsFor(status: TaskStatus): readonly ActionRowBuilder<ButtonBuilder>[] {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(taskControlCustomId('inspect'))
+      .setLabel('Inspect')
+      .setStyle(ButtonStyle.Secondary),
+  );
+  if (ACTIVE_STATUSES.has(status)) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(taskControlCustomId('cancel'))
+        .setLabel('Cancel')
+        .setStyle(ButtonStyle.Danger),
+    );
+  }
+  return [row];
+}
+
 export function renderTaskControlCard(
   view: TaskControlCardView,
   options: { embeds: boolean },
 ): TaskControlCardPayload {
   const lines = linesFor(view);
   const content = lines.join('\n').slice(0, PLAIN_TEXT_LIMIT);
-  if (!options.embeds) return { content };
+  const components = controlsFor(view.status);
+  if (!options.embeds) return { content, components };
 
   const [objective, ...fields] = lines;
   const embed = new EmbedBuilder()
@@ -93,6 +130,6 @@ export function renderTaskControlCard(
       };
     }))
     .setFooter({ text: 'Durable task projection; SQLite remains authoritative.' });
-  if (JSON.stringify(embed.toJSON()).length > EMBED_OUTPUT_LIMIT) return { content };
-  return { content: '', embeds: [embed] };
+  if (JSON.stringify(embed.toJSON()).length > EMBED_OUTPUT_LIMIT) return { content, components };
+  return { content: '', embeds: [embed], components };
 }

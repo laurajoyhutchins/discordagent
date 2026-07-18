@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { renderTaskControlCard, type TaskControlCardView } from './taskControlCard.js';
+import {
+  parseTaskControlCustomId,
+  renderTaskControlCard,
+  taskControlCustomId,
+  type TaskControlCardView,
+} from './taskControlCard.js';
 
 const view: TaskControlCardView = {
   taskId: 'task-1',
@@ -13,6 +18,12 @@ const view: TaskControlCardView = {
   phase: 'Inspecting files',
   usagePosture: 'healthy',
 };
+
+function componentIds(payload: ReturnType<typeof renderTaskControlCard>): string[] {
+  return payload.components?.flatMap(row => row.toJSON().components.map(component =>
+    'custom_id' in component ? component.custom_id : '',
+  )) ?? [];
+}
 
 describe('task control card rendering', () => {
   it('renders a valid embed with authoritative task state without sensitive identifiers', () => {
@@ -48,5 +59,29 @@ describe('task control card rendering', () => {
     expect(payload.embeds).toBeUndefined();
     expect(payload.content.length).toBeLessThanOrEqual(1_900);
     expect(payload.content).toContain('Objective:');
+  });
+
+  it('adds inspect and cancel controls to active cards in embed and plain-text modes', () => {
+    const embedPayload = renderTaskControlCard(view, { embeds: true });
+    const textPayload = renderTaskControlCard(view, { embeds: false });
+
+    expect(componentIds(embedPayload)).toEqual([
+      taskControlCustomId('inspect'),
+      taskControlCustomId('cancel'),
+    ]);
+    expect(componentIds(textPayload)).toEqual(componentIds(embedPayload));
+  });
+
+  it('removes cancel from terminal cards while retaining inspect', () => {
+    const payload = renderTaskControlCard({ ...view, status: 'completed', sessionState: 'preserved' }, { embeds: true });
+
+    expect(componentIds(payload)).toEqual([taskControlCustomId('inspect')]);
+  });
+
+  it('parses only supported stable task-control IDs', () => {
+    expect(parseTaskControlCustomId(taskControlCustomId('inspect'))).toBe('inspect');
+    expect(parseTaskControlCustomId(taskControlCustomId('cancel'))).toBe('cancel');
+    expect(parseTaskControlCustomId('task-control:delete')).toBeUndefined();
+    expect(taskControlCustomId('inspect')).not.toContain('task-1');
   });
 });

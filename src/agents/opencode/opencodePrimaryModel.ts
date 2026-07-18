@@ -63,10 +63,9 @@ export class OpenCodePrimaryModel implements PrimaryModel {
 
   async respond(input: { context: string; message: string }): Promise<PrimaryResponse> {
     let connection: OpenCodeAcpConnection | undefined;
+    let workingDirectory = this.options.workingDirectory;
+    let ownsWorkingDirectory = false;
     let text = '';
-    const ownsWorkingDirectory = !this.options.workingDirectory;
-    const workingDirectory = this.options.workingDirectory
-      ?? mkdtempSync(join(tmpdir(), 'discordagent-opencode-pm-'));
     const adapter = createOpenCodeEventAdapter();
     const handlers: OpenCodeAcpHandlers = {
       onSessionUpdate: params => {
@@ -78,6 +77,11 @@ export class OpenCodePrimaryModel implements PrimaryModel {
     };
 
     try {
+      if (!workingDirectory) {
+        workingDirectory = mkdtempSync(join(tmpdir(), 'discordagent-opencode-pm-'));
+        ownsWorkingDirectory = true;
+      }
+
       connection = await this.createConnection(handlers);
       const initialized = await this.withTimeout(connection.initialize(), 'initialization');
       if (initialized.protocolVersion !== PROTOCOL_VERSION) {
@@ -113,8 +117,12 @@ export class OpenCodePrimaryModel implements PrimaryModel {
       return { reply: `I could not complete the coordination turn: ${redactErrorMessage(error)}` };
     } finally {
       await connection?.close().catch(() => undefined);
-      if (ownsWorkingDirectory) {
-        rmSync(workingDirectory, { recursive: true, force: true });
+      if (ownsWorkingDirectory && workingDirectory) {
+        try {
+          rmSync(workingDirectory, { recursive: true, force: true });
+        } catch {
+          // Workspace cleanup is best effort and must not replace the PM response.
+        }
       }
     }
   }

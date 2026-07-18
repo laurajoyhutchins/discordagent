@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          node scripts/reconcile-pr16.mjs 2>&1 | tee reconcile.log
+          node scripts/prepare-reconcile-pr16.mjs 2>&1 | tee reconcile.log
 
       - name: Refresh lockfile
         run: npm install --package-lock-only --ignore-scripts
@@ -54,7 +54,7 @@ jobs:
         run: git diff --check
 
       - name: Remove one-time repair machinery
-        run: rm scripts/reconcile-pr16.mjs .github/workflows/pr16-repair.yml
+        run: rm scripts/reconcile-pr16.mjs scripts/prepare-reconcile-pr16.mjs .github/workflows/pr16-repair.yml
 
       - name: Commit repaired branch
         run: |

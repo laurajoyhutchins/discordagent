@@ -42,6 +42,21 @@ describe('/model provider scoping', () => {
     expect(update).toHaveBeenCalledWith('factory-floor', { claudeModel: 'sonnet' });
   });
 
+  it('stores an OpenCode model override in the OpenCode field', async () => {
+    const update = vi.fn();
+    const command = interaction({ custom: 'anthropic/claude-sonnet-4' });
+    const openCodeProject = { ...project, defaultProvider: 'opencode' as const };
+
+    await handleModel(command, {
+      getProjectByChannel: () => openCodeProject,
+      settings: { updateProject: update, updateGlobal: vi.fn(), updateGlobalWithActivation: vi.fn() },
+      defaultClaudeModel: '',
+      defaultOpenCodeModel: '',
+    });
+
+    expect(update).toHaveBeenCalledWith('factory-floor', { openCodeModel: 'anthropic/claude-sonnet-4' });
+  });
+
   it('stores a Codex thinking depth from the slash command', async () => {
     const update = vi.fn();
     const command = interaction({ thinking: 'xhigh' });
@@ -83,7 +98,23 @@ describe('/model provider scoping', () => {
     });
 
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringMatching(/currently available for Codex/i),
+      content: expect.stringMatching(/available only for Codex/i),
+      flags: MessageFlags.Ephemeral,
+    }));
+  });
+
+  it('does not pretend OpenCode supports the Codex thinking-depth setting', async () => {
+    const command = interaction({ thinking: 'high' });
+    const openCodeProject = { ...project, defaultProvider: 'opencode' as const };
+
+    await handleModel(command, {
+      getProjectByChannel: () => openCodeProject,
+      settings: { updateProject: vi.fn(), updateGlobal: vi.fn(), updateGlobalWithActivation: vi.fn() },
+      defaultClaudeModel: '',
+    });
+
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/OpenCode.*provider-managed reasoning/i),
       flags: MessageFlags.Ephemeral,
     }));
   });
@@ -106,6 +137,33 @@ describe('/model provider scoping', () => {
 
     expect(updateGlobal).not.toHaveBeenCalled();
     expect(activate).toHaveBeenCalledWith('codex');
+  });
+
+  it('updates the global OpenCode PM model without writing the Codex field', async () => {
+    const updateGlobalWithActivation = vi.fn(async (input: unknown, activate: () => Promise<void>) => {
+      await activate();
+      return input as never;
+    });
+    const activate = vi.fn(async () => undefined);
+    const command = interaction({ channelName: 'agent-chat', custom: 'openai/gpt-5.4' });
+
+    await handleModel(command, {
+      getProjectByChannel: () => undefined,
+      settings: { updateProject: vi.fn(), updateGlobal: vi.fn(), updateGlobalWithActivation },
+      getDefaultProvider: () => 'opencode',
+      activateDefaultProvider: activate,
+      defaultClaudeModel: '',
+      defaultOpenCodeModel: '',
+      primaryChannelId: 'agent-1',
+      primaryOwnerId: 'user-1',
+    });
+
+    expect(updateGlobalWithActivation).toHaveBeenCalledWith(
+      { openCodeModel: 'openai/gpt-5.4' },
+      expect.any(Function),
+      undefined,
+    );
+    expect(activate).toHaveBeenCalledWith('opencode');
   });
 
   it('reports a missing project provider as unavailable instead of a generic rejection', async () => {

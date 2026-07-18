@@ -27,7 +27,10 @@ jobs:
           cache: npm
 
       - name: Apply reconciliation
-        run: node scripts/reconcile-pr16.mjs
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/reconcile-pr16.mjs 2>&1 | tee reconcile.log
 
       - name: Refresh lockfile
         run: npm install --package-lock-only --ignore-scripts
@@ -67,6 +70,7 @@ jobs:
         with:
           name: pr16-reconciliation-logs
           path: |
+            reconcile.log
             test.log
             build.log
           if-no-files-found: ignore

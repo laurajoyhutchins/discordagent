@@ -1,4 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
 import type { PrimaryModel, PrimaryResponse } from '../../primary/primaryModel.js';
 import { buildPrimaryPrompt, parsePrimaryResponse } from '../../primary/primaryModel.js';
@@ -10,8 +12,23 @@ import {
 } from './acpTransport.js';
 import { createOpenCodeEventAdapter } from './opencodeEventAdapter.js';
 
-const PRIMARY_PERMISSION_CONFIG = {
-  permission: { '*': 'deny' },
+const PRIMARY_AGENT_ID = 'discord-agent-primary';
+const PRIMARY_RUNTIME_CONFIG = {
+  permission: 'deny',
+  default_agent: PRIMARY_AGENT_ID,
+  agent: {
+    [PRIMARY_AGENT_ID]: {
+      description: 'Tool-isolated Discord Agent PM coordinator',
+      mode: 'primary',
+      permission: { '*': 'deny' },
+      tools: { '*': false },
+    },
+  },
+  instructions: [],
+  plugin: [],
+  autoupdate: false,
+  share: 'disabled',
+  snapshot: false,
 } as const;
 
 export interface OpenCodePrimaryModelOptions {
@@ -27,17 +44,15 @@ export function openCodePrimaryEnvironment(
 ): NodeJS.ProcessEnv {
   return {
     ...baseEnvironment,
-    OPENCODE_CONFIG_CONTENT: JSON.stringify(PRIMARY_PERMISSION_CONFIG),
+    OPENCODE_CONFIG_CONTENT: JSON.stringify(PRIMARY_RUNTIME_CONFIG),
   };
 }
 
 export class OpenCodePrimaryModel implements PrimaryModel {
-  private readonly workingDirectory: string;
   private readonly timeoutMs: number;
   private readonly createConnection: (handlers: OpenCodeAcpHandlers) => Promise<OpenCodeAcpConnection>;
 
   constructor(private readonly options: OpenCodePrimaryModelOptions = {}) {
-    this.workingDirectory = options.workingDirectory ?? tmpdir();
     this.timeoutMs = options.timeoutMs ?? 120_000;
     this.createConnection = options.createConnection ?? (handlers => Promise.resolve(new OpenCodeAcpTransport({
       ...(options.cliPath ? { cliPath: options.cliPath } : {}),
@@ -49,6 +64,9 @@ export class OpenCodePrimaryModel implements PrimaryModel {
   async respond(input: { context: string; message: string }): Promise<PrimaryResponse> {
     let connection: OpenCodeAcpConnection | undefined;
     let text = '';
+    const ownsWorkingDirectory = !this.options.workingDirectory;
+    const workingDirectory = this.options.workingDirectory
+      ?? mkdtempSync(join(tmpdir(), 'discordagent-opencode-pm-'));
     const adapter = createOpenCodeEventAdapter();
     const handlers: OpenCodeAcpHandlers = {
       onSessionUpdate: params => {
@@ -69,7 +87,7 @@ export class OpenCodePrimaryModel implements PrimaryModel {
       }
 
       const session = await this.withTimeout(
-        connection.newSession(this.workingDirectory),
+        connection.newSession(workingDirectory),
         'session creation',
       );
       const sessionId = extractSessionId(session);
@@ -95,6 +113,9 @@ export class OpenCodePrimaryModel implements PrimaryModel {
       return { reply: `I could not complete the coordination turn: ${redactErrorMessage(error)}` };
     } finally {
       await connection?.close().catch(() => undefined);
+      if (ownsWorkingDirectory) {
+        rmSync(workingDirectory, { recursive: true, force: true });
+      }
     }
   }
 

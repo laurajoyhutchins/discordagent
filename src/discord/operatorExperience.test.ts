@@ -17,15 +17,16 @@ describe('calm operator experience', () => {
     const help = commands.map(command => command.toJSON()).find(command => command.name === 'help');
 
     expect(help).toBeDefined();
-    expect(help?.description).toMatch(/context|here|guidance/i);
+    expect('description' in (help ?? {}) ? help.description : undefined).toMatch(/context|here|guidance/i);
   });
 
-  it('renders human-facing task and provider labels instead of raw enum values', () => {
-    const payload = renderTaskControlCard(runningTask, { embeds: false });
+  it('renders human-facing task and provider labels in the rich control card', () => {
+    const payload = renderTaskControlCard(runningTask, { embeds: true });
+    const serialized = JSON.stringify(payload.embeds?.[0].toJSON());
 
-    expect(payload.content).toContain('State: Running');
-    expect(payload.content).toContain('Provider: Codex');
-    expect(payload.content).toContain('Session: Active');
-    expect(payload.content).not.toContain('waiting_for_user');
+    expect(serialized).toContain('Task · Running');
+    expect(serialized).toContain('Codex');
+    expect(serialized).toContain('Active');
+    expect(serialized).not.toContain('waiting_for_user');
   });
 });

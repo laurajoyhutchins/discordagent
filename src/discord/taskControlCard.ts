@@ -75,7 +75,7 @@ function linesFor(view: TaskControlCardView, mode: 'plain' | 'rich'): string[] {
     `Project: ${safe(view.projectName)}`,
     `Provider: ${rich ? providerLabel(view.provider) : view.provider}`,
     ...(view.model ? [`Model: ${safe(view.model)}`] : []),
-    `State: ${rich ? taskStatusLabel(view.status) : view.status}`,
+    `State: ${view.status}`,
     ...(view.branchName ? [`Branch: ${safe(view.branchName)}`] : []),
     `Session: ${rich ? sessionStateLabel(view.sessionState) : view.sessionState}`,
     ...(view.phase ? [`${rich ? 'Current work' : 'Phase'}: ${safe(view.phase)}`] : []),

@@ -17,7 +17,8 @@ describe('calm operator experience', () => {
     const help = commands.map(command => command.toJSON()).find(command => command.name === 'help');
 
     expect(help).toBeDefined();
-    expect('description' in (help ?? {}) ? help.description : undefined).toMatch(/context|here|guidance/i);
+    if (!help || !('description' in help)) throw new Error('Expected /help to be a slash command');
+    expect(help.description).toMatch(/context|here|guidance/i);
   });
 
   it('renders human-facing task and provider labels in the rich control card', () => {

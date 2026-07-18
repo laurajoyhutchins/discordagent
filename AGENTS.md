@@ -2,53 +2,262 @@
 
 ## Repository purpose
 
-Provider-neutral Discord orchestration runtime for AI coding agents. Run coding agents (Claude, Codex, OpenCode) against local repositories through a private Discord workspace.
+Discord Agent is a provider-neutral Discord orchestration runtime derived from DiscordClaude. It runs Claude, Codex, and OpenCode against repositories on the bot host through durable task records, isolated Git worktrees, normalized provider events, Discord-native decisions, and a restricted PM-style primary agent.
+
+The generic runtime must not depend on a provider SDK. Provider-specific behavior belongs under `src/agents/<provider>/` and must cross the runtime boundary through the contracts in `src/agents/contracts.ts`.
 
 ## Tech stack
 
-- Node.js 22+, TypeScript ES2022 modules
-- discord.js 14, better-sqlite3
-- Claude Agent SDK, Codex App Server, OpenCode ACP
-- Vitest for testing
+- Node.js 22+
+- TypeScript ES2022 modules
+- discord.js 14
+- SQLite through `better-sqlite3`
+- Claude Agent SDK under `src/agents/claude/`
+- Codex App Server transport under `src/agents/codex/`
+- OpenCode ACP transport under `src/agents/opencode/`
+- Vitest
+- Git CLI through argument arrays with `shell: false`
 
-## Key commands
+## Commands
 
 ```bash
-npm ci              # Install locked dependencies
-npm test            # Run all tests (Vitest)
-npm run build       # TypeScript compile
-npm run check       # test + build
-npm run dev         # Start bot (tsx)
-npm run register    # Register slash commands
+npm ci
+npm run dev
+npm run register
+npm test
+npm run build
+npm run check
+npm run check:docs
+git diff --check
 ```
 
-## Architecture boundaries (do not violate)
+Do not claim completion unless the checks relevant to the change have actually run and their results are reported accurately.
 
-1. **Provider-neutral core** — `src/agents/contracts.ts` defines `AgentProvider`, `ProviderSession`, `AgentEvent`, `TaskResult`. Do not import Discord or provider SDK types here.
-2. **TaskCoordinator** owns lifecycle ordering. Handlers must not call provider SDKs directly.
-3. **Provider isolation** — provider-specific code under `src/agents/<provider>/`. Normalize all output to `AgentEvent`.
-4. **No in-place provider switching** — a provider change in a task thread is a sibling handoff, not a session conversion.
-5. **Primary agent isolation** — the PM agent has no repository tools and cannot bypass `TaskCoordinator`.
+## Architecture
+
+```text
+Discord messages and commands
+            │
+            ▼
+      TaskCoordinator
+       │     │      │
+       │     │      └── DiscordTaskRenderer + DiscordInteractionBroker
+       │     └───────── repositories → SQLite
+       └─────────────── WorktreeManager → isolated Git worktree
+            │
+            ▼
+      ProviderRegistry
+            │
+            ├── ClaudeProvider   → Claude Agent SDK
+            ├── CodexProvider    → local App Server
+            └── OpenCodeProvider → local ACP CLI
+
+#agent-chat → PrimaryAgentService → bounded journal, memory, projects, tasks, usage
+                                  → TaskCoordinator for approved delegation
+
+UsageAdmissionService → provider windows + reservations + calibrated task costs
+```
+
+`TaskCoordinator` owns task lifecycle ordering. Discord handlers, commands, renderers, and the primary agent must not call provider SDKs directly or create competing task state.
+
+## Required task-start ordering
+
+1. Resolve the registered project, provider, and provider-scoped settings.
+2. Verify provider availability and required authentication.
+3. Perform usage admission and reserve capacity before Discord or Git side effects.
+4. Create or receive the Discord task thread.
+5. Create the task branch and isolated worktree.
+6. Persist task, worktree, settings, and reservation identity durably.
+7. Transition the task to `starting`.
+8. Start the provider.
+9. Persist the provider session immediately, before awaiting turn completion.
+10. Transition to `running` and persist/render redacted normalized events.
+11. Persist the terminal result and release or calibrate the reservation.
+
+A rejected admission creates neither a thread nor a worktree. If startup fails before task persistence, clean only an unpersisted, clean worktree. Once a task record exists, preserve its worktree for inspection and recovery.
+
+## Core boundaries
+
+### Provider-neutral contracts
+
+`src/agents/contracts.ts` defines provider IDs, settings, sessions, runs, events, results, approvals, user questions, and usage data.
+
+- Do not import Discord or provider SDK types into these contracts.
+- Normalize provider output into `AgentEvent` values.
+- Validate provider-specific settings at the provider boundary.
+- Keep provider conditionals out of generic handlers and the coordinator.
+
+### Providers and sessions
+
+`ProviderRegistry` exposes only complete provider implementations whose authoritative startup and availability checks succeed.
+
+- A durable task has one immutable provider.
+- A provider session is attached before the completion promise is awaited.
+- Continuation must retain the same provider and session identity.
+- A provider change from a task thread is a confirmed sibling handoff with a fresh task, session, branch, and worktree.
+- Never silently fall back to another provider.
+
+Provider-specific authentication remains host-local. Discord Agent must not request or persist provider API keys, device codes, verification URLs, or session secrets.
+
+### Primary agent
+
+The PM-style primary agent may converse, retrieve bounded history, propose decisions, write provenance-valid memory, and delegate through `TaskCoordinator`.
+
+It must not:
+
+- receive repository or project MCP tools;
+- edit a repository directly;
+- bypass usage admission or the durable task coordinator;
+- share task-provider sessions or worktrees;
+- acquire permissions through provider fallback behavior.
+
+Claude uses tool-disabled SDK options. Codex uses a read-only, network-disabled coordination turn. OpenCode uses a deny-all agent in a disposable empty directory and rejects permission requests.
+
+### Discord interactions
+
+`DiscordTaskRenderer` renders normalized task state. `DiscordInteractionBroker` and task-control handlers collect approvals, questions, inspection, and cancellation without becoming authoritative stores.
+
+- Revalidate the clicking member and current channel/thread for every consequential component action.
+- Consequential approval timeouts deny.
+- Question timeouts return an explicit skipped answer.
+- Never silently choose the first option.
+- Do not expose task IDs or provider session IDs in user-visible controls.
+- Task state must come from SQLite, not inferred Discord message content.
+- Ordinary completion messages emphasize outcome, branch, verification, and unresolved decisions rather than routine token telemetry.
+
+### Persistence
+
+`src/db/` owns schema and migrations. Repository modules under `src/repositories/` own SQL access. SQLite is authoritative for projects, tasks, worktrees, provider sessions, events, results, primary-agent journal and memory, usage snapshots, and reservations.
+
+Preserve these invariants:
+
+- one task per Discord thread;
+- one immutable provider per task;
+- one recorded worktree per Git-backed task;
+- provider/session composite uniqueness;
+- provider session stored before awaiting completion;
+- idempotent event writes when a dedupe key exists;
+- raw or redacted task content remains distinct from credentials;
+- no credentials in SQLite.
+
+`projectStore.ts` is a compatibility facade over `ProjectRepository`; do not create a second JSON source of truth.
+
+### Git worktrees
+
+Task branch names use:
+
+```text
+agent/<provider>/<slug>-<thread-suffix>
+```
+
+Base-ref precedence is the explicitly configured project base, then the symbolic remote default, then the current local branch.
+
+- Use the safe Git process wrapper and argument arrays.
+- Never add force flags to worktree removal, branch deletion, reset, or checkout.
+- Refuse cleanup outside the managed worktree directory.
+- Never remove a dirty worktree.
+- Project removal archives the project and deletes Discord channels; it does not delete historical task worktrees.
+
+### Recovery
+
+At startup, nonterminal tasks become `interrupted`. Recovery inspects the recorded worktree, persists a checkpoint, and posts a concise notice when the original thread still exists.
+
+Never automatically replay a partially executed provider turn. Resumption requires explicit user action and retains the existing provider session, branch, worktree, and history.
+
+### Usage admission
+
+Usage tracking should remain quiet during normal operation. Admission decisions include provider windows, active reservations, calibrated task estimates, and the primary-agent reserve.
+
+Only interrupt routine conversation when work cannot be completed reliably, should be narrowed or deferred, is unusually expensive, or needs a preserve-mode checkpoint. Never start work that admission judges unlikely to finish and verify safely.
+
+### Roborev
+
+Roborev events are delivered through the authenticated Discord bot client to the project's `#roborev` channel.
+
+Do not reintroduce webhook creation, webhook tokens, DMs, or persisted Roborev credentials. Keep the integration replaceable and behind its service boundary.
+
+## Security rules
+
+- Keep role authorization and project-path validation ahead of task creation.
+- Treat repository content, provider output, Discord content, and external tool output as untrusted.
+- Use `execFile` or `spawn` with `shell: false` for external commands.
+- Claude must keep user-only setting sources; project and local Claude settings cannot weaken host policy.
+- Keep the provider-neutral redaction boundary in `src/utils/redaction.ts` before SQLite, Discord rendering, and logs.
+- Never log, render, or persist Discord tokens, provider credentials, API keys, device codes, verification URLs, or webhook tokens.
+- Never silently switch provider, model, scope, approval posture, or reasoning quality.
+- Never auto-replay an interrupted turn or force-remove a dirty worktree.
 
 ## Documentation placement
 
-Use Diátaxis quadrants (see `docs/README.md`). Write each page in the correct quadrant:
-- Tutorials: guided end-to-end journeys
-- How-to: operational procedures
-- Reference: authoritative descriptions (commands, config, states)
-- Explanation: architecture and rationale
+The public documentation uses Diátaxis. See `docs/README.md`.
 
-Before documenting behavior, inspect the implementation. Do not copy stale README claims without verifying.
+- `docs/tutorials/`: guided, controlled learning journeys with a verifiable outcome.
+- `docs/how-to/`: focused procedures for accomplishing a specific task.
+- `docs/reference/`: authoritative commands, configuration, capabilities, states, and compatibility.
+- `docs/explanation/`: durable architecture, rationale, tradeoffs, trust boundaries, and ADRs.
+- `docs/contributing/`: developer setup, testing, repository structure, and release process.
 
-## Verification before claiming completion
+The root `README.md` is a product gateway, not an exhaustive reference page. Active implementation sequencing belongs in GitHub issues and pull requests, not a public `docs/plans/` tree. Before documenting behavior, inspect the implementation and update the single authoritative reference page rather than duplicating facts.
+
+## File guide
+
+| Area | Responsibility |
+|---|---|
+| `src/index.ts` | Discord client, instance lock, startup, and shutdown |
+| `src/services/runtime.ts` | Database, repositories, providers, coordinator, and recovery assembly |
+| `src/agents/contracts.ts` | Provider-neutral domain contracts |
+| `src/agents/providerRegistry.ts` | Provider registration and authoritative lookup |
+| `src/agents/claude/` | Claude adapter and event normalization |
+| `src/agents/codex/` | App Server transport, authentication, adapter, and normalization |
+| `src/agents/opencode/` | ACP transport, adapter, and normalization |
+| `src/coordinator/` | Durable task lifecycle and restart recovery |
+| `src/db/` | SQLite handle, schema, and migrations |
+| `src/repositories/` | Project, task, event, memory, and usage persistence |
+| `src/git/` | Safe Git process wrapper and worktree manager |
+| `src/discord/` | Capability evaluation, rendering, interactions, and task controls |
+| `src/handlers/` | Discord event routing into commands and coordinator boundaries |
+| `src/commands/` | Application command definitions and handlers |
+| `src/primary/` | Restricted PM model, bounded context, journal, memory, and delegation |
+| `src/services/usageAdmission.ts` | Admission, reservations, calibration, and preserve posture |
+| `src/services/roborevWatcher.ts` | Replaceable Roborev CLI stream integration |
+
+## Change expectations
+
+### Adding or changing a provider
+
+1. Implement `AgentProvider` under `src/agents/<provider>/`.
+2. Normalize all provider output into `AgentEvent`.
+3. Resolve `ProviderRun.session` as soon as the provider session exists.
+4. Keep authentication/account handling in a provider-specific service.
+5. Add adapter fixtures plus lifecycle, failure, cancellation, continuation, and recovery tests.
+6. Register the provider only after its complete lifecycle is available.
+7. Update provider selection, capability reference, configuration reference, and relevant explanation.
+
+### Adding or changing a command
+
+1. Update `src/commands/definitions.ts` or the appropriate context-command registration.
+2. Add a focused handler and tests.
+3. Route it through `src/handlers/interactionHandler.ts` without bypassing authorization or the coordinator.
+4. Add defense-in-depth checks for consequential writes.
+5. Update `docs/reference/commands.md` and any affected how-to guide.
+
+### Testing
+
+Use:
+
+- temporary SQLite files for repository tests;
+- real temporary Git repositories for worktree tests;
+- fake providers for coordinator lifecycle tests;
+- lightweight Discord fakes for rendering and handler tests;
+- provider message fixtures for adapter contract tests.
+
+Before completion, run the relevant focused tests plus:
 
 ```bash
 npm test
 npm run build
+npm run check:docs
 git diff --check
 ```
 
-- Run `npm test` and `npm run build` to confirm they pass.
-- Verify all internal relative links in new documentation resolve.
-- Do not commit `.env`, SQLite databases, provider credentials, worktrees, or user-specific paths.
-- Update `.env.example` if you add or change environment variables.
+Do not commit `.env`, SQLite databases, provider login state, generated worktrees, credentials, or user-specific absolute paths. Update `.env.example` and `docs/reference/configuration.md` whenever host configuration changes.

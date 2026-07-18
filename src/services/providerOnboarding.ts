@@ -52,14 +52,7 @@ export function createProviderOnboardingService(input: {
       }
     }
 
-    const components = !selectedProvider && providers.length > 0
-      ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
-          ...providers.map(provider => new ButtonBuilder()
-            .setCustomId(`${SETUP_BUTTON_PREFIX}${provider}`)
-            .setLabel(providerLabel(provider))
-            .setStyle(ButtonStyle.Primary)),
-        )]
-      : [];
+    const components = selectedProvider ? [] : providerSelectionComponents(providers);
     const content = selectedProvider
       ? autoSelected
         ? `Global provider auto-selected to **${providerLabel(selectedProvider)}**. The PM chat and new projects will use it by default.`
@@ -172,7 +165,7 @@ export function createProviderOnboardingService(input: {
       console.error('[providerOnboarding] Provider activation failed:', redactErrorMessage(error));
       await interaction.editReply({
         content: `The ${providerLabel(provider)} provider could not be activated. Try again later or contact the bot owner.`,
-        components: [],
+        components: providerSelectionComponents(input.providers.list()),
       }).catch(() => undefined);
       return true;
     }
@@ -200,6 +193,16 @@ export function createProviderOnboardingService(input: {
   }
 
   return { ensurePrompt, handleButton };
+}
+
+function providerSelectionComponents(providers: readonly AgentProviderId[]): ActionRowBuilder<ButtonBuilder>[] {
+  if (providers.length === 0) return [];
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(
+    ...providers.map(provider => new ButtonBuilder()
+      .setCustomId(`${SETUP_BUTTON_PREFIX}${provider}`)
+      .setLabel(providerLabel(provider))
+      .setStyle(ButtonStyle.Primary)),
+  )];
 }
 
 function isMessageNotFound(error: unknown): boolean {

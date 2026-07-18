@@ -10,6 +10,7 @@ Understanding-oriented documentation covering architecture, security, and design
 - [Durable state and recovery](architecture/durable-state-and-recovery.md) — SQLite persistence, startup recovery, interrupted task handling
 - [Usage admission](architecture/usage-admission.md) — provider windows, calibrated estimates, quiet admission, preserve mode
 - [Review-source boundary](architecture/review-source-boundary.md) — why RoboRev is isolated from agent providers and durable task execution
+- [Factory Floor Activity boundary](architecture/factory-floor-activity-boundary.md) — authority, persistence, identity, and synchronization boundaries for the embedded operator interface
 
 ## Security
 

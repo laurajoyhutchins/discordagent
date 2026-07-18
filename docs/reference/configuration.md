@@ -1,111 +1,113 @@
 # Configuration
 
+Discord Agent reads host configuration from environment variables when the process starts. Changing an environment variable requires restarting the bot. Discord settings commands may override some model and provider defaults without changing the host environment.
+
 ## Environment variables
 
 ### Required
 
-| Variable | Type | Default | Purpose | Restart required |
+| Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
 | `DISCORD_TOKEN` | string | — | Discord bot token | Yes |
+| `DISCORD_CLIENT_ID` | string | — | Discord application ID used for command registration and connectivity checks | No |
+| `DISCORD_GUILD_ID` | string | — | Private Discord server ID | No |
+| `AUTHORIZED_ROLE_IDS` | comma-separated Discord role IDs | — | Roles allowed to use project and task functionality | No |
 
-### Required for primary-agent and Codex auth
+### Owner identity
 
-| Variable | Type | Default | Purpose | Restart required |
+| Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `DISCORD_CLIENT_ID` | string | — | Discord application client ID | Yes |
-| `DISCORD_GUILD_ID` | string | — | Discord server (guild) ID | Yes |
-| `AUTHORIZED_ROLE_IDS` | string (comma-separated) | — | Discord role IDs authorized for project access | Yes |
-| `AUTHORIZED_USER_ID` | string | `NOTIFY_USER_ID` | Exact owner for `#agent-chat` and Codex authentication | Yes |
+| `AUTHORIZED_USER_ID` | Discord user ID | `NOTIFY_USER_ID` | Exact owner allowed to use `#agent-chat`, global settings, and Codex authentication controls | No |
+| `NOTIFY_USER_ID` | Discord user ID | empty | User to mention when a task completes; also supplies the owner fallback when `AUTHORIZED_USER_ID` is omitted | No |
 
-### Optional — notification
+Set `AUTHORIZED_USER_ID` explicitly when using the PM-style primary agent or Codex authentication. Leaving both owner variables empty prevents owner-only flows from identifying an authorized owner.
 
-| Variable | Type | Default | Purpose | Restart required |
+### Security and project registration
+
+| Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `NOTIFY_USER_ID` | string | empty | User ID to mention on task completion | No |
+| `PROJECTS_BASE_DIR` | absolute path | unrestricted | Restrict registered project paths to descendants of this directory | Potentially |
+| `ALLOW_NON_GIT` | boolean | `false` | Allow registration of non-Git directories; agent tasks still require a Git repository | No |
 
-### Optional — security
+### Claude provider
 
-| Variable | Type | Default | Purpose | Restart required |
+| Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `PROJECTS_BASE_DIR` | string (path) | unrestricted | Restrict registered project paths to this directory | Yes |
-| `ALLOW_NON_GIT` | boolean | `false` | Allow registration of non-Git directories (agent tasks still require Git) | Yes |
+| `CLAUDE_ENABLED` | boolean | `true` | Enable Claude when its provider startup checks succeed | No |
+| `CLAUDE_MODEL` | string | provider default | Host default Claude task model | No |
+| `CLAUDE_TIMEOUT_MS` | integer milliseconds | `900000` | Claude turn timeout | No |
 
-### Optional — Claude provider
+Claude authentication and user-level settings remain host-local. Project and local Claude settings are intentionally ignored by the runtime.
 
-| Variable | Type | Default | Purpose | Restart required |
+### Codex provider
+
+| Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `CLAUDE_ENABLED` | boolean | `true` | Enable the Claude provider | Yes |
-| `CLAUDE_MODEL` | string | SDK default | Default Claude task model | No |
-| `CLAUDE_TIMEOUT_MS` | number | `900000` | Maximum Claude turn timeout in milliseconds | No |
+| `CODEX_ENABLED` | boolean | `true` | Enable the Codex App Server provider | No |
+| `CODEX_CLI_PATH` | executable path or command | `codex` | Codex CLI used to launch the local App Server | Potentially |
+| `CODEX_MODEL` | string | provider default | Host default Codex task model | No |
 
-### Optional — Codex provider
+Codex credentials and device-authentication state are managed by the Codex CLI on the bot host, not by environment variables stored in Discord Agent.
 
-| Variable | Type | Default | Purpose | Restart required |
+### OpenCode provider
+
+| Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `CODEX_ENABLED` | boolean | `true` | Enable the Codex provider | Yes |
-| `CODEX_CLI_PATH` | string | `codex` | Codex CLI executable for App Server | Yes |
-| `CODEX_MODEL` | string | provider default | Default Codex task model | No |
+| `OPENCODE_ENABLED` | boolean | `true` | Enable the OpenCode ACP provider | No |
+| `OPENCODE_CLI_PATH` | executable path or command | `opencode` | OpenCode CLI executable | Potentially |
+| `OPENCODE_TIMEOUT_MS` | integer milliseconds | `900000` | OpenCode task-turn timeout | No |
+| `OPENCODE_MODEL` | string | provider default | Host default OpenCode task model | No |
+| `OPENCODE_PRIMARY_MODEL` | string | provider/global default | OpenCode-specific model for PM-style primary-agent turns | No |
 
-### Optional — OpenCode provider
+### Primary agent and usage admission
 
-| Variable | Type | Default | Purpose | Restart required |
+| Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `OPENCODE_ENABLED` | boolean | `true` | Enable the OpenCode ACP provider | Yes |
-| `OPENCODE_CLI_PATH` | string | `opencode` | OpenCode CLI executable | Yes |
-| `OPENCODE_TIMEOUT_MS` | number | `900000` | OpenCode turn timeout in milliseconds | No |
-| `OPENCODE_MODEL` | string | provider default | Default OpenCode task model | No |
-| `OPENCODE_PRIMARY_MODEL` | string | global/provider default | OpenCode-specific PM-chat model | No |
+| `PRIMARY_AGENT_MODEL` | string | provider default | Optional host default model for PM-style primary-agent turns | No |
+| `PRIMARY_USAGE_RESERVE` | number | `10` | Percentage points of provider capacity reserved for coordination and recovery | No |
 
-### Optional — primary agent
+### Storage
 
-| Variable | Type | Default | Purpose | Restart required |
+| Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `PRIMARY_AGENT_MODEL` | string | provider default | Default PM-agent model for any provider | No |
-| `PRIMARY_USAGE_RESERVE` | number (0–100) | `10` | Percentage of capacity reserved for PM operations | No |
+| `DATABASE_PATH` | path | runtime data directory | SQLite database file | Yes |
+| `WORKTREES_BASE_DIR` | path | `discordagent-worktrees` beside `DATABASE_PATH` | Managed directory containing isolated task worktrees | Yes |
 
-### Optional — storage
+Development normally stores the database at `src/data/discordagent.sqlite`; compiled execution normally stores it at `dist/data/discordagent.sqlite`. A custom `DATABASE_PATH` changes the default worktree parent accordingly.
 
-| Variable | Type | Default | Purpose | Restart required |
+### Integrations and operations
+
+| Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `DATABASE_PATH` | string (path) | `src/data/discordagent.sqlite` (dev), `dist/data/discordagent.sqlite` (built) | SQLite database file | Yes |
-| `WORKTREES_BASE_DIR` | string (path) | `<db-dir>/discordagent-worktrees` | Base directory for Git worktrees | Yes |
+| `ROBOREV_CLI_PATH` | executable path or command | `roborev` | Roborev executable | Potentially |
+| `USAGE_CHANNEL_ID` | Discord channel ID | empty | Optional channel for detailed provider-usage posts | No |
+| `INSTANCE_LOCK_PORT` | integer TCP port | `47831` | Loopback port used to prevent multiple bot processes from handling the same events | No |
 
-### Optional — integrations
+## Settings precedence
 
-| Variable | Type | Default | Purpose | Restart required |
-|---|---|---|---|---|
-| `ROBOREV_CLI_PATH` | string | `roborev` | Roborev executable path | Yes |
-| `USAGE_CHANNEL_ID` | string | empty | Channel ID for detailed usage posts | Yes |
+For supported task settings, precedence is highest to lowest:
 
-### Optional — operations
+1. A one-turn override supplied with the current prompt
+2. The durable task's provider-scoped settings
+3. Project settings
+4. Global settings
+5. Host environment defaults and provider defaults
 
-| Variable | Type | Default | Purpose | Restart required |
-|---|---|---|---|---|
-| `INSTANCE_LOCK_PORT` | number | `47831` | Localhost TCP port used as single-instance lock | Yes |
+Existing task threads retain their provider and durable session identity. Provider changes inside a task thread create a confirmed sibling handoff rather than converting the existing session.
 
-## Configuration precedence
-
-Settings are resolved at five levels (highest first):
-
-1. **Turn override** — `/model <name> <prompt>` or continuation options
-2. **Task snapshot** — persisted immutable at task creation
-3. **Project settings** — `/project-settings`, `/model`, `/provider` in project channel
-4. **Global settings** — `/settings` in `#agent-chat`
-5. **Host defaults** — environment variables and provider defaults
-
-Provider-specific setting support:
+## Provider setting capabilities
 
 | Setting | Claude | Codex | OpenCode |
-|---|---|---|---|
-| `model` | Yes | Yes | Yes |
-| `reasoningEffort` | No | Yes | No |
-| `timeoutMs` | Yes | No | No |
-| `mcpProfile` | Yes | No | No |
+|---|---:|---:|---:|
+| Model | Yes | Yes | Yes |
+| Reasoning effort | No | Yes | No |
+| Timeout | Yes | No | No |
+| MCP profile | Yes | No | No |
 
 ## Database
 
-The SQLite database is created automatically on first run. Migrations are versioned and transactional. The current schema version is **9**.
+The SQLite database is created automatically on first run. Migrations are versioned and transactional. The current schema version is documented in [Compatibility](compatibility.md).
 
-## Environment variable drift
+## Source of truth
 
-If `.env.example` and this reference disagree, `.env.example` is authoritative for defaults and this reference is authoritative for behavioral description. Report discrepancies as bugs.
+Runtime behavior in `src/config.ts` is authoritative. This reference and `.env.example` must agree with it. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.

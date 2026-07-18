@@ -6,7 +6,11 @@ import { addProject, getDefaultProvider, getProject } from '../services/projectS
 import { createProjectChannels, deleteProjectChannels } from '../services/channelManager.js';
 import { config } from '../config.js';
 import { getProviderRegistry } from '../services/agentRuntimeService.js';
-import { isRoborevCliAvailable, hasRoborevSetup } from '../integrations/roborev/index.js';
+import {
+  isRoborevCliAvailable,
+  hasRoborevSetup,
+  notifyRoborevConfigurationChanged,
+} from '../integrations/roborev/index.js';
 
 export function isPathWithinBase(base: string, candidate: string, pathApi = { relative, isAbsolute, sep }): boolean {
   const relativePath = pathApi.relative(base, candidate);
@@ -22,7 +26,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   if (!defaultProvider || getProviderRegistry().list().length === 0) {
     await interaction.reply({
       content: 'Choose a provider in **#agent-chat** first. The selected global provider will be inherited by this project.',
-      flags: MessageFlags.Ephemeral,
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -31,14 +35,14 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     if (!availability.available) {
       await interaction.reply({
         content: `The stored global provider **${defaultProvider}** is unavailable. Choose an available provider in **#agent-chat** before adding a project.`,
-        flags: MessageFlags.Ephemeral,
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
   } else {
     await interaction.reply({
       content: `The stored global provider **${defaultProvider}** is not available on this host. Choose an available provider in **#agent-chat** before adding a project.`,
-      flags: MessageFlags.Ephemeral,
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -68,7 +72,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     if (!isPathWithinBase(resolvedBase, resolvedPath)) {
       await interaction.reply({
         content: `Path must be within the allowed base directory: \`${config.projectsBaseDir}\``,
-        flags: MessageFlags.Ephemeral,
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
@@ -79,7 +83,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
   if (!isGitRepo && !config.allowNonGit) {
     await interaction.reply({
       content: `Path is not a git repository (no .git directory).\n\nTo allow non-git directories, set \`ALLOW_NON_GIT=true\` in your \`.env\` file. See the README for details on the risks.`,
-      flags: MessageFlags.Ephemeral,
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
@@ -114,18 +118,19 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
       defaultProvider,
       ...channels,
     });
+    if (channels.roborevChannelId) notifyRoborevConfigurationChanged();
 
     let replyMsg = `Project **${name}** created!\n` +
       `- <#${channels.agentChannelId}> — talk to the project agent here`;
 
     if (!isGitRepo) {
-      replyMsg += `\n\n⚠️ **Warning:** This non-Git project was registered, but agent tasks cannot start until the directory is initialized as a Git repository. Run \`git init && git add -A && git commit -m \"initial\"\` before sending a task.`;
+      replyMsg += `\n\n⚠️ **Warning:** This non-Git project was registered, but agent tasks cannot start until the directory is initialized as a Git repository. Run \`git init && git add -A && git commit -m "initial"\` before sending a task.`;
     }
 
     if (channels.roborevChannelId) {
       replyMsg += `\n- <#${channels.roborevChannelId}> — code reviews appear here`;
     } else {
-      replyMsg += `\n\n💡 Roborev not enabled. To add it later, remove this project and re-add with \`/add-project name:${name} path:${resolvedPath} roborev:true\``;
+      replyMsg += `\n\n💡 RoboRev not enabled. To add it later, use \`/roborev project:${name} enable:true\`.`;
     }
 
     await interaction.editReply(replyMsg);

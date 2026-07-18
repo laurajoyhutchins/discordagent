@@ -26,7 +26,7 @@ describe('provider onboarding with OpenCode PM support', () => {
     const providers = new ProviderRegistry();
     providers.register(provider('opencode'));
     const channel = {
-      send: vi.fn(async () => ({ id: 'setup-message' })),
+      send: vi.fn(async (_payload: unknown) => ({ id: 'setup-message' })),
       messages: { fetch: vi.fn(async () => null) },
     };
     const onSelected = vi.fn(async () => undefined);

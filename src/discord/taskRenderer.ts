@@ -346,7 +346,10 @@ export class DiscordTaskRenderer implements TaskRenderer {
         if (!payload.embeds?.length) throw error;
         this.logger(`[taskRenderer] Control-card embed send failed; using plain text: ${redactErrorMessage(error)}`);
         this.controlCardEmbedsDisabled = true;
-        this.controlCardMessage = await thread.send({ content: truncateDiscordMessage(plainTextFromEmbed(payload.embeds[0])) }) as unknown as TaskControlCardMessage;
+        this.controlCardMessage = await thread.send({
+          content: truncateDiscordMessage(plainTextFromEmbed(payload.embeds[0])),
+          components: payload.components,
+        }) as unknown as TaskControlCardMessage;
       }
       if (this.controlCardStore && this.controlCardMessage.id) {
         this.controlCardStore.saveControlCard(context.task.id, {
@@ -362,7 +365,10 @@ export class DiscordTaskRenderer implements TaskRenderer {
         this.controlCardEmbedsDisabled = true;
         try {
           await this.controlCardMessage.edit(payload.embeds?.length
-            ? { content: truncateDiscordMessage(plainTextFromEmbed(payload.embeds[0])) }
+            ? {
+                content: truncateDiscordMessage(plainTextFromEmbed(payload.embeds[0])),
+                components: payload.components,
+              }
             : payload);
         } catch (fallbackError) {
           this.logger(`[taskRenderer] Plain-text control-card edit failed; refreshing the card: ${redactErrorMessage(fallbackError)}`);

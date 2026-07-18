@@ -171,7 +171,7 @@ async function handleProvider(args: string[], ctx: CommandContext): Promise<Comm
     return { text: `Failed to check ${providerLabel(requested)} availability: ${redactErrorMessage(error)}` };
   }
 
-  return { text: `Primary provider set to ${providerLabel(requested)}. Activating...`, providerChanged: requested };
+  return { text: `Primary provider set to ${providerLabel(requested)}.`, providerChanged: requested };
 }
 
 async function handleModel(args: string[], ctx: CommandContext): Promise<CommandResult> {
@@ -182,20 +182,18 @@ async function handleModel(args: string[], ctx: CommandContext): Promise<Command
     if (!provider) return { text: 'No provider configured. Use /provider first.' };
     const modelKey = provider === 'claude' ? 'claudeModel' : provider === 'codex' ? 'codexModel' : 'openCodeModel';
     const record = globalSetting as Record<string, string | undefined>;
-    const current = record[modelKey] ?? record.primaryAgentModel ?? 'provider default';
+    const current = record.primaryAgentModel ?? record[modelKey] ?? 'provider default';
     return { text: `Current ${providerLabel(provider)} model: ${current}` };
   }
   if (!provider) return { text: 'No provider configured. Use /provider first.' };
 
   const modelName = args[0];
 
-  // Update primaryAgentModel which has highest precedence in model resolution.
-  // If users want a provider-specific override they can still set it via
-  // the Discord /model command per project.
+  // Update primaryAgentModel, which has highest precedence in model resolution.
+  // Provider-specific project overrides remain available through Discord commands.
   ctx.settings.updateGlobal({ primaryAgentModel: modelName });
 
-  const label = provider ? providerLabel(provider) : 'primary agent';
-  return { text: `${label} model set to "${modelName}". Activating...`, modelChanged: modelName };
+  return { text: `${providerLabel(provider)} model set to "${modelName}".`, modelChanged: modelName };
 }
 
 function buildTaskList(ctx: CommandContext): string {

@@ -49,8 +49,8 @@ export function createProviderOnboardingService(input: {
     const content = selectedProvider
       ? `Global provider set to **${providerLabel(selectedProvider)}**. The PM chat and new projects will use it by default.`
       : providers.length > 0
-      ? 'Provider setup required: choose the provider for the PM chat and new projects. You can change project providers later.'
-      : 'Provider setup required, but no provider is currently available. Install or configure Claude or Codex on the bot host, then restart the bot.';
+        ? 'Provider setup required: choose the provider for the PM chat and new projects. You can change project providers later.'
+        : 'Provider setup required, but no provider is currently available. Install or configure Claude, Codex, or OpenCode on the bot host, then restart the bot.';
     const payload = { content, components };
 
     const existingId = input.metadata.get(SETUP_MESSAGE_KEY);
@@ -164,14 +164,14 @@ export function createProviderOnboardingService(input: {
       await ensurePrompt();
       try {
         await interaction.update({
-        content: `Global provider set to **${providerLabel(provider)}**. The PM chat and new projects will use it by default.`,
-        components: [],
+          content: `Global provider set to **${providerLabel(provider)}**. The PM chat and new projects will use it by default.`,
+          components: [],
         });
       } catch (error) {
-      await ensurePrompt().catch((reconcileError: unknown) => {
-        console.warn('[providerOnboarding] Failed to reconcile setup message after interaction update failure:', redactErrorMessage(reconcileError));
-      });
-      throw error;
+        await ensurePrompt().catch((reconcileError: unknown) => {
+          console.warn('[providerOnboarding] Failed to reconcile setup message after interaction update failure:', redactErrorMessage(reconcileError));
+        });
+        throw error;
       }
     } catch (error) {
       console.error('[providerOnboarding] Provider setup acknowledgement failed:', redactErrorMessage(error));
@@ -192,7 +192,6 @@ function isMessageNotFound(error: unknown): boolean {
     && 'code' in error && (error as { code?: unknown }).code === 10008;
 }
 
-
 function hasExpectedProviderButtonSchema(components: readonly unknown[]): boolean {
   if (components.length === 0) return true;
   if (components.length !== 1) return false;
@@ -201,12 +200,12 @@ function hasExpectedProviderButtonSchema(components: readonly unknown[]): boolea
   if (!row || typeof row !== 'object' || !('components' in row) || !Array.isArray(row.components) || row.components.length === 0) return false;
   const seen = new Set<string>();
   return row.components.every((component: { customId?: string | null; type?: number; style?: number; label?: string | null }) => {
-      const customId = component.customId;
-      if (typeof customId !== 'string' || !validProviderButtonIds.has(customId) || seen.has(customId)) return false;
-      seen.add(customId);
-      const provider = customId.slice(SETUP_BUTTON_PREFIX.length) as AgentProviderId;
-      return component.type === 2 && component.style === ButtonStyle.Primary && component.label === providerLabel(provider);
-    });
+    const customId = component.customId;
+    if (typeof customId !== 'string' || !validProviderButtonIds.has(customId) || seen.has(customId)) return false;
+    seen.add(customId);
+    const provider = customId.slice(SETUP_BUTTON_PREFIX.length) as AgentProviderId;
+    return component.type === 2 && component.style === ButtonStyle.Primary && component.label === providerLabel(provider);
+  });
 }
 
 export { SETUP_BUTTON_PREFIX };

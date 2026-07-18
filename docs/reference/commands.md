@@ -1,23 +1,24 @@
 # Commands
 
-## Slash commands
+## Application commands
 
-| Command | Scope | Description |
-|---|---|---|
-| `/add-project` | Any guild channel | Register a project directory and create its Discord channels |
-| `/remove-project` | Project channel | Soft-archive a project and remove its Discord channels |
-| `/list-projects` | Any guild channel | Show registered projects |
-| `/provider` | Project channel or `#agent-chat` | View or set the default Claude, Codex, or OpenCode provider |
-| `/model` | Project channel or `#agent-chat` | View or set the active provider's model; Codex also supports reasoning depth |
-| `/settings` | `#agent-chat` only | View and edit global agent and PM settings |
-| `/project-settings` | Project channel | View and edit project-scoped settings |
-| `/capabilities` | Guild channel | Show effective Discord capabilities and fallbacks |
-| `/agents` | Guild channel | Show active task threads, providers, and status |
-| `/usage` | Guild channel | Show provider usage posture and reservations |
-| `/cancel` | Task thread | Cancel the durable task while preserving its worktree |
-| `/loop` | Project channel | Start periodic task execution |
-| `/stop-loop` | Project channel or loop thread | Stop periodic task execution |
-| `/codex-auth` | `#agent-chat` only | Check, establish, or revoke Codex authentication |
+| Command | Type | Scope | Description |
+|---|---|---|---|
+| **Turn into task** | Message context action | Registered project `#agent` channel | Create a durable task from the selected message text |
+| `/add-project` | Slash command | Any guild channel | Register a project directory and create its Discord channels |
+| `/remove-project` | Slash command | Project channel | Soft-archive a project and remove its Discord channels |
+| `/list-projects` | Slash command | Any guild channel | Show registered projects |
+| `/provider` | Slash command | Project channel or `#agent-chat` | View or set the default Claude, Codex, or OpenCode provider |
+| `/model` | Slash command | Project channel or `#agent-chat` | View or set the active provider's model; Codex also supports reasoning depth |
+| `/settings` | Slash command | `#agent-chat` only | View and edit global agent and PM settings |
+| `/project-settings` | Slash command | Project channel | View and edit project-scoped settings |
+| `/capabilities` | Slash command | Guild channel | Show effective Discord capabilities and fallbacks |
+| `/agents` | Slash command | Guild channel | Show active task threads, providers, and status |
+| `/usage` | Slash command | Guild channel | Show provider usage posture and reservations |
+| `/cancel` | Slash command | Task thread | Cancel the durable task while preserving its worktree |
+| `/loop` | Slash command | Project channel | Start periodic task execution |
+| `/stop-loop` | Slash command | Project channel or loop thread | Stop periodic task execution |
+| `/codex-auth` | Slash command | `#agent-chat` only | Check, establish, or revoke Codex authentication |
 
 ## Text commands
 
@@ -34,6 +35,16 @@ These work when typed as messages in a project channel or task thread where note
 | `/status` | Project channel or loop thread | Show loop status |
 
 ## Command details
+
+### `Turn into task`
+
+Open a message's context menu and choose **Apps → Turn into task**. The selected message must:
+
+- be in a registered project `#agent` channel;
+- contain text;
+- not already own a Discord thread.
+
+The command delegates to the normal task coordinator. Provider, model, reasoning, timeout, MCP, usage admission, worktree isolation, and task-card behavior therefore match ordinary project-channel task creation.
 
 ### `/settings`
 
@@ -75,7 +86,7 @@ In a project channel, this changes the model for the project's current provider.
 
 ## Message-based task creation
 
-Any non-command message in a project's `#agent` channel creates a new task. Replies in a task thread continue that task. A one-shot model override uses the `/model` prefix:
+Any non-command message in a project's `#agent` channel creates a new task. You can also use **Turn into task** on an existing message in that channel. Replies in a task thread continue that task. A one-shot model override uses the `/model` prefix:
 
 ```text
 /model gpt-5-codex Implement the authentication flow

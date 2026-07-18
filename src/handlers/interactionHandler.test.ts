@@ -5,7 +5,7 @@ process.env.DISCORD_CLIENT_ID = 'test';
 process.env.DISCORD_GUILD_ID = 'test';
 process.env.AUTHORIZED_ROLE_IDS = 'role';
 
-const { routeSettingsComponents } = await import('./interactionHandler.js');
+const { routeSettingsComponents, routeTaskControlComponents } = await import('./interactionHandler.js');
 
 function interaction(kind: 'button' | 'select' | 'modal') {
   return {
@@ -32,5 +32,21 @@ describe('settings component routing', () => {
     await expect(routeSettingsComponents(interaction('select'), globalHandler, projectHandler)).resolves.toBe(true);
     await expect(routeSettingsComponents(interaction('modal'), globalHandler, projectHandler)).resolves.toBe(true);
     expect(projectHandler).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('task control component routing', () => {
+  it('routes buttons through the task-control boundary', async () => {
+    const handler = vi.fn(async () => true);
+
+    await expect(routeTaskControlComponents(interaction('button'), handler)).resolves.toBe(true);
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('ignores non-button interactions', async () => {
+    const handler = vi.fn(async () => true);
+
+    await expect(routeTaskControlComponents(interaction('select'), handler)).resolves.toBe(false);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

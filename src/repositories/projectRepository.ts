@@ -13,6 +13,7 @@ export interface ProjectRepository {
   updateDefaultProvider(name: string, provider: AgentProviderId): Project;
   updateModel(name: string, provider: AgentProviderId, model?: string): Project;
   updateReasoning(name: string, provider: AgentProviderId, effort?: ReasoningEffort): Project;
+  updateBaseBranch(name: string, baseBranch: string): Project;
   archive(name: string): Project | undefined;
 }
 
@@ -229,6 +230,14 @@ export function createProjectRepository(db: DatabaseHandle): ProjectRepository {
       db.raw.prepare(`
         UPDATE projects SET reasoning_efforts_json = ?, updated_at = ? WHERE id = ?
       `).run(serializeReasoningEfforts(efforts), Date.now(), row.id);
+      return this.findByName(name)!;
+    },
+
+    updateBaseBranch(name: string, baseBranch: string): Project {
+      const row = requireActive(name);
+      db.raw.prepare(`
+        UPDATE projects SET base_branch = ?, updated_at = ? WHERE id = ?
+      `).run(baseBranch, Date.now(), row.id);
       return this.findByName(name)!;
     },
 

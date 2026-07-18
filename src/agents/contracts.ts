@@ -1,8 +1,20 @@
 export const AGENT_PROVIDER_IDS = ['claude', 'codex'] as const;
 export type AgentProviderId = (typeof AGENT_PROVIDER_IDS)[number];
 
+/** Provider-neutral host MCP data; adapters own SDK-specific interpretation. */
+export type HostMcpServerConfig = Readonly<Record<string, unknown>>;
+export type HostMcpServers = Readonly<Record<string, HostMcpServerConfig>>;
+
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export class UnsupportedAgentSettingError extends Error {
+  readonly name = 'UnsupportedAgentSettingError';
+
+  constructor(readonly provider: AgentProviderId, readonly setting: string) {
+    super(`${provider} agent setting ${setting} is not supported`);
+  }
+}
 
 export interface AgentTaskSettings {
   model?: string;
@@ -10,6 +22,35 @@ export interface AgentTaskSettings {
   timeoutMs?: number;
   mcpProfile?: string;
   approvalProfile?: string;
+}
+
+export interface AgentTurnSettings {
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  timeoutMs?: number;
+}
+
+export type AgentSettingsScope = 'task' | 'turn';
+
+export const PROVIDER_SETTING_CAPABILITIES = {
+  claude: {
+    task: ['model', 'timeoutMs', 'mcpProfile'],
+    turn: ['model', 'timeoutMs'],
+  },
+  codex: {
+    task: ['model', 'reasoningEffort'],
+    turn: ['model', 'reasoningEffort'],
+  },
+} as const satisfies Record<AgentProviderId, Record<AgentSettingsScope, readonly string[]>>;
+
+export function validateSupportedAgentSettings(
+  provider: AgentProviderId,
+  settings: object,
+  scope: AgentSettingsScope,
+): void {
+  const supported: readonly string[] = PROVIDER_SETTING_CAPABILITIES[provider][scope];
+  const unsupported = Object.keys(settings).find(key => !supported.includes(key));
+  if (unsupported !== undefined) throw new UnsupportedAgentSettingError(provider, unsupported);
 }
 
 export const TASK_STATUSES = [
@@ -150,8 +191,18 @@ export interface StartTaskInput {
   settings?: AgentTaskSettings;
 }
 
+/** Normalize compatibility fields once while keeping the durable settings snapshot authoritative. */
+export function normalizeAgentTaskSettings(input: Pick<StartTaskInput, 'settings' | 'model' | 'reasoningEffort'>): AgentTaskSettings {
+  return {
+    ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
+    ...input.settings,
+  };
+}
+
 export interface ContinueTaskInput extends StartTaskInput {
   session: ProviderSession;
+  turnSettings?: AgentTurnSettings;
 }
 
 export interface HandoffEstimateInput {

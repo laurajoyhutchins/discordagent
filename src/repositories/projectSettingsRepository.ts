@@ -1,29 +1,25 @@
 import type { DatabaseHandle } from '../db/database.js';
-import type { ProjectAgentSettings } from '../settings/contracts.js';
 
-export type ProjectSettingKey = keyof ProjectAgentSettings;
-type ProjectSettingValue = ProjectAgentSettings[ProjectSettingKey];
+export interface ProjectSettings {
+  mcpProfile?: string;
+}
+
+export type ProjectSettingKey = keyof ProjectSettings;
+type ProjectSettingValue = ProjectSettings[ProjectSettingKey];
 
 export interface ProjectSettingsRepository {
-  get<K extends ProjectSettingKey>(projectName: string, key: K): ProjectAgentSettings[K] | undefined;
-  set<K extends ProjectSettingKey>(projectName: string, key: K, value: ProjectAgentSettings[K]): void;
+  get<K extends ProjectSettingKey>(projectName: string, key: K): ProjectSettings[K] | undefined;
+  set<K extends ProjectSettingKey>(projectName: string, key: K, value: ProjectSettings[K]): void;
   clear(projectName: string, key: ProjectSettingKey): void;
-  list(projectName: string): ProjectAgentSettings;
+  list(projectName: string): ProjectSettings;
 }
 
 function isKey(value: string): value is ProjectSettingKey {
-  return ['defaultProvider', 'claudeModel', 'codexModel', 'baseBranch', 'mcpProfile', 'roborevEnabled', 'roborevChannelId'].includes(value);
+  return value === 'mcpProfile';
 }
 
 function validateValue(key: ProjectSettingKey, value: ProjectSettingValue): ProjectSettingValue {
-  if (key === 'roborevEnabled') {
-    if (typeof value !== 'boolean') throw new Error(`Invalid project setting ${key}`);
-    return value;
-  }
   if (typeof value !== 'string' || !value.trim()) throw new Error(`Invalid project setting ${key}`);
-  if (key === 'defaultProvider' && value !== 'claude' && value !== 'codex') {
-    throw new Error(`Invalid project setting ${key}`);
-  }
   return value.trim();
 }
 
@@ -55,7 +51,7 @@ export function createProjectSettingsRepository(db: DatabaseHandle): ProjectSett
       const id = projectId(projectName);
       const row = db.raw.prepare('SELECT value_json FROM project_settings WHERE project_id = ? AND key = ?')
         .get(id, checkedKey(key)) as { value_json: string } | undefined;
-      return row ? decode(key, row.value_json) as ProjectAgentSettings[typeof key] | undefined : undefined;
+      return row ? decode(key, row.value_json) as ProjectSettings[typeof key] | undefined : undefined;
     },
     set(projectName, key, value) {
       const id = projectId(projectName);
@@ -73,7 +69,7 @@ export function createProjectSettingsRepository(db: DatabaseHandle): ProjectSett
     },
     list(projectName) {
       const id = projectId(projectName);
-      const result: ProjectAgentSettings = {};
+      const result: ProjectSettings = {};
       const rows = db.raw.prepare('SELECT key, value_json FROM project_settings WHERE project_id = ?').all(id) as { key: string; value_json: string }[];
       for (const row of rows) {
         if (isKey(row.key)) {

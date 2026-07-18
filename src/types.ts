@@ -6,6 +6,7 @@ import {
   type TaskResult,
   type TaskStatus,
 } from './agents/contracts.js';
+import { validateClaudeTimeout } from './settings/validation.js';
 
 export interface ProjectModels {
   claude?: string;
@@ -79,6 +80,7 @@ export interface TaskRecord {
   completedAt?: number;
   providerSessionId?: string;
   settings?: AgentTaskSettings;
+  settingsMalformed?: boolean;
 }
 
 export interface WorktreeRecord {
@@ -98,9 +100,20 @@ export interface StoredTaskResult {
   createdAt: number;
 }
 
+export type TaskControlCardPinState = 'unknown' | 'pinned' | 'not_pinned' | 'failed';
+
+export interface TaskControlCardRecord {
+  taskId: string;
+  messageId: string;
+  pinState: TaskControlCardPinState;
+  updatedAt: number;
+}
+
 export function parseAgentTaskSettings(value: unknown): AgentTaskSettings | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
+  const allowedKeys = new Set(['model', 'reasoningEffort', 'timeoutMs', 'mcpProfile', 'approvalProfile']);
+  if (Object.keys(record).some(key => !allowedKeys.has(key))) return undefined;
   const settings: AgentTaskSettings = {};
   if (record.model !== undefined && typeof record.model !== 'string') return undefined;
   if (typeof record.model === 'string' && record.model.trim()) settings.model = record.model;
@@ -109,7 +122,10 @@ export function parseAgentTaskSettings(value: unknown): AgentTaskSettings | unde
       || !REASONING_EFFORTS.includes(record.reasoningEffort as ReasoningEffort))) return undefined;
   if (record.reasoningEffort !== undefined) settings.reasoningEffort = record.reasoningEffort as ReasoningEffort;
   if (record.timeoutMs !== undefined
-    && (typeof record.timeoutMs !== 'number' || !Number.isInteger(record.timeoutMs) || record.timeoutMs < 0)) return undefined;
+    && (typeof record.timeoutMs !== 'number' || !Number.isInteger(record.timeoutMs))) return undefined;
+  if (record.timeoutMs !== undefined) {
+    try { validateClaudeTimeout(record.timeoutMs); } catch { return undefined; }
+  }
   if (record.timeoutMs !== undefined) settings.timeoutMs = record.timeoutMs;
   for (const key of ['mcpProfile', 'approvalProfile'] as const) {
     if (record[key] !== undefined && typeof record[key] !== 'string') return undefined;

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+import type { HostMcpServers } from './agents/contracts.js';
 
 const defaultDatabasePath = join(dirname(fileURLToPath(import.meta.url)), 'data', 'discordagent.sqlite');
 const databasePath = process.env.DATABASE_PATH ?? defaultDatabasePath;
@@ -21,7 +21,7 @@ function required(key: string): string {
  * Load MCP server configs from the user's ~/.claude/settings.json.
  * Returns the mcpServers record if found, typed for the Agent SDK.
  */
-function loadUserMcpServers(): Record<string, McpServerConfig> | undefined {
+function loadUserMcpServers(): HostMcpServers | undefined {
   try {
     const settingsPath = join(homedir(), '.claude', 'settings.json');
     const raw = readFileSync(settingsPath, 'utf-8');
@@ -30,7 +30,7 @@ function loadUserMcpServers(): Record<string, McpServerConfig> | undefined {
       const count = Object.keys(settings.mcpServers).length;
       if (count > 0) {
         console.log(`[config] Loaded ${count} MCP server(s) from ~/.claude/settings.json: ${Object.keys(settings.mcpServers).join(', ')}`);
-        return settings.mcpServers as Record<string, McpServerConfig>;
+        return settings.mcpServers as HostMcpServers;
       }
     }
   } catch {

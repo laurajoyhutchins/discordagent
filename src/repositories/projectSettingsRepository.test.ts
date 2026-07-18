@@ -40,4 +40,19 @@ describe('ProjectSettingsRepository', () => {
     db.raw.prepare('UPDATE projects SET archived_at = ?').run(Date.now());
     expect(() => settings.list('factory-floor')).toThrow('Project "factory-floor" not found');
   });
+
+  it('rejects canonical keys before writing to SQLite', () => {
+    const { settings, db } = setup();
+    const before = db.raw.prepare('SELECT COUNT(*) AS count FROM project_settings').get() as { count: number };
+
+    expect(() => settings.set(
+      'factory-floor',
+      'defaultProvider' as never,
+      'codex' as never,
+    )).toThrow(/unknown project setting key/i);
+
+    const after = db.raw.prepare('SELECT COUNT(*) AS count FROM project_settings').get() as { count: number };
+    expect(after.count).toBe(before.count);
+    expect(settings.list('factory-floor')).toEqual({});
+  });
 });

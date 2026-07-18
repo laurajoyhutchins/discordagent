@@ -12,6 +12,7 @@ export interface SettingsRepository {
   set(key: string, value: string): void;
   getDefaultProvider(): AgentProviderId | undefined;
   setDefaultProvider(provider: AgentProviderId): void;
+  clearDefaultProvider(): void;
   getModel(provider: AgentProviderId): string | undefined;
   setModel(provider: AgentProviderId, model?: string): void;
   getDefaultModel(provider: AgentProviderId): string | undefined;
@@ -53,6 +54,9 @@ export function createSettingsRepository(db: DatabaseHandle): SettingsRepository
     },
     setDefaultProvider(provider: AgentProviderId): void {
       this.set(DEFAULT_PROVIDER_KEY, provider);
+    },
+    clearDefaultProvider(): void {
+      this.set(DEFAULT_PROVIDER_KEY, '');
     },
     getModel(provider: AgentProviderId): string | undefined {
       const value = this.get(modelKey(provider));

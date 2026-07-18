@@ -5,10 +5,12 @@ import {
   isAgentEvent,
   isAgentProviderId,
   isTaskStatus,
+  normalizeAgentTaskSettings,
   type AgentEvent,
   type AgentProvider,
   type AgentProviderId,
   type AgentTaskSettings,
+  type AgentTurnSettings,
   type ProviderSession,
   type StartTaskInput,
 } from './contracts.js';
@@ -127,5 +129,25 @@ describe('normalized agent events', () => {
     } satisfies StartTaskInput;
 
     expect(input.settings).toEqual(settings);
+  });
+
+  it('normalizes legacy provider fields while giving the settings snapshot precedence', () => {
+    expect(normalizeAgentTaskSettings({ model: 'legacy-model', reasoningEffort: 'low' })).toEqual({
+      model: 'legacy-model', reasoningEffort: 'low',
+    });
+    expect(normalizeAgentTaskSettings({
+      model: 'legacy-model', reasoningEffort: 'low',
+      settings: { model: 'snapshot-model', reasoningEffort: 'high' },
+    })).toEqual({ model: 'snapshot-model', reasoningEffort: 'high' });
+  });
+
+  it('narrows one-message overrides to turn-scoped settings', () => {
+    const turnSettings = {
+      model: 'turn-model', reasoningEffort: 'high', timeoutMs: 5_000,
+    } satisfies AgentTurnSettings;
+    expect(turnSettings).toEqual({ model: 'turn-model', reasoningEffort: 'high', timeoutMs: 5_000 });
+    // @ts-expect-error MCP profiles belong to the durable task snapshot.
+    const invalid: AgentTurnSettings = { mcpProfile: 'browser' };
+    expect(invalid).toEqual({ mcpProfile: 'browser' });
   });
 });

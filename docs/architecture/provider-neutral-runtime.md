@@ -47,7 +47,7 @@ Admission happens before Discord or Git side effects. A rejected task creates ne
 
 `OpenCodeProvider` is an optional project/task provider backed by the local `opencode acp` CLI and the official ACP client transport. It performs an ACP v1 availability probe, streams normalized text, plans, commands, file changes, usage, and status events, and maps ACP permission requests to explicit Discord approvals. The task session identity is persisted before awaiting prompt completion; continuations load or resume that same session when the advertised capability permits it. OpenCode has no filesystem or terminal callbacks supplied by Discord Agent, and it never receives automatic approval.
 
-`OpenCodePrimaryModel` uses a separate one-turn ACP process for each PM response. Its child environment injects an inline OpenCode configuration that denies every permission, and its ACP permission handler always cancels requests. It receives only the bounded primary-agent prompt and returns provider-neutral structured coordination output. It does not share task sessions, worktrees, project MCP configuration, or tool approvals.
+`OpenCodePrimaryModel` uses a separate one-turn ACP process for each PM response. Its inline runtime configuration replaces inherited global permissions with `deny`, selects a dedicated primary agent whose own permissions deny every action, disables all agent tools, disables plugins declared through config, and turns off sharing, snapshots, and auto-update. The ACP permission handler also cancels every request. Each turn runs in a newly created empty temporary directory that is removed after the process closes. It receives only the bounded primary-agent prompt and returns provider-neutral structured coordination output; it does not share task sessions, worktrees, project MCP configuration, or tool approvals.
 
 The runtime does not silently fall back to another provider when the OpenCode CLI is missing, unauthenticated, unavailable, or fails. PM activation returns to provider onboarding; task execution reports the provider-specific failure for an explicit user decision.
 
@@ -57,7 +57,7 @@ A provider switch is a confirmed sibling handoff. The system estimates target in
 
 The primary agent is deliberately tool-isolated. It can converse, retrieve history, propose decisions, write provenance-valid memory, and delegate through `TaskCoordinator`; it cannot edit repositories or call project MCP tools directly. Raw messages remain authoritative in SQLite, with FTS5 retrieval and bounded context assembly. Read-only policy memory cannot be overwritten by model output.
 
-Claude disables tools through its SDK options. Codex runs a read-only, network-disabled coordination turn. OpenCode runs with a deny-all inline permission configuration and cancels every ACP permission request. These are provider-specific implementations of the same `PrimaryModel` boundary.
+Claude disables tools through its SDK options. Codex runs a read-only, network-disabled coordination turn. OpenCode runs a dedicated deny-all agent with every tool disabled, cancels every ACP permission request, and uses a disposable empty workspace. These are provider-specific implementations of the same `PrimaryModel` boundary.
 
 ## Usage orchestration
 

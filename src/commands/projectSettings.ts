@@ -12,7 +12,8 @@ import {
   type StringSelectMenuInteraction,
 } from 'discord.js';
 import { createHash } from 'node:crypto';
-import { REASONING_EFFORTS, type AgentProviderId, type ReasoningEffort } from '../agents/contracts.js';
+import { AGENT_PROVIDER_IDS, REASONING_EFFORTS, type AgentProviderId, type ReasoningEffort } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { ProviderRegistry } from '../agents/providerRegistry.js';
 import type { Project } from '../types.js';
 import { getProjectByChannel } from '../services/projectStore.js';
@@ -102,12 +103,12 @@ export function parseProjectModelSelection(value: string): { provider: AgentProv
   return { provider, model };
 }
 
-function providerLabel(provider: AgentProviderId): string {
-  return provider === 'codex' ? 'Codex' : 'Claude';
+function modelSettingKey(provider: AgentProviderId): 'claudeModel' | 'codexModel' | 'openCodeModel' {
+  return provider === 'claude' ? 'claudeModel' : provider === 'codex' ? 'codexModel' : 'openCodeModel';
 }
 
 function currentModel(settings: ReturnType<SettingsService['project']>, provider: AgentProviderId): string | undefined {
-  return provider === 'claude' ? settings.claudeModel : settings.codexModel;
+  return settings[modelSettingKey(provider)];
 }
 
 function modelMenu(channelId: string, projectName: string, settings: ReturnType<SettingsService['project']>, providers: readonly AgentProviderId[], selectedProvider?: AgentProviderId): StringSelectMenuBuilder {
@@ -170,7 +171,7 @@ async function projectPanel(
   ];
   const actionOptions = [
     ...(providerDependentControlsDisabled ? [] : providers.map(provider => new StringSelectMenuOptionBuilder().setLabel(`Custom ${providerLabel(provider)} model`).setValue(`custom|${provider}`).setDescription('Enter an exact provider-supported model ID'))),
-    ...(['claude', 'codex'] as const)
+    ...AGENT_PROVIDER_IDS
       .filter(provider => Boolean(currentModel(current, provider)))
       .map(provider => new StringSelectMenuOptionBuilder()
         .setLabel(`Clear ${providerLabel(provider)} model override`)
@@ -192,6 +193,7 @@ async function projectPanel(
         `Configured provider: **${configuredProvider ? providerLabel(configuredProvider) : 'global/host default'}**`,
         `Claude model: \`${current.claudeModel ?? 'provider default'}\``,
         `Codex model: \`${current.codexModel ?? 'provider default'}\``,
+        `OpenCode model: \`${current.openCodeModel ?? 'provider default'}\``,
         `Codex reasoning: **${current.reasoningEfforts?.codex ?? 'provider/model default'}**`,
         `Base branch: **${current.baseBranch ?? 'repository default'}**`,
         `MCP profile: **${current.mcpProfile ?? 'none'}**`,

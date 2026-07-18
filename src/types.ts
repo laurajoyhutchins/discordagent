@@ -7,15 +7,9 @@
 } from './agents/contracts.js';
 import { validateClaudeTimeout } from './settings/validation.js';
 
-export interface ProjectModels {
-  claude?: string;
-  codex?: string;
-}
+export type ProjectModels = Partial<Record<AgentProviderId, string>>;
 
-export interface ProjectReasoningEfforts {
-  claude?: ReasoningEffort;
-  codex?: ReasoningEffort;
-}
+export type ProjectReasoningEfforts = Partial<Record<AgentProviderId, ReasoningEffort>>;
 
 export interface Project {
   name: string;

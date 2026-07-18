@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Client } from 'discord.js';
+import { PermissionFlagsBits, PermissionsBitField, type Client } from 'discord.js';
 import type { AgentProvider } from '../agents/contracts.js';
 import { openDatabase } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
@@ -49,10 +49,18 @@ describe('runtime OpenCode PM activation', () => {
     const agentChannel = { id: 'agent-chat', messages: { fetch: vi.fn(async () => null) }, send };
     const guild = {
       id: 'guild-1',
-      members: { me: { id: 'bot-1' } },
+      members: { me: { id: 'bot-1', permissions: new PermissionsBitField([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.CreatePublicThreads,
+        PermissionFlagsBits.SendMessagesInThreads,
+        PermissionFlagsBits.ManageChannels,
+      ]) } },
       channels: { cache: { find: () => undefined }, create: vi.fn(async () => agentChannel) },
     };
     const client = {
+      user: { id: 'bot-1' },
       guilds: { fetch: vi.fn(async () => guild) },
       channels: { fetch: vi.fn(async () => null) },
     } as unknown as Client;

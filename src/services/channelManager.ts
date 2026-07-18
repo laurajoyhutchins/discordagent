@@ -4,7 +4,7 @@ import {
   OverwriteResolvable,
 } from 'discord.js';
 import { calculateProfile } from '../discord/capabilities/profiles.js';
-import { getCapability, permissionBitForCapability } from '../discord/capabilities/registry.js';
+import { getCapability, permissionBit, permissionBitForCapability } from '../discord/capabilities/registry.js';
 
 interface ChannelSetup {
   categoryId: string;
@@ -21,13 +21,13 @@ export async function createProjectChannels(
   const botMember = guild.members.me;
   if (!botMember) throw new Error('The bot guild member is unavailable; cannot create project channels safely.');
   const bootstrap = calculateProfile('bootstrap');
-  const missingPermissions = bootstrap.permissionNames.filter(permission => !(botMember.permissions?.has?.(permission) ?? false));
+  const missingPermissions = bootstrap.permissionNames.filter(permission => !(botMember.permissions?.has?.(permissionBit(permission)) ?? false));
   if (missingPermissions.length > 0) {
     throw new Error(`Cannot create project channels; bot is missing required permissions: ${missingPermissions.join(', ')}`);
   }
   const runtime = calculateProfile('runtime');
   const botAllow = runtime.permissionNames
-    .filter(permission => botMember.permissions?.has?.(permission) ?? false)
+    .filter(permission => botMember.permissions?.has?.(permissionBit(permission)) ?? false)
     .map(permission => permissionBitForCapability(
       runtime.capabilityIds.find(id => getCapability(id).permission === permission)!,
     ))
@@ -126,13 +126,13 @@ export async function ensurePrimaryAgentChannel(
   const botMember = guild.members.me;
   if (!botMember) throw new Error('The bot guild member is unavailable; cannot create the primary agent channel safely.');
   const bootstrap = calculateProfile('bootstrap');
-  const missingBootstrapPermissions = bootstrap.permissionNames.filter(permission => !(botMember.permissions?.has?.(permission) ?? false));
+  const missingBootstrapPermissions = bootstrap.permissionNames.filter(permission => !(botMember.permissions?.has?.(permissionBit(permission)) ?? false));
   if (missingBootstrapPermissions.length > 0) {
     throw new Error(`Cannot create or reconcile the primary agent channel; bot is missing required permissions: ${missingBootstrapPermissions.join(', ')}`);
   }
   const runtime = calculateProfile('runtime');
   const requiredPermissions = runtime.permissionNames;
-  const missingGuildPermissions = requiredPermissions.filter(permission => !(botMember.permissions?.has?.(permission) ?? false));
+  const missingGuildPermissions = requiredPermissions.filter(permission => !(botMember.permissions?.has?.(permissionBit(permission)) ?? false));
   if (missingGuildPermissions.length > 0) {
     throw new Error(`Cannot use the primary agent channel; bot is missing required permissions: ${missingGuildPermissions.join(', ')}`);
   }
@@ -165,13 +165,13 @@ export async function ensurePrimaryAgentChannel(
     }
     await existing.permissionOverwrites.set(permissionOverwrites);
     const channelPermissions = existing.permissionsFor?.(botMember) ?? botMember.permissionsIn?.(existing);
-    const missingChannelPermissions = requiredPermissions.filter(permission => !(channelPermissions?.has?.(permission) ?? false));
+    const missingChannelPermissions = requiredPermissions.filter(permission => !(channelPermissions?.has?.(permissionBit(permission)) ?? false));
     if (missingChannelPermissions.length > 0) {
       throw new Error(`Cannot use the primary agent channel; bot is missing channel permissions: ${missingChannelPermissions.join(', ')}`);
     }
     if (ownerId) {
       const ownerPermissions = existing.permissionsFor?.(ownerId);
-      const missingOwnerPermissions = requiredPermissions.filter(permission => !(ownerPermissions?.has?.(permission) ?? false));
+      const missingOwnerPermissions = requiredPermissions.filter(permission => !(ownerPermissions?.has?.(permissionBit(permission)) ?? false));
       if (missingOwnerPermissions.length > 0) {
         throw new Error(`Cannot use the primary agent channel; owner is missing channel permissions: ${missingOwnerPermissions.join(', ')}`);
       }

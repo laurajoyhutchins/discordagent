@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PermissionFlagsBits } from 'discord.js';
-import { CAPABILITIES } from './registry.js';
+import { CAPABILITIES, permissionBitForCapability } from './registry.js';
 import { calculateProfile, DISCORD_CAPABILITY_PROFILES } from './profiles.js';
 
 describe('Discord capability registry', () => {
@@ -10,7 +10,7 @@ describe('Discord capability registry', () => {
     expect(new Set(ids).size).toBe(ids.length);
     for (const capability of CAPABILITIES) {
       if (capability.permission) {
-        expect(PermissionFlagsBits[capability.permission]).toBeTypeOf('bigint');
+        expect(permissionBitForCapability(capability.id)).toBeTypeOf('bigint');
         expect(capability.permission).not.toBe('Administrator');
       }
     }

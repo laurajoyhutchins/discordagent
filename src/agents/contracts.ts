@@ -1,4 +1,4 @@
-export const AGENT_PROVIDER_IDS = ['claude', 'codex'] as const;
+export const AGENT_PROVIDER_IDS = ['claude', 'codex', 'opencode'] as const;
 export type AgentProviderId = (typeof AGENT_PROVIDER_IDS)[number];
 
 /** Provider-neutral host MCP data; adapters own SDK-specific interpretation. */
@@ -40,6 +40,10 @@ export const PROVIDER_SETTING_CAPABILITIES = {
   codex: {
     task: ['model', 'reasoningEffort'],
     turn: ['model', 'reasoningEffort'],
+  },
+  opencode: {
+    task: ['model'],
+    turn: ['model'],
   },
 } as const satisfies Record<AgentProviderId, Record<AgentSettingsScope, readonly string[]>>;
 

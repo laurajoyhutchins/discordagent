@@ -7,6 +7,7 @@ export interface GlobalAgentSettings {
   defaultProvider?: AgentProviderId;
   claudeModel?: string;
   codexModel?: string;
+  openCodeModel?: string;
   primaryAgentModel?: string;
   claudeTimeoutMs?: number;
   usageReserve?: number;
@@ -18,6 +19,7 @@ export interface ProjectAgentSettings {
   defaultProvider?: AgentProviderId;
   claudeModel?: string;
   codexModel?: string;
+  openCodeModel?: string;
   reasoningEfforts?: Partial<Record<AgentProviderId, ReasoningEffort>>;
   baseBranch?: string;
   mcpProfile?: string;

@@ -1,6 +1,6 @@
 import type { GatewayIntentBits, PermissionFlagsBits } from 'discord.js';
 
-export type PermissionName = keyof typeof PermissionFlagsBits;
+export type PermissionName = keyof typeof PermissionFlagsBits | 'SetVoiceChannelStatus';
 export type GatewayIntentName = keyof typeof GatewayIntentBits;
 
 export type CapabilityRequirementLevel =

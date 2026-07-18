@@ -6,7 +6,8 @@ import {
   type Message,
   type TextChannel,
 } from 'discord.js';
-import type { AgentProviderId } from '../agents/contracts.js';
+import { AGENT_PROVIDER_IDS, isAgentProviderId, type AgentProviderId } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { ProviderRegistry } from '../agents/providerRegistry.js';
 import type { SettingsRepository } from '../repositories/settingsRepository.js';
 import type { SettingsService } from './settingsService.js';
@@ -66,7 +67,7 @@ export function createProviderOnboardingService(input: {
       if (existing && (!authoredByBot || !exactChannel)) {
         throw new Error('Persisted provider setup message failed bot/channel identity validation; refusing to edit it.');
       }
-      const validProviderButtonIds = new Set(['claude', 'codex'].map(provider => `${SETUP_BUTTON_PREFIX}${provider}`));
+      const validProviderButtonIds = new Set(AGENT_PROVIDER_IDS.map(provider => `${SETUP_BUTTON_PREFIX}${provider}`));
       const hasForeignComponents = (existing?.components ?? []).some(row => {
         if (!('components' in row) || !Array.isArray(row.components)) return false;
         return row.components.some((component: { customId?: string | null }) => {
@@ -112,7 +113,12 @@ export function createProviderOnboardingService(input: {
       return true;
     }
 
-    const provider = interaction.customId.slice(SETUP_BUTTON_PREFIX.length) as AgentProviderId;
+    const providerValue = interaction.customId.slice(SETUP_BUTTON_PREFIX.length);
+    if (!isAgentProviderId(providerValue)) {
+      await interaction.reply({ content: 'That provider selection is invalid.', ephemeral: true });
+      return true;
+    }
+    const provider = providerValue;
     if (!input.providers.list().includes(provider)) {
       await interaction.reply({ content: 'That provider is no longer available. Restart the bot and choose an available provider.', ephemeral: true });
       return true;
@@ -186,15 +192,12 @@ function isMessageNotFound(error: unknown): boolean {
     && 'code' in error && (error as { code?: unknown }).code === 10008;
 }
 
-function providerLabel(provider: AgentProviderId): string {
-  return provider === 'codex' ? 'Codex' : 'Claude';
-}
 
 function hasExpectedProviderButtonSchema(components: readonly unknown[]): boolean {
   if (components.length === 0) return true;
   if (components.length !== 1) return false;
   const row = components[0];
-  const validProviderButtonIds = new Set(['claude', 'codex'].map(provider => `${SETUP_BUTTON_PREFIX}${provider}`));
+  const validProviderButtonIds = new Set(AGENT_PROVIDER_IDS.map(provider => `${SETUP_BUTTON_PREFIX}${provider}`));
   if (!row || typeof row !== 'object' || !('components' in row) || !Array.isArray(row.components) || row.components.length === 0) return false;
   const seen = new Set<string>();
   return row.components.every((component: { customId?: string | null; type?: number; style?: number; label?: string | null }) => {

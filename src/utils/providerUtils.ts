@@ -1,4 +1,5 @@
 import type { AgentProviderId } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import { redactErrorMessage } from './redaction.js';
 
 export function optionalPrimary(read: () => string): string | undefined {
@@ -6,7 +7,7 @@ export function optionalPrimary(read: () => string): string | undefined {
 }
 
 export function providerUnavailable(provider: AgentProviderId): string {
-  return `${provider === 'codex' ? 'Codex' : 'Claude'} is unavailable on this host. Try again later or contact the bot owner.`;
+  return `${providerLabel(provider)} is unavailable on this host. Try again later or contact the bot owner.`;
 }
 
 export async function safeProviderCheck<T extends { checkProvider?(provider: AgentProviderId): Promise<{ available: boolean }> }>(

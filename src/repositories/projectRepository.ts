@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentProviderId, ReasoningEffort } from '../agents/contracts.js';
+import { AGENT_PROVIDER_IDS, REASONING_EFFORTS, type AgentProviderId, type ReasoningEffort } from '../agents/contracts.js';
 import type { DatabaseHandle } from '../db/database.js';
 import type { Project, ProjectModels, ProjectReasoningEfforts } from '../types.js';
 
@@ -40,9 +40,10 @@ function parseModels(value: string): ProjectModels | undefined {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
     const record = parsed as Record<string, unknown>;
     const models: ProjectModels = {};
-    if (typeof record.claude === 'string' && record.claude) models.claude = record.claude;
-    if (typeof record.codex === 'string' && record.codex) models.codex = record.codex;
-    return models.claude || models.codex ? models : undefined;
+    for (const provider of AGENT_PROVIDER_IDS) {
+      if (typeof record[provider] === 'string' && record[provider]) models[provider] = record[provider] as string;
+    }
+    return Object.keys(models).length > 0 ? models : undefined;
   } catch {
     return undefined;
   }
@@ -54,13 +55,13 @@ function parseReasoningEfforts(value: string): ProjectReasoningEfforts | undefin
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
     const record = parsed as Record<string, unknown>;
     const efforts: ProjectReasoningEfforts = {};
-    for (const provider of ['claude', 'codex'] as const) {
+    for (const provider of AGENT_PROVIDER_IDS) {
       if (typeof record[provider] === 'string'
-        && ['none', 'low', 'medium', 'high', 'xhigh', 'max'].includes(record[provider] as string)) {
+        && REASONING_EFFORTS.includes(record[provider] as ReasoningEffort)) {
         efforts[provider] = record[provider] as ReasoningEffort;
       }
     }
-    return efforts.claude || efforts.codex ? efforts : undefined;
+    return Object.keys(efforts).length > 0 ? efforts : undefined;
   } catch {
     return undefined;
   }
@@ -86,15 +87,17 @@ function toProject(row: ProjectRow): Project {
 
 function serializeModels(models: ProjectModels | undefined): string {
   const compact: ProjectModels = {};
-  if (models?.claude) compact.claude = models.claude;
-  if (models?.codex) compact.codex = models.codex;
+  for (const provider of AGENT_PROVIDER_IDS) {
+    if (models?.[provider]) compact[provider] = models[provider];
+  }
   return JSON.stringify(compact);
 }
 
 function serializeReasoningEfforts(efforts: ProjectReasoningEfforts | undefined): string {
   const compact: ProjectReasoningEfforts = {};
-  if (efforts?.claude) compact.claude = efforts.claude;
-  if (efforts?.codex) compact.codex = efforts.codex;
+  for (const provider of AGENT_PROVIDER_IDS) {
+    if (efforts?.[provider]) compact[provider] = efforts[provider];
+  }
   return JSON.stringify(compact);
 }
 

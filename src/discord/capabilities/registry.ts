@@ -1,7 +1,15 @@
 import { GatewayIntentBits, PermissionFlagsBits } from 'discord.js';
-import type { DiscordCapabilityDefinition } from './contracts.js';
+import type { DiscordCapabilityDefinition, PermissionName } from './contracts.js';
 
 export const PROCESS_GATEWAY_INTENTS = ['Guilds', 'GuildMessages', 'MessageContent', 'GuildMembers'] as const;
+
+const SET_VOICE_CHANNEL_STATUS_PERMISSION = 1n << 48n;
+
+export function permissionBit(permission: PermissionName): bigint {
+  return permission === 'SetVoiceChannelStatus'
+    ? SET_VOICE_CHANNEL_STATUS_PERMISSION
+    : PermissionFlagsBits[permission];
+}
 
 export const CAPABILITIES: readonly DiscordCapabilityDefinition[] = [
   {
@@ -124,11 +132,11 @@ export function gatewayIntentBitsFor(names: readonly (keyof typeof GatewayIntent
   return names.reduce((bits, name) => bits | GatewayIntentBits[name], 0);
 }
 
-export function permissionBitsFor(names: readonly (keyof typeof PermissionFlagsBits)[]): bigint {
-  return names.reduce((bits, name) => bits | PermissionFlagsBits[name], 0n);
+export function permissionBitsFor(names: readonly PermissionName[]): bigint {
+  return names.reduce((bits, name) => bits | permissionBit(name), 0n);
 }
 
 export function permissionBitForCapability(id: string): bigint | undefined {
   const permission = getCapability(id).permission;
-  return permission ? PermissionFlagsBits[permission] : undefined;
+  return permission ? permissionBit(permission) : undefined;
 }

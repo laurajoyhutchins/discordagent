@@ -2,7 +2,7 @@
 
 Discord Agent is a private, local-first Discord workspace for running coding agents against repositories on the machine hosting the bot. It is based on [Nicolai Lolansen's DiscordClaude](https://github.com/NicolaiLolansen/DiscordClaude) and retains the upstream MIT license and attribution.
 
-Discord Agent provides a provider-neutral runtime with executable Claude and Codex providers. Codex runs through the local App Server protocol with guided device-code authentication, streamed events, approvals, questions, cancellation, quota state, and confirmed sibling-thread handoffs.
+Discord Agent provides a provider-neutral runtime with executable Claude, Codex, and OpenCode provider-specific adapters. Claude uses the Agent SDK, Codex uses the local App Server protocol, and OpenCode uses the local ACP CLI behind the same durable task contract.
 
 ## What the runtime provides
 
@@ -11,7 +11,7 @@ Discord Agent provides a provider-neutral runtime with executable Claude and Cod
 - **Task threads** — each new prompt creates a Discord thread representing one durable agent task and one immutable provider session.
 - **Isolated Git worktrees** — each Git-backed task receives its own branch and writable worktree before provider execution begins.
 - **Durable state** — projects, tasks, worktrees, provider sessions, events, results, and recovery checkpoints are stored in SQLite.
-- **Claude and Codex adapters** — Claude uses the Agent SDK; Codex uses the local App Server JSONL protocol behind the same provider contract.
+- **Claude, Codex, and OpenCode adapters** — provider-specific transports feed the same durable provider contract and normalized event model.
 - **Streaming and approvals** — responses, plans, commands, file changes, approvals, and user questions are rendered through provider-neutral Discord components.
 - **Continuation and cancellation** — replies continue the same provider session; `/cancel` cancels the task associated with the current thread.
 - **Safe restart recovery** — nonterminal tasks are marked interrupted, their worktrees are preserved, and no provider turn is replayed automatically.

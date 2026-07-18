@@ -61,6 +61,14 @@ export function safeStringify(value: unknown): string {
   return JSON.stringify(redactSensitiveValue(value));
 }
 
+export function redactStructuredText(text: string): string {
+  try {
+    return safeStringify(JSON.parse(text));
+  } catch {
+    return redactSensitiveText(text);
+  }
+}
+
 function redactError(error: NormalizedAgentError): NormalizedAgentError {
   return {
     ...error,
@@ -131,7 +139,7 @@ export function redactAgentEvent(event: AgentEvent): AgentEvent {
       return {
         ...event,
         command: redactSensitiveText(event.command),
-        ...(event.output ? { output: redactSensitiveText(event.output) } : {}),
+        ...(event.output ? { output: redactStructuredText(event.output) } : {}),
       };
     case 'file_change':
       return {

@@ -1,4 +1,4 @@
-import { REASONING_EFFORTS, type AgentProviderId, type ReasoningEffort } from '../agents/contracts.js';
+import { isAgentProviderId, REASONING_EFFORTS, type AgentProviderId, type ReasoningEffort } from '../agents/contracts.js';
 import type { DatabaseHandle } from '../db/database.js';
 import { validateClaudeTimeout, validateUsageReserve } from '../settings/validation.js';
 
@@ -50,7 +50,7 @@ export function createSettingsRepository(db: DatabaseHandle): SettingsRepository
     },
     getDefaultProvider(): AgentProviderId | undefined {
       const value = this.get(DEFAULT_PROVIDER_KEY);
-      return value === 'claude' || value === 'codex' ? value : undefined;
+      return isAgentProviderId(value) ? value : undefined;
     },
     setDefaultProvider(provider: AgentProviderId): void {
       this.set(DEFAULT_PROVIDER_KEY, provider);

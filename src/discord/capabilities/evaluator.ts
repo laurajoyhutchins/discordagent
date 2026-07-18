@@ -1,6 +1,6 @@
 import { PermissionsBitField } from 'discord.js';
 import type { CapabilityEvaluation, CapabilityReport, GatewayIntentName } from './contracts.js';
-import { getCapability } from './registry.js';
+import { getCapability, permissionBitForCapability } from './registry.js';
 
 export interface CapabilityEvaluationMember {
   readonly permissions: PermissionsBitField;
@@ -41,8 +41,9 @@ function permissionState(
   if (!context.member) return { state: 'cannot_determine', reason: 'The bot guild member could not be determined.' };
 
   if (!capability.permission) return { state: 'available', reason: 'No Discord permission bit is required.' };
+  const permissionBit = permissionBitForCapability(capability.id)!;
   if (capability.scope === 'guild') {
-    return context.member.permissions.has(capability.permission)
+    return context.member.permissions.has(permissionBit)
       ? { state: 'available', reason: 'The bot has the required guild permission.' }
       : { state: 'unavailable', reason: `The bot lacks guild permission ${capability.permission}.` };
   }
@@ -52,7 +53,7 @@ function permissionState(
     ?? context.channel.parent?.permissionsFor(context.member)
     ?? null;
   if (!permissions) return { state: 'cannot_determine', reason: 'Discord did not provide effective permissions for this channel.' };
-  return permissions.has(capability.permission)
+  return permissions.has(permissionBit)
     ? { state: 'available', reason: 'The bot has the effective channel permission.' }
     : { state: 'unavailable', reason: `A channel overwrite prevents effective permission ${capability.permission}.` };
 }

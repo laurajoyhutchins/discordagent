@@ -15,6 +15,7 @@ import {
   type StringSelectMenuInteraction,
 } from 'discord.js';
 import { AGENT_PROVIDER_IDS, type AgentProviderId, type ProviderAvailability } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { ProviderRegistry } from '../agents/providerRegistry.js';
 import { getPrimaryChannelId, getPrimaryOwnerId, getProviderRegistry, getSettingsService, activatePrimaryProvider, capturePrimaryProviderState, type PrimaryProviderActivationResult } from '../services/agentRuntimeService.js';
 import type { SettingsService } from '../services/settingsService.js';
@@ -25,6 +26,7 @@ import { redactErrorMessage } from '../utils/redaction.js';
 export const MODEL_CHOICES: Record<AgentProviderId, readonly string[]> = {
   claude: ['sonnet', 'opus', 'haiku'],
   codex: ['gpt-5-codex', 'gpt-5-codex-mini', 'gpt-5.4'],
+  opencode: [],
 };
 
 export interface SettingsCommandDependencies {
@@ -127,8 +129,8 @@ export function settingError(error: unknown): string {
   return 'The setting could not be saved. No change was persisted.';
 }
 
-function providerLabel(provider: AgentProviderId): string {
-  return provider === 'codex' ? 'Codex' : 'Claude';
+function modelSettingKey(provider: AgentProviderId): 'claudeModel' | 'codexModel' | 'openCodeModel' {
+  return provider === 'claude' ? 'claudeModel' : provider === 'codex' ? 'codexModel' : 'openCodeModel';
 }
 
 function modelMenu(customId: string, provider: AgentProviderId, current?: string): StringSelectMenuBuilder {
@@ -204,6 +206,7 @@ async function globalPanel(dependencies: SettingsCommandDependencies): Promise<{
       `Default provider status: **${defaultProviderStatus}**`,
       'Claude default model: ' + (current.claudeModel ?? 'host/provider default'),
       'Codex default model: ' + (current.codexModel ?? 'host/provider default'),
+      'OpenCode default model: ' + (current.openCodeModel ?? 'host/provider default'),
       `Codex status: **${availabilityLabel(codexState)}**`,
       'PM model: ' + (current.primaryAgentModel ?? 'provider default'),
       `Claude timeout: **${current.claudeTimeoutMs ?? 'host default'} ms**`,
@@ -219,27 +222,28 @@ async function globalPanel(dependencies: SettingsCommandDependencies): Promise<{
     ));
   }
   for (const provider of available) {
-    const currentModel = current[provider === 'claude' ? 'claudeModel' : 'codexModel'];
-    components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(modelMenu(`settings:g:model:${provider}`, provider, currentModel)));
+    const currentModel = current[modelSettingKey(provider)];
+    if (MODEL_CHOICES[provider].length > 0 || currentModel) {
+      components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(modelMenu(`settings:g:model:${provider}`, provider, currentModel)));
+    }
   }
   const modelButtons = available.map(provider =>
     new ButtonBuilder().setCustomId(`settings:g:model-custom:${provider}`).setLabel(`Custom ${providerLabel(provider)} model`).setStyle(ButtonStyle.Secondary));
   const clearModelButtons = AGENT_PROVIDER_IDS
-    .filter(provider => Boolean(current[provider === 'claude' ? 'claudeModel' : 'codexModel']))
+    .filter(provider => Boolean(current[modelSettingKey(provider)]))
     .map(provider => new ButtonBuilder()
       .setCustomId(`settings:g:model-clear:${provider}`)
       .setLabel(`Clear ${providerLabel(provider)} model`)
       .setStyle(ButtonStyle.Secondary));
-  components.push(
-    new ActionRowBuilder<ButtonBuilder>().addComponents(
-      ...modelButtons,
-      new ButtonBuilder().setCustomId('settings:g:pm-model').setLabel('PM model').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('settings:g:timeout').setLabel('Claude timeout').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('settings:g:reserve').setLabel('Usage reserve').setStyle(ButtonStyle.Secondary),
-    ),
-  );
-  if (clearModelButtons.length > 0) {
-    components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...clearModelButtons));
+  const actionButtons = [
+    ...modelButtons,
+    new ButtonBuilder().setCustomId('settings:g:pm-model').setLabel('PM model').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('settings:g:timeout').setLabel('Claude timeout').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('settings:g:reserve').setLabel('Usage reserve').setStyle(ButtonStyle.Secondary),
+    ...clearModelButtons,
+  ];
+  for (let index = 0; index < actionButtons.length; index += 5) {
+    components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...actionButtons.slice(index, index + 5)));
   }
   return { embeds, components };
 }
@@ -310,7 +314,7 @@ async function persistGlobalProvider(dependencies: SettingsCommandDependencies, 
 }
 
 async function persistGlobalModel(dependencies: SettingsCommandDependencies, input: Record<string, unknown>, provider: AgentProviderId): Promise<GlobalChangeResult> {
-  const providerModelKey = provider === 'claude' ? 'claudeModel' : 'codexModel';
+  const providerModelKey = modelSettingKey(provider);
   const isProviderModel = Object.prototype.hasOwnProperty.call(input, providerModelKey);
   const isClear = isProviderModel && input[providerModelKey] === '';
   if (!isClear) await ensureAvailable(dependencies, provider);
@@ -400,7 +404,7 @@ export async function handleSettingsComponent(
       if (parsed.action === 'model-custom' && parsed.provider) {
         await interaction.showModal(modal(`settings:g:model-custom:${parsed.provider}`, `Custom ${providerLabel(parsed.provider)} model`, 'model', 'Exact model ID', undefined, 'provider-supported model ID', { required: false, maxLength: MAX_MODEL_OVERRIDE_LENGTH }));
       } else if (parsed.action === 'model-clear' && parsed.provider) {
-        const key = parsed.provider === 'claude' ? 'claudeModel' : 'codexModel';
+        const key = modelSettingKey(parsed.provider);
         const current = dependencies.settings.global();
         if (!current[key]) throw new Error(`No ${providerLabel(parsed.provider)} model override is stored.`);
         const changeResult = await persistGlobalModel(dependencies, { [key]: '' }, parsed.provider);
@@ -430,8 +434,8 @@ export async function handleSettingsComponent(
         if (!provider) throw new Error('Unsupported provider selection.');
         changeResult = await persistGlobalProvider(dependencies, provider);
       } else if (parsed.action === 'model' && parsed.provider) {
-        const model = validateModelSelection(value, parsed.provider, dependencies.settings.global()[parsed.provider === 'claude' ? 'claudeModel' : 'codexModel']);
-        changeResult = await persistGlobalModel(dependencies, { [parsed.provider === 'claude' ? 'claudeModel' : 'codexModel']: model }, parsed.provider);
+        const model = validateModelSelection(value, parsed.provider, dependencies.settings.global()[modelSettingKey(parsed.provider)]);
+        changeResult = await persistGlobalModel(dependencies, { [modelSettingKey(parsed.provider)]: model }, parsed.provider);
       } else if (parsed.action !== 'refresh') {
         throw new Error('Unsupported settings selection.');
       }
@@ -457,7 +461,7 @@ export async function handleSettingsComponent(
         savedMessage = 'Usage reserve saved for future admissions and reservations, including later continuation turns; active reservations remain unchanged.';
       } else if (parsed.action === 'model-custom' && parsed.provider) {
         const model = validateModelOverride(fields.getTextInputValue('model'));
-        changeResult = await persistGlobalModel(dependencies, { [parsed.provider === 'claude' ? 'claudeModel' : 'codexModel']: model ?? '' }, parsed.provider);
+        changeResult = await persistGlobalModel(dependencies, { [modelSettingKey(parsed.provider)]: model ?? '' }, parsed.provider);
       } else if (parsed.action === 'pm-model') {
         const model = validateModelOverride(fields.getTextInputValue('model'));
         const current = dependencies.settings.global();

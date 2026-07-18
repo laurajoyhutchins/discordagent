@@ -2,7 +2,7 @@
 
 ## Project overview
 
-Discord Agent is a provider-neutral Discord orchestration runtime derived from DiscordClaude. Codex executes through `ClaudeProvider`; Codex executes through the local App Server transport, authentication service, event adapter, and `CodexProvider`. A persistent PM-style primary agent coordinates both providers through durable task boundaries, journaled memory, native Discord decisions, and quiet usage admission.
+Discord Agent is a provider-neutral Discord orchestration runtime derived from DiscordClaude. Claude executes through `ClaudeProvider`; Codex executes through the local App Server transport, authentication service, event adapter, and `CodexProvider`; OpenCode executes through ACP and `OpenCodeProvider`. A persistent PM-style primary agent coordinates both providers through durable task boundaries, journaled memory, native Discord decisions, and quiet usage admission.
 
 The generic runtime must not depend directly on the Anthropic SDK. Provider-specific behavior belongs under `src/agents/<provider>/` and emits normalized `AgentEvent` values.
 
@@ -12,7 +12,8 @@ The generic runtime must not depend directly on the Anthropic SDK. Provider-spec
 - TypeScript ES2022 modules
 - discord.js 14
 - SQLite through `better-sqlite3`
-- Anthropic Codex Agent SDK in `src/agents/Codex/`
+- Anthropic Claude Agent SDK in `src/agents/claude/`
+- OpenCode ACP transport in `src/agents/opencode/`
 - Vitest
 - Git CLI through `execFile` with `shell: false`
 
@@ -87,7 +88,7 @@ Do not import Discord or provider SDK types into these contracts.
 
 ### Providers
 
-`ProviderRegistry` resolves complete Codex and Codex implementations. Codex is registered only when the local App Server initializes successfully and authoritative account state is available.
+`ProviderRegistry` resolves complete Claude, Codex, and OpenCode implementations. Providers are registered only after their complete lifecycle and authoritative availability checks succeed.
 
 `ClaudeProvider` owns:
 

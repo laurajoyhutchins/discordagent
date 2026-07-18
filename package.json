@@ -21,7 +21,7 @@
     "@agentclientprotocol/sdk": "^1.2.1",
     "@anthropic-ai/claude-agent-sdk": "^0.2.87",
     "better-sqlite3": "^12.4.1",
-    "discord.js": "^14.16.0",
+    "discord.js": "^14.24.0",
     "dotenv": "^16.4.0"
   },
   "devDependencies": {

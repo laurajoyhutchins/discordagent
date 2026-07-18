@@ -35,6 +35,9 @@ import { AppServerTransport } from '../agents/codex/appServerTransport.js';
 import { CodexAuthService } from '../agents/codex/codexAuthService.js';
 import { CodexProvider } from '../agents/codex/codexProvider.js';
 import { CodexPrimaryModel } from '../agents/codex/codexPrimaryModel.js';
+import { OpenCodeAcpTransport } from '../agents/opencode/acpTransport.js';
+import { OpenCodePrimaryModel } from '../agents/opencode/opencodePrimaryModel.js';
+import { OpenCodeProvider } from '../agents/opencode/opencodeProvider.js';
 import { capturePrimaryProviderState, clearAgentRuntimeServices, setAgentRuntimeServices, type PrimaryProviderActivationResult } from './agentRuntimeService.js';
 import { createMessageRepository, type MessageRepository } from '../repositories/messageRepository.js';
 import { createMemoryRepository, type MemoryRepository } from '../repositories/memoryRepository.js';
@@ -60,10 +63,12 @@ export interface RuntimeOptions {
   git?: GitClient;
   claudeProvider?: AgentProvider;
   codexProvider?: AgentProvider;
+  openCodeProvider?: AgentProvider;
   disableClaude?: boolean;
   codexTransport?: AppServerTransport;
   codexAuth?: CodexAuthService;
   disableCodex?: boolean;
+  disableOpenCode?: boolean;
   primaryModel?: PrimaryModel;
   disablePrimaryAgent?: boolean;
   disableUsagePolling?: boolean;
@@ -141,6 +146,7 @@ export async function startRuntime(
   let codexTransport = options.codexTransport;
   let codexAuth = options.codexAuth;
   let codexProvider = options.codexProvider;
+  let openCodeProvider = options.openCodeProvider;
   let usageUnsubscribe: (() => void) | undefined;
 
   try {
@@ -236,6 +242,32 @@ export async function startRuntime(
       providers.register(codexProvider);
     }
 
+    if (openCodeProvider && openCodeProvider.id !== 'opencode') {
+      throw new Error(`Runtime expected an OpenCode provider, received "${openCodeProvider.id}"`);
+    }
+    if (!options.disableOpenCode) {
+      if (!openCodeProvider && config.openCodeEnabled) {
+        openCodeProvider = new OpenCodeProvider({
+          cliPath: config.openCodeCliPath,
+          timeoutMs: config.openCodeTimeoutMs,
+          defaultModel: config.defaultOpenCodeModel || undefined,
+          createConnection: handlers => Promise.resolve(new OpenCodeAcpTransport({
+            cliPath: config.openCodeCliPath,
+            handlers,
+          })),
+        });
+      }
+      if (openCodeProvider) {
+        try {
+          const availability = await openCodeProvider.checkAvailability();
+          if (availability.available) providers.register(openCodeProvider);
+          else console.warn('[runtime] OpenCode ACP unavailable:', redactErrorMessage(availability.reason ?? 'OpenCode provider is unavailable'));
+        } catch (error) {
+          console.warn('[runtime] OpenCode ACP unavailable:', redactErrorMessage(error));
+        }
+      }
+    }
+
     const settingsService = createSettingsService({
       settings,
       projects,
@@ -244,6 +276,7 @@ export async function startRuntime(
         defaultProvider: undefined,
         claudeModel: config.defaultModel || undefined,
         codexModel: config.defaultCodexModel || undefined,
+        openCodeModel: config.defaultOpenCodeModel || undefined,
         primaryAgentModel: config.primaryAgentModel || undefined,
         claudeTimeoutMs: config.claudeTimeoutMs,
         usageReserve: config.primaryUsageReserve,
@@ -286,13 +319,21 @@ export async function startRuntime(
       const createPrimaryModel = (provider: AgentProviderId): PrimaryModel | undefined => {
         if (options.primaryModel) return options.primaryModel;
         const globalSettings = settingsService.global();
-        const configuredModel = provider === 'claude' ? globalSettings.claudeModel : globalSettings.codexModel;
+        const configuredModel = provider === 'claude'
+          ? globalSettings.claudeModel
+          : provider === 'codex'
+            ? globalSettings.codexModel
+            : globalSettings.openCodeModel;
         const configuredReasoning = settings.getReasoningEffort(provider);
         const primaryAgentModel = resolvePrimaryAgentModel({
           persistedPrimaryModel: globalSettings.primaryAgentModel,
           configuredProviderModel: configuredModel,
           configuredPrimaryModel: config.primaryAgentModel || undefined,
-          providerDefaultModel: (provider === 'claude' ? config.defaultModel : config.defaultCodexModel) || undefined,
+          providerDefaultModel: (provider === 'claude'
+            ? config.defaultModel
+            : provider === 'codex'
+              ? config.defaultCodexModel
+              : config.defaultOpenCodeModel) || undefined,
         });
         if (provider === 'claude' && providers.list().includes('claude')) {
           return new ClaudePrimaryModel({ model: primaryAgentModel });
@@ -303,6 +344,13 @@ export async function startRuntime(
             auth: codexAuth,
             ...(primaryAgentModel ? { model: primaryAgentModel } : {}),
             ...(configuredReasoning ? { reasoningEffort: configuredReasoning } : {}),
+          });
+        }
+        if (provider === 'opencode' && providers.list().includes('opencode')) {
+          return new OpenCodePrimaryModel({
+            cliPath: config.openCodeCliPath,
+            timeoutMs: config.openCodeTimeoutMs,
+            ...(primaryAgentModel ? { model: primaryAgentModel } : {}),
           });
         }
         return undefined;

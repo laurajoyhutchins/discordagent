@@ -74,6 +74,7 @@ export const commands = [
         .addChoices(
           { name: 'Claude', value: 'claude' },
           { name: 'Codex', value: 'codex' },
+          { name: 'OpenCode', value: 'opencode' },
         )
     ),
 

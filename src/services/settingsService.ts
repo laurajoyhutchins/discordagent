@@ -1,4 +1,4 @@
-import { validateSupportedAgentSettings, type AgentProviderId, type AgentTaskSettings, type ReasoningEffort } from '../agents/contracts.js';
+import { AGENT_PROVIDER_IDS, validateSupportedAgentSettings, type AgentProviderId, type AgentTaskSettings, type ReasoningEffort } from '../agents/contracts.js';
 import type { ProjectRepository } from '../repositories/projectRepository.js';
 import type { ProjectSettingsRepository } from '../repositories/projectSettingsRepository.js';
 import type { SettingsRepository } from '../repositories/settingsRepository.js';
@@ -10,6 +10,7 @@ export interface HostAgentDefaults {
   defaultProvider?: AgentProviderId;
   claudeModel?: string;
   codexModel?: string;
+  openCodeModel?: string;
   primaryAgentModel?: string;
   claudeTimeoutMs: number;
   usageReserve: number;
@@ -41,6 +42,10 @@ export interface SettingsService {
   mcpProfiles(): McpProfileCatalog;
 }
 
+function modelSettingKey(provider: AgentProviderId): 'claudeModel' | 'codexModel' | 'openCodeModel' {
+  return provider === 'claude' ? 'claudeModel' : provider === 'codex' ? 'codexModel' : 'openCodeModel';
+}
+
 export function createSettingsService(dependencies: SettingsServiceDependencies): SettingsService {
   const { settings, projects, projectSettings, hostDefaults, isProviderAvailable } = dependencies;
   const { transaction } = dependencies;
@@ -58,17 +63,19 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
     const defaultProvider = settings.getDefaultProvider();
     const claudeModel = settings.getDefaultModel('claude');
     const codexModel = settings.getDefaultModel('codex');
+    const openCodeModel = settings.getDefaultModel('opencode');
     const primaryAgentModel = settings.getPrimaryAgentModel();
     const claudeTimeoutMs = settings.getClaudeTimeoutMs();
     const usageReserve = settings.getUsageReserve();
     const reasoningEfforts: Partial<Record<AgentProviderId, ReasoningEffort>> = {};
-    for (const provider of ['claude', 'codex'] as const) {
+    for (const provider of AGENT_PROVIDER_IDS) {
       const effort = settings.getReasoningEffort(provider);
       if (effort) reasoningEfforts[provider] = effort;
     }
     if (defaultProvider) result.defaultProvider = defaultProvider;
     if (claudeModel) result.claudeModel = claudeModel;
     if (codexModel) result.codexModel = codexModel;
+    if (openCodeModel) result.openCodeModel = openCodeModel;
     if (primaryAgentModel) result.primaryAgentModel = primaryAgentModel;
     if (claudeTimeoutMs !== undefined) result.claudeTimeoutMs = claudeTimeoutMs;
     if (usageReserve !== undefined) result.usageReserve = usageReserve;
@@ -84,6 +91,7 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
       defaultProvider: current.defaultProvider,
       ...(current.models?.claude ? { claudeModel: current.models.claude } : {}),
       ...(current.models?.codex ? { codexModel: current.models.codex } : {}),
+      ...(current.models?.opencode ? { openCodeModel: current.models.opencode } : {}),
       ...(current.reasoningEfforts ? { reasoningEfforts: current.reasoningEfforts } : {}),
       ...(current.baseBranch ? { baseBranch: current.baseBranch } : {}),
       ...(current.roborevChannelId ? { roborevChannelId: current.roborevChannelId } : {}),
@@ -95,12 +103,13 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
     const defaultProvider = input.defaultProvider;
     const claudeModel = input.claudeModel === undefined ? undefined : validateModelOverride(input.claudeModel);
     const codexModel = input.codexModel === undefined ? undefined : validateModelOverride(input.codexModel);
+    const openCodeModel = input.openCodeModel === undefined ? undefined : validateModelOverride(input.openCodeModel);
     const primaryAgentModel = input.primaryAgentModel === undefined ? undefined : validateModelOverride(input.primaryAgentModel);
     const claudeTimeoutMs = input.claudeTimeoutMs === undefined ? undefined : validateClaudeTimeout(input.claudeTimeoutMs);
     const usageReserve = input.usageReserve === undefined ? undefined : validateUsageReserve(input.usageReserve);
     if (defaultProvider !== undefined) requireProviderAvailable(defaultProvider);
     if (input.reasoningEfforts !== undefined) {
-      for (const provider of ['claude', 'codex'] as const) {
+      for (const provider of AGENT_PROVIDER_IDS) {
         if (Object.prototype.hasOwnProperty.call(input.reasoningEfforts, provider)
           && input.reasoningEfforts[provider] !== undefined) {
           validateSupportedAgentSettings(provider, { reasoningEffort: input.reasoningEfforts[provider] }, 'task');
@@ -114,11 +123,12 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
       }
       if (input.claudeModel !== undefined) settings.setDefaultModel('claude', claudeModel);
       if (input.codexModel !== undefined) settings.setDefaultModel('codex', codexModel);
+      if (input.openCodeModel !== undefined) settings.setDefaultModel('opencode', openCodeModel);
       if (input.primaryAgentModel !== undefined) settings.setPrimaryAgentModel(primaryAgentModel);
       if (Object.prototype.hasOwnProperty.call(input, 'claudeTimeoutMs')) settings.setClaudeTimeoutMs(claudeTimeoutMs);
       if (Object.prototype.hasOwnProperty.call(input, 'usageReserve')) settings.setUsageReserve(usageReserve);
       if (input.reasoningEfforts !== undefined) {
-        for (const provider of ['claude', 'codex'] as const) {
+        for (const provider of AGENT_PROVIDER_IDS) {
           if (Object.prototype.hasOwnProperty.call(input.reasoningEfforts, provider)) {
             settings.setReasoningEffort(provider, input.reasoningEfforts[provider]);
           }
@@ -144,11 +154,13 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
         else settings.clearDefaultProvider();
         settings.setDefaultModel('claude', before.claudeModel);
         settings.setDefaultModel('codex', before.codexModel);
+        settings.setDefaultModel('opencode', before.openCodeModel);
         settings.setPrimaryAgentModel(before.primaryAgentModel);
         settings.setClaudeTimeoutMs(before.claudeTimeoutMs);
         settings.setUsageReserve(before.usageReserve);
         settings.setReasoningEffort('claude', before.reasoningEfforts?.claude);
         settings.setReasoningEffort('codex', before.reasoningEfforts?.codex);
+        settings.setReasoningEffort('opencode', before.reasoningEfforts?.opencode);
       });
       try {
         await rollbackActivation?.();
@@ -170,13 +182,14 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
     }
     const claudeModel = input.claudeModel === undefined ? undefined : validateModelOverride(input.claudeModel);
     const codexModel = input.codexModel === undefined ? undefined : validateModelOverride(input.codexModel);
+    const openCodeModel = input.openCodeModel === undefined ? undefined : validateModelOverride(input.openCodeModel);
     const mcpProfile = input.mcpProfile === undefined || input.mcpProfile === null
       ? input.mcpProfile
       : validateMcpProfile(input.mcpProfile, profileNames);
     const baseBranch = input.baseBranch === undefined ? undefined : validateBaseBranch(input.baseBranch);
     if (input.defaultProvider !== undefined) requireProviderAvailable(input.defaultProvider);
     if (input.reasoningEfforts !== undefined) {
-      for (const provider of ['claude', 'codex'] as const) {
+      for (const provider of AGENT_PROVIDER_IDS) {
         if (Object.prototype.hasOwnProperty.call(input.reasoningEfforts, provider)
           && input.reasoningEfforts[provider] !== undefined) {
           validateSupportedAgentSettings(provider, { reasoningEffort: input.reasoningEfforts[provider] }, 'task');
@@ -187,8 +200,9 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
       if (input.defaultProvider !== undefined) projects.updateDefaultProvider(projectName, input.defaultProvider);
       if (input.claudeModel !== undefined) projects.updateModel(projectName, 'claude', claudeModel);
       if (input.codexModel !== undefined) projects.updateModel(projectName, 'codex', codexModel);
+      if (input.openCodeModel !== undefined) projects.updateModel(projectName, 'opencode', openCodeModel);
       if (input.reasoningEfforts !== undefined) {
-        for (const provider of ['claude', 'codex'] as const) {
+        for (const provider of AGENT_PROVIDER_IDS) {
           if (Object.prototype.hasOwnProperty.call(input.reasoningEfforts, provider)) {
             projects.updateReasoning(projectName, provider, input.reasoningEfforts[provider]);
           }
@@ -216,8 +230,12 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
     if (!projectRecord) throw new Error(`Project "${input.projectName}" not found`);
     const globalSettings = global();
     const projectSettingsValue = project(input.projectName);
-    const providerModel = input.provider === 'claude' ? 'claudeModel' : 'codexModel';
-    const hostModel = input.provider === 'claude' ? hostDefaults.claudeModel : hostDefaults.codexModel;
+    const providerModel = modelSettingKey(input.provider);
+    const hostModel = input.provider === 'claude'
+      ? hostDefaults.claudeModel
+      : input.provider === 'codex'
+        ? hostDefaults.codexModel
+        : hostDefaults.openCodeModel;
     const model = validateModelOverride(input.modelOverride)
       ?? projectSettingsValue[providerModel]
       ?? globalSettings[providerModel]

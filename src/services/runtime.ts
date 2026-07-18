@@ -109,6 +109,17 @@ export function resolvePrimaryAgentModel(input: {
     ?? input.providerDefaultModel;
 }
 
+export function configuredPrimaryModelForProvider(input: {
+  provider: AgentProviderId;
+  primaryAgentModel?: string;
+  openCodePrimaryModel?: string;
+}): string | undefined {
+  if (input.provider === 'opencode') {
+    return input.openCodePrimaryModel || input.primaryAgentModel || undefined;
+  }
+  return input.primaryAgentModel || undefined;
+}
+
 export interface HostMcpProfiles {
   profiles: readonly string[];
   resolve(profile?: string): HostMcpServers | undefined;
@@ -179,10 +190,10 @@ export async function startRuntime(
     const runtimeRenderers = new Set<TaskRenderer>();
     const rendererFactory = (thread: import('discord.js').AnyThreadChannel) => {
       const renderer = new DiscordTaskRenderer({
-      notifyUserId: config.notifyUserId,
-      controlCardStore: tasks,
-      controlCardCanEmbed: target => evaluateCapability('core.message.embed', capabilityContext(target as unknown as CapabilityPermissionChannel)).state === 'available',
-      controlCardCanPin: target => evaluateCapability('task.control-card.pin', capabilityContext(target as unknown as CapabilityPermissionChannel)).state === 'available',
+        notifyUserId: config.notifyUserId,
+        controlCardStore: tasks,
+        controlCardCanEmbed: target => evaluateCapability('core.message.embed', capabilityContext(target as unknown as CapabilityPermissionChannel)).state === 'available',
+        controlCardCanPin: target => evaluateCapability('task.control-card.pin', capabilityContext(target as unknown as CapabilityPermissionChannel)).state === 'available',
       });
       runtimeRenderers.add(renderer);
       const dispose = renderer.dispose.bind(renderer);
@@ -328,7 +339,11 @@ export async function startRuntime(
         const primaryAgentModel = resolvePrimaryAgentModel({
           persistedPrimaryModel: globalSettings.primaryAgentModel,
           configuredProviderModel: configuredModel,
-          configuredPrimaryModel: config.primaryAgentModel || undefined,
+          configuredPrimaryModel: configuredPrimaryModelForProvider({
+            provider,
+            primaryAgentModel: config.primaryAgentModel,
+            openCodePrimaryModel: config.openCodePrimaryModel,
+          }),
           providerDefaultModel: (provider === 'claude'
             ? config.defaultModel
             : provider === 'codex'
@@ -513,21 +528,21 @@ async function notifyRecoveredTasks(
         console.warn('[runtime] Failed to reconstruct task control card:', redactErrorMessage(error));
       });
 
-    const storedEvents = events.list(task.id);
-    let detail: string | undefined;
-    for (let index = storedEvents.length - 1; index >= 0; index--) {
-      const event = storedEvents[index].event;
-      if (event.type === 'status' && event.phase === 'Recovery checkpoint') {
-        detail = event.detail;
-        break;
+      const storedEvents = events.list(task.id);
+      let detail: string | undefined;
+      for (let index = storedEvents.length - 1; index >= 0; index--) {
+        const event = storedEvents[index].event;
+        if (event.type === 'status' && event.phase === 'Recovery checkpoint') {
+          detail = event.detail;
+          break;
+        }
       }
-    }
 
-    const content = [
-      `⚠️ Task interrupted during bot restart: **${task.objective.slice(0, 160)}**`,
-      detail ?? 'The task state was preserved. Resume requires explicit user action; no provider turn was replayed.',
-      'Send a new message in this thread when you are ready to resume.',
-    ].join('\n');
+      const content = [
+        `⚠️ Task interrupted during bot restart: **${task.objective.slice(0, 160)}**`,
+        detail ?? 'The task state was preserved. Resume requires explicit user action; no provider turn was replayed.',
+        'Send a new message in this thread when you are ready to resume.',
+      ].join('\n');
 
       await channel.send({ content }).catch((error: unknown) => {
         console.warn(`[runtime] Failed to post recovery checkpoint for task ${task.id}:`, redactErrorMessage(error));

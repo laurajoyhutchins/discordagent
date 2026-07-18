@@ -39,6 +39,13 @@ replace(
 );`;
 if (!source.includes(broad)) throw new Error('Broad settings transformation block not found');
 source = source.replace(broad, precise);
+source = source.replace(
+  "  \"       'Codex default model: ' + (current.codexModel ?? 'host/provider default'),\\n       `Codex status:\"",
+  "  \"      'Codex default model: ' + (current.codexModel ?? 'host/provider default'),\\n      `Codex status:\"",
+).replace(
+  "  \"       'Codex default model: ' + (current.codexModel ?? 'host/provider default'),\\n       'OpenCode default model: ' + (current.openCodeModel ?? 'host/provider default'),\\n       `Codex status:\"",
+  "  \"      'Codex default model: ' + (current.codexModel ?? 'host/provider default'),\\n      'OpenCode default model: ' + (current.openCodeModel ?? 'host/provider default'),\\n      `Codex status:\"",
+);
 writeFileSync(path, source);
 console.log('[prepare] narrowed settings transformations');
 await import('./reconcile-pr16.mjs');

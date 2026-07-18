@@ -12,4 +12,3 @@ src/data/*.sqlite-*
 
 .deciduous/
 docs/superpowers/plans/
-console.log(PermissionFlagsBits.EmbedLinks.toString()

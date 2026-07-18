@@ -338,10 +338,8 @@ export async function startRuntime(
         const selected = providers.list().includes(selectedProvider) ? providers.require(selectedProvider) : undefined;
         const availability = selected ? await selected.checkAvailability() : { available: false, reason: `Persisted provider "${selectedProvider}" is not registered on this host.` };
         if (!selected || !availability.available) {
-          settings.set('default_provider_unavailable', selectedProvider);
           await providerOnboarding.ensurePrompt({ forceSelection: true });
         } else {
-          settings.set('default_provider_unavailable', '');
           await activatePrimaryProvider(selectedProvider);
           await providerOnboarding.ensurePrompt();
         }

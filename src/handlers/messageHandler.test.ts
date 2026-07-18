@@ -23,9 +23,13 @@ function coordinator() {
   return {
     startFromMessage: vi.fn(async () => ({ id: 'task-1' })),
     continueFromMessage: vi.fn(async () => undefined),
+    estimateHandoff: vi.fn(async () => ({ estimatedInputTokens: 100, confidence: 'high', explanation: 'test' })),
+    handoffFromThread: vi.fn(async () => ({ id: 'task-handoff' })),
   } as unknown as TaskCoordinator & {
     startFromMessage: ReturnType<typeof vi.fn>;
     continueFromMessage: ReturnType<typeof vi.fn>;
+    estimateHandoff: ReturnType<typeof vi.fn>;
+    handoffFromThread: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -58,6 +62,8 @@ function dependencies(taskCoordinator: ReturnType<typeof coordinator>, authorize
     settings: { updateProject: vi.fn() },
     isAuthorized: () => authorized,
     defaultClaudeModel: '',
+    defaultCodexModel: '',
+    defaultOpenCodeModel: '',
     startLoop: vi.fn(async () => undefined),
     stopLoop: vi.fn(async () => undefined),
     getLoopStatus: vi.fn(() => null),
@@ -104,7 +110,6 @@ describe('messageHandler coordinator routing', () => {
     expect(input.reply).toHaveBeenCalledWith('You are not authorized to use this bot.');
   });
 
-
   it('redacts sensitive values from pickup logs', async () => {
     const taskCoordinator = coordinator();
     const input = message({ content: 'run with API_KEY=pickup-secret' });
@@ -149,6 +154,53 @@ describe('messageHandler coordinator routing', () => {
       provider: 'claude',
       model: 'opus',
     });
+  });
+
+  it('stores an OpenCode model from the project text command', async () => {
+    const taskCoordinator = coordinator();
+    const input = message({ content: '/model openai/gpt-5.4' });
+    const updateProject = vi.fn();
+    const openCodeProject: Project = { ...project, defaultProvider: 'opencode', models: {} };
+
+    await handleMessage(input, {
+      ...dependencies(taskCoordinator),
+      getProjectByChannel: channelId => channelId === 'agent-1' ? openCodeProject : undefined,
+      settings: { updateProject },
+      checkProvider: vi.fn(async () => ({ available: true })),
+    });
+
+    expect(updateProject).toHaveBeenCalledWith('factory-floor', { openCodeModel: 'openai/gpt-5.4' });
+    expect(input.reply).toHaveBeenCalledWith(expect.stringMatching(/OpenCode model/));
+  });
+
+  it('selects OpenCode from the project text command', async () => {
+    const taskCoordinator = coordinator();
+    const input = message({ content: '/provider opencode' });
+    const updateProject = vi.fn();
+
+    await handleMessage(input, {
+      ...dependencies(taskCoordinator),
+      settings: { updateProject },
+      checkProvider: vi.fn(async () => ({ available: true })),
+    });
+
+    expect(updateProject).toHaveBeenCalledWith('factory-floor', { defaultProvider: 'opencode' });
+    expect(input.reply).toHaveBeenCalledWith(expect.stringMatching(/OpenCode/));
+  });
+
+  it('allows a confirmed sibling handoff to OpenCode', async () => {
+    const taskCoordinator = coordinator();
+    const input = message({ content: '/provider opencode', thread: true });
+    const update = vi.fn(async () => undefined);
+    input.reply.mockResolvedValueOnce({
+      awaitMessageComponent: vi.fn(async () => ({ customId: 'handoff_confirm:opencode', update })),
+    });
+
+    await handleMessage(input, dependencies(taskCoordinator));
+
+    expect(taskCoordinator.estimateHandoff).toHaveBeenCalledWith('thread-1', 'opencode');
+    expect(taskCoordinator.handoffFromThread).toHaveBeenCalledWith({ sourceThread: input.channel, targetProvider: 'opencode' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/OpenCode/) }));
   });
 
   it('reports an unavailable project provider before reading or writing model settings', async () => {
@@ -214,5 +266,4 @@ describe('messageHandler coordinator routing', () => {
     });
     expect(input.reply).toHaveBeenCalledWith(expect.stringContaining('without creating a thread or worktree'));
   });
-
 });

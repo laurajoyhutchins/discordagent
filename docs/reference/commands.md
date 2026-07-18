@@ -14,6 +14,7 @@ Open a message's context menu and choose **Apps → Turn into task**. The select
 
 | Command | Valid Discord context | Authorization | Side effects |
 |---|---|---|---|
+| `/help` | Any guild channel | `AUTHORIZED_ROLE_IDS` | Read-only contextual guidance for the primary channel, project channel, task thread, or general workspace |
 | `/add-project` | Guild channel | `AUTHORIZED_ROLE_IDS` | Creates a project category and `#agent` channel, optionally creates `#roborev`, and persists the project |
 | `/list-projects` | Guild channel | `AUTHORIZED_ROLE_IDS` | Read-only project listing |
 | `/remove-project` | Guild channel | `AUTHORIZED_ROLE_IDS` | Archives the project and deletes its Discord category and channels; preserves historical records and worktrees |
@@ -31,6 +32,17 @@ Open a message's context menu and choose **Apps → Turn into task**. The select
 | `/roborev` | Guild channel | `AUTHORIZED_ROLE_IDS` | Enables or disables RoboRev review delivery for a named project and reconciles the review-source lifecycle |
 
 ## Slash-command details
+
+### `/help`
+
+No parameters. Discord Agent detects the current context and returns a private guidance card:
+
+- in `#agent-chat`, it explains natural PM conversation and global controls;
+- in a project channel, it explains how ordinary messages create isolated durable tasks;
+- in a task thread, it explains continuation, inspection, cancellation, one-turn model overrides, and sibling provider handoffs;
+- elsewhere, it points to project discovery and registration commands.
+
+The command is read-only and does not inspect or expose provider-session identifiers.
 
 ### `/add-project`
 

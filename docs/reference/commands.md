@@ -28,6 +28,7 @@ Open a message's context menu and choose **Apps → Turn into task**. The select
 | `/loop` | Registered project channel | `AUTHORIZED_ROLE_IDS` | Starts recurring turns in one durable thread, task, session, and worktree |
 | `/stop-loop` | Project channel or loop thread | `AUTHORIZED_ROLE_IDS` | Stops the associated recurring loop |
 | `/codex-auth` | `#agent-chat` | `AUTHORIZED_USER_ID` | Reads or changes host-local Codex authentication state through owner-only controls |
+| `/roborev` | Guild channel | `AUTHORIZED_ROLE_IDS` | Enables or disables RoboRev review delivery for a named project and reconciles the review-source lifecycle |
 
 ## Slash-command details
 
@@ -37,11 +38,13 @@ Open a message's context menu and choose **Apps → Turn into task**. The select
 |---|---:|---|
 | `name` | Yes | Project name; normalized for the Discord category and durable project key |
 | `path` | Yes | Literal filesystem path to the repository on the bot host |
-| `roborev` | No | Enable or disable Roborev explicitly; when omitted, Discord Agent detects the CLI and repository configuration |
+| `roborev` | No | Enable or disable RoboRev explicitly; when omitted, Discord Agent detects the CLI and repository configuration |
 
 The path must exist and resolve on the bot host. Discord does not expand `~`, shell variables, or command substitutions, so use a literal path. When `PROJECTS_BASE_DIR` is configured, the resolved project path must be beneath it.
 
-Path, provider availability, and duplicate-name validation happen before channel creation. If a later persistence step fails after channels are created, Discord Agent attempts compensating channel cleanup rather than leaving a partial project installation.
+Provider availability, path validation, and duplicate-name validation occur before channel creation. If later persistence fails after channels are created, Discord Agent attempts compensating channel cleanup rather than leaving a partial project installation.
+
+When RoboRev is enabled, the project receives a `#roborev` channel and the review-source lifecycle is notified after the project is persisted.
 
 ### `/remove-project`
 
@@ -49,7 +52,7 @@ Path, provider availability, and duplicate-name validation happen before channel
 |---|---:|---|
 | `name` | Yes | Registered project name |
 
-The project is soft-archived. Its Discord category and channels are deleted. Historical SQLite records and task worktrees are preserved.
+The project is soft-archived. Its Discord category and channels are deleted. Historical SQLite records and task worktrees are preserved. Review-source configuration is reconciled after removal.
 
 ### `/provider`
 
@@ -93,6 +96,17 @@ Iterations do not overlap. The loop reuses one durable task, thread, provider se
 - `logout` — revoke Codex authentication after confirmation.
 
 Discord Agent never posts the provider verification URL or one-time code to Discord and never stores those values in SQLite.
+
+### `/roborev`
+
+| Parameter | Required | Description |
+|---|---:|---|
+| `project` | Yes | Registered project name |
+| `enable` | Yes | `true` to create and persist a review channel; `false` to remove it |
+
+Enabling first verifies that the configured RoboRev CLI is available and that the repository has RoboRev setup such as `.roborev`, `.roborev.json`, or the expected Git hook. It then creates `#roborev`, persists its channel ID, and notifies the in-process review source to reconcile.
+
+Disabling deletes the project's review channel, clears the persisted channel ID, and notifies the review source. RoboRev is a review integration, not an agent provider; `/provider` does not select it.
 
 ## Text commands
 

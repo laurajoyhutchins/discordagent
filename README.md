@@ -21,7 +21,7 @@ Discord Agent provides a provider-neutral runtime with executable Claude, Codex,
 - **Discord-native decisions** — confirmations, select menus, and native polls collect user choices without turning routine conversation into command syntax.
 - **Quiet usage admission** — provider windows, calibrated task estimates, and active reservations are managed internally; `/usage` and `/agents` expose details on demand, while normal conversation surfaces only material constraints.
 
-OpenCode is an optional local provider. Install the OpenCode CLI and run `opencode auth login` on the bot host before selecting it. Project tasks use ACP streaming, explicit Discord approvals, and persisted sessions for continuation. PM turns use a fresh one-turn ACP session with an inline deny-all permission configuration and automatic cancellation of every permission request. Discord Agent never silently falls back to Claude or Codex when OpenCode is unavailable or fails.
+OpenCode is an optional local provider. Install the OpenCode CLI and run `opencode auth login` on the bot host before selecting it. Project tasks use ACP streaming, explicit Discord approvals, and persisted sessions for continuation. PM turns use a fresh one-turn ACP session with a dedicated deny-all primary agent, every tool disabled, every permission request cancelled, and a disposable empty workspace. Discord Agent never silently falls back to Claude or Codex when OpenCode is unavailable or fails.
 
 ## Safety model
 
@@ -34,7 +34,7 @@ Discord Agent is intended for a private server with trusted users and repositori
 - Dirty task worktrees are never force-removed.
 - Provider identity cannot change inside an existing task thread.
 - Claude loads user-level settings only. Project and local Claude settings are ignored so repository content cannot weaken global approval policy.
-- OpenCode PM processes receive a deny-all runtime permission configuration and cancel all ACP permission requests.
+- OpenCode PM processes select a dedicated deny-all agent, disable every tool, cancel all ACP permission requests, and run in a newly created empty temporary directory.
 - Provider credentials, API keys, device codes, and Roborev webhook tokens are never stored in SQLite.
 - Sensitive provider and task content is redacted before SQLite persistence, Discord rendering, and logs.
 - Interrupted work is preserved and requires an explicit user message to resume.
@@ -154,7 +154,7 @@ A provider change inside a completed task thread is a confirmed sibling handoff,
 
 OpenCode runs through the local `opencode acp` CLI and the official ACP client transport. It streams normalized text, plans, commands, file changes, usage, and status events, and maps ACP permission requests to explicit Discord approvals. A task persists its ACP session identity before completion is awaited so replies can continue the same OpenCode session when the server advertises loading or resuming.
 
-For `#agent-chat`, `OpenCodePrimaryModel` starts a fresh ACP process and session for each response, sends the same bounded provider-neutral PM prompt used by the other adapters, and parses the structured response. The child process receives `OPENCODE_CONFIG_CONTENT` with `permission: {"*":"deny"}`, and every ACP permission request is cancelled. PM continuity remains in Discord Agent's SQLite message, memory, and retrieval system rather than in a privileged OpenCode coding session.
+For `#agent-chat`, `OpenCodePrimaryModel` starts a fresh ACP process and session for each response, sends the same bounded provider-neutral PM prompt used by the other adapters, and parses the structured response. The child process receives inline runtime configuration that sets global permissions to `deny`, selects a dedicated `discord-agent-primary` agent with its own deny-all permission rule and all tools disabled, disables configured plugins, sharing, snapshots, and auto-update, and cancels every ACP permission request. Each turn uses a newly created empty temporary directory that is deleted after the ACP process closes. PM continuity remains in Discord Agent's SQLite message, memory, and retrieval system rather than in a privileged OpenCode coding session.
 
 The runtime never silently switches providers or starts a fallback batch command.
 

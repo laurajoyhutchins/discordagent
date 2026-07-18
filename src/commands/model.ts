@@ -8,6 +8,7 @@ import {
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { REASONING_EFFORTS, type AgentProviderId, type ReasoningEffort } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { Project } from '../types.js';
 import {
   getDefaultModel,
@@ -35,6 +36,12 @@ const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { label: 'Default', value: '__default__', description: 'Use CLAUDE_MODEL or the provider default', emoji: '🔄' },
 ];
 
+type ModelSettingKey = 'claudeModel' | 'codexModel' | 'openCodeModel';
+
+function modelSettingKey(provider: AgentProviderId): ModelSettingKey {
+  return provider === 'claude' ? 'claudeModel' : provider === 'codex' ? 'codexModel' : 'openCodeModel';
+}
+
 export interface ModelCommandDependencies {
   getProjectByChannel(channelId: string): Project | undefined;
   settings: Pick<SettingsService, 'updateProject' | 'updateGlobal' | 'updateGlobalWithActivation'>;
@@ -45,9 +52,16 @@ export interface ModelCommandDependencies {
   captureDefaultProviderState?(): () => void;
   defaultClaudeModel: string;
   defaultCodexModel?: string;
+  defaultOpenCodeModel?: string;
   primaryChannelId?: string;
   primaryOwnerId?: string;
   checkProvider?(provider: AgentProviderId): Promise<{ available: boolean; reason?: string }>;
+}
+
+function configuredDefaultModel(dependencies: ModelCommandDependencies, provider: AgentProviderId): string | undefined {
+  if (provider === 'claude') return dependencies.defaultClaudeModel;
+  if (provider === 'codex') return dependencies.defaultCodexModel;
+  return dependencies.defaultOpenCodeModel;
 }
 
 function defaultDependencies(): ModelCommandDependencies {
@@ -61,14 +75,19 @@ function defaultDependencies(): ModelCommandDependencies {
     captureDefaultProviderState: capturePrimaryProviderState,
     defaultClaudeModel: process.env.CLAUDE_MODEL ?? '',
     defaultCodexModel: process.env.CODEX_MODEL ?? '',
+    defaultOpenCodeModel: process.env.OPENCODE_MODEL ?? '',
     primaryChannelId: optionalPrimary(getPrimaryChannelId),
     primaryOwnerId: optionalPrimary(getPrimaryOwnerId),
     checkProvider: async provider => {
       const registry = getProviderRegistry();
-      if (!registry.list().includes(provider)) return { available: false, reason: `${provider === 'codex' ? 'Codex' : 'Claude'} is unavailable on this host.` };
+      if (!registry.list().includes(provider)) return { available: false, reason: `${providerLabel(provider)} is unavailable on this host.` };
       return registry.availability(provider);
     },
   };
+}
+
+function unsupportedThinkingMessage(provider: AgentProviderId): string {
+  return `Thinking depth is currently available only for Codex. ${providerLabel(provider)} keeps its provider-managed reasoning behavior.`;
 }
 
 export async function handleModel(
@@ -102,11 +121,11 @@ export async function handleModel(
       return;
     }
     const currentModel = dependencies.getDefaultModel?.(provider)
-      || (provider === 'claude' ? dependencies.defaultClaudeModel : dependencies.defaultCodexModel)
+      || configuredDefaultModel(dependencies, provider)
       || 'provider default';
     const currentReasoning = dependencies.getDefaultReasoning?.(provider) || 'provider/model default';
     if (thinkingValue && provider !== 'codex') {
-      await interaction.reply({ content: 'Thinking depth is currently available for the Codex PM. Claude keeps its provider-managed thinking behavior.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: unsupportedThinkingMessage(provider), flags: MessageFlags.Ephemeral });
       return;
     }
     if (thinkingValue && thinkingValue !== '__default__'
@@ -124,13 +143,12 @@ export async function handleModel(
         await interaction.reply({ content: 'Global model settings are unavailable until the runtime is fully initialized.', flags: MessageFlags.Ephemeral });
         return;
       }
-      const updates = {
-        ...(directValue ? (provider === 'claude' ? { claudeModel: modelToSet } : { codexModel: modelToSet }) : {}),
-        ...(thinkingValue ? { reasoningEfforts: { [provider]: reasoningToSet } } : {}),
-      };
+      const updates: Parameters<SettingsService['updateGlobal']>[0] = {};
+      if (directValue) updates[modelSettingKey(provider)] = modelToSet;
+      if (thinkingValue) updates.reasoningEfforts = { [provider]: reasoningToSet };
       try {
         await dependencies.settings.updateGlobalWithActivation(updates, async () => {
-          await activateProvider!(provider);
+          await activateProvider(provider);
         }, dependencies.captureDefaultProviderState?.());
       } catch (error) {
         console.error('[model] Global model activation failed:', redactErrorMessage(error));
@@ -142,13 +160,15 @@ export async function handleModel(
         thinkingValue ? `thinking depth set to \`${reasoningToSet || 'provider/model default'}\`` : undefined,
       ].filter((value): value is string => Boolean(value));
       await interaction.reply({
-        content: `Global ${provider} PM settings updated: ${changes.join('; ')}.`,
+        content: `Global ${providerLabel(provider)} PM settings updated: ${changes.join('; ')}.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
     await interaction.reply({
-      content: `Global ${provider} PM model: \`${currentModel}\`. Thinking depth: \`${currentReasoning}\`.`,
+      content: provider === 'codex'
+        ? `Global Codex PM model: \`${currentModel}\`. Thinking depth: \`${currentReasoning}\`.`
+        : `Global ${providerLabel(provider)} PM model: \`${currentModel}\`.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -169,7 +189,7 @@ export async function handleModel(
 
   if (thinkingValue && provider !== 'codex') {
     await interaction.reply({
-      content: 'Thinking depth is currently available for Codex task projects. Claude keeps its provider-managed thinking behavior.',
+      content: unsupportedThinkingMessage(provider),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -182,7 +202,7 @@ export async function handleModel(
   }
 
   const currentModel = project.models?.[provider]
-    || (provider === 'claude' ? dependencies.defaultClaudeModel : '')
+    || configuredDefaultModel(dependencies, provider)
     || 'provider default';
 
   if (directValue || thinkingValue) {
@@ -191,10 +211,7 @@ export async function handleModel(
       ? thinkingValue as ReasoningEffort
       : undefined;
     const updates: Parameters<SettingsService['updateProject']>[1] = {};
-    if (directValue) {
-      if (provider === 'claude') updates.claudeModel = modelToSet ?? '';
-      else updates.codexModel = modelToSet ?? '';
-    }
+    if (directValue) updates[modelSettingKey(provider)] = modelToSet ?? '';
     if (thinkingValue) updates.reasoningEfforts = { [provider]: reasoningToSet };
     dependencies.settings.updateProject(project.name, updates);
     const changes = [
@@ -205,17 +222,17 @@ export async function handleModel(
       embeds: [new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('✅ Model Updated')
-        .setDescription(`${provider} settings for **${project.name}**: ${changes.join('; ')}.`)
+        .setDescription(`${providerLabel(provider)} settings for **${project.name}**: ${changes.join('; ')}.`)
         .setTimestamp()],
     });
     return;
   }
 
   if (provider !== 'claude') {
-    await interaction.reply({
-      content: `Current Codex model: \`${currentModel}\`.\nThinking depth: \`${currentReasoning}\`.\nSet the model with \`custom\` and the thinking depth with \`thinking\`.`,
-      flags: MessageFlags.Ephemeral,
-    });
+    const details = provider === 'codex'
+      ? `Current Codex model: \`${currentModel}\`.\nThinking depth: \`${currentReasoning}\`.\nSet the model with \`custom\` and the thinking depth with \`thinking\`.`
+      : `Current ${providerLabel(provider)} model: \`${currentModel}\`.\nSet the model with \`custom\`.`;
+    await interaction.reply({ content: details, flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -253,9 +270,7 @@ export async function handleModel(
     });
     const selected = selection.values[0];
     const modelToSet = selected === '__default__' ? '' : selected;
-    dependencies.settings.updateProject(project.name, provider === 'claude'
-      ? { claudeModel: modelToSet }
-      : { codexModel: modelToSet });
+    dependencies.settings.updateProject(project.name, { claudeModel: modelToSet });
     selectMenu.setDisabled(true);
     await selection.update({
       embeds: [new EmbedBuilder()

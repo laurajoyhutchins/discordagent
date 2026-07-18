@@ -4,7 +4,8 @@ import { commands } from './definitions.js';
 describe('/capabilities command', () => {
   it('is registered as an authorized diagnostic slash command', () => {
     const command = commands.find(item => item.name === 'capabilities')?.toJSON();
-    expect(command?.description).toMatch(/permission|capabilit/i);
+    const description = command && 'description' in command ? command.description : undefined;
+    expect(description).toMatch(/permission|capabilit/i);
     expect(command).toMatchObject({ name: 'capabilities' });
   });
 

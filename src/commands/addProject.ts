@@ -141,7 +141,7 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     if (!isGitRepo) {
       embed.addFields({
         name: 'Before tasks can start',
-        value: 'Initialize the directory as a Git repository and create an initial commit on the bot host.',
+        value: 'This non-Git project is registered, but tasks cannot start until the directory is initialized as a Git repository and has an initial commit.',
       });
     }
 

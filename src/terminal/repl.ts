@@ -21,7 +21,8 @@ export interface ReplDependencies {
   tasks: TaskRepository;
   providers: ProviderRegistry;
   settings: SettingsService;
-  onShutdown?: () => void;
+  onExitRepl?: () => void;
+  onSigintShutdown?: () => void;
   activatePrimaryProvider?: (provider: AgentProviderId) => Promise<unknown>;
   isDiscordConnected?: () => boolean;
 }
@@ -92,7 +93,7 @@ export class Repl {
 
     this.rl.on('SIGINT', () => {
       this.writeLine('^C');
-      this.deps.onShutdown?.();
+      this.deps.onSigintShutdown?.();
     });
 
     this.writeLine('Terminal REPL connected. Type /help for commands.');
@@ -202,7 +203,7 @@ export class Repl {
       if (cmdResult.exit) {
         this.writeLine(cmdResult.text);
         await this.stop();
-        this.deps.onShutdown?.();
+        this.deps.onExitRepl?.();
         return;
       }
       if (cmdResult.clear) {
@@ -212,11 +213,19 @@ export class Repl {
       if (cmdResult.projectChanged !== undefined) {
         this.currentProject = cmdResult.projectChanged;
       }
-      if (cmdResult.providerChanged !== undefined && this.deps.activatePrimaryProvider) {
-        try {
-          await this.deps.activatePrimaryProvider(cmdResult.providerChanged as AgentProviderId);
-        } catch (error) {
-          this.writeLine(`agent> Failed to activate provider: ${sanitizeTerminalError(error)}`);
+      if (cmdResult.providerChanged !== undefined) {
+        const providerId = cmdResult.providerChanged as AgentProviderId;
+        if (this.deps.activatePrimaryProvider) {
+          try {
+            await this.deps.activatePrimaryProvider(providerId);
+            this.deps.settings.updateGlobal({ defaultProvider: providerId });
+            this.writeLine(cmdResult.text);
+          } catch (error) {
+            this.writeLine(`agent> Failed to activate ${providerId}: ${sanitizeTerminalError(error)}`);
+          }
+        } else {
+          this.deps.settings.updateGlobal({ defaultProvider: providerId });
+          this.writeLine(cmdResult.text);
         }
       }
       if (cmdResult.modelChanged !== undefined && this.deps.activatePrimaryProvider) {

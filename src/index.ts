@@ -123,8 +123,11 @@ client.once('clientReady', async () => {
           settings: runtime.settingsService,
           isDiscordConnected: () => client.isReady(),
           activatePrimaryProvider,
-          onShutdown: () => {
+          onExitRepl: () => {
             // /exit was entered — just stop the REPL, leave the bot running
+          },
+          onSigintShutdown: () => {
+            void shutdown();
           },
         });
         repl.start().catch((err: unknown) => {

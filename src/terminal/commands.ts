@@ -171,7 +171,6 @@ async function handleProvider(args: string[], ctx: CommandContext): Promise<Comm
     return { text: `Failed to check ${providerLabel(requested)} availability: ${redactErrorMessage(error)}` };
   }
 
-  ctx.settings.updateGlobal({ defaultProvider: requested });
   return { text: `Primary provider set to ${providerLabel(requested)}. Activating...`, providerChanged: requested };
 }
 
@@ -190,16 +189,10 @@ async function handleModel(args: string[], ctx: CommandContext): Promise<Command
 
   const modelName = args[0];
 
-  // Determine which model setting to update based on the current provider
-  if (provider === 'claude') {
-    ctx.settings.updateGlobal({ claudeModel: modelName });
-  } else if (provider === 'codex') {
-    ctx.settings.updateGlobal({ codexModel: modelName });
-  } else if (provider === 'opencode') {
-    ctx.settings.updateGlobal({ openCodeModel: modelName });
-  } else {
-    ctx.settings.updateGlobal({ primaryAgentModel: modelName });
-  }
+  // Update primaryAgentModel which has highest precedence in model resolution.
+  // If users want a provider-specific override they can still set it via
+  // the Discord /model command per project.
+  ctx.settings.updateGlobal({ primaryAgentModel: modelName });
 
   const label = provider ? providerLabel(provider) : 'primary agent';
   return { text: `${label} model set to "${modelName}". Activating...`, modelChanged: modelName };

@@ -22,7 +22,8 @@ function createMockDeps(overrides: Record<string, unknown> = {}) {
     global: vi.fn().mockReturnValue({ defaultProvider: 'codex', claudeModel: 'claude-3' }),
     updateGlobal: vi.fn().mockReturnValue({}),
   };
-  const onShutdown = vi.fn();
+  const onExitRepl = vi.fn();
+  const onSigintShutdown = vi.fn();
   const activatePrimaryProvider = vi.fn().mockResolvedValue(undefined);
 
   return {
@@ -34,7 +35,8 @@ function createMockDeps(overrides: Record<string, unknown> = {}) {
     settings,
     ownerId: 'test-user',
     displayName: 'user',
-    onShutdown,
+    onExitRepl,
+    onSigintShutdown,
     activatePrimaryProvider,
   } as never;
 }
@@ -137,14 +139,30 @@ describe('Repl', () => {
     await repl.stop();
   });
 
-  it('processes /provider change and triggers activation', async () => {
+  it('processes /provider change — activates then persists on success', async () => {
     const deps = createMockDeps() as any;
     deps.providers.list.mockReturnValue(['codex', 'opencode']);
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('/provider opencode');
+    // Activation should happen BEFORE settings persistence
+    const activationCall = deps.activatePrimaryProvider.mock.invocationCallOrder[0];
+    const settingsCall = deps.settings.updateGlobal.mock.invocationCallOrder[0];
+    expect(activationCall).toBeLessThan(settingsCall!);
     expect(deps.settings.updateGlobal).toHaveBeenCalledWith({ defaultProvider: 'opencode' });
     expect(deps.activatePrimaryProvider).toHaveBeenCalledWith('opencode');
+    await repl.stop();
+  });
+
+  it('does not persist settings on activation failure', async () => {
+    const deps = createMockDeps() as any;
+    deps.providers.list.mockReturnValue(['codex', 'opencode']);
+    deps.activatePrimaryProvider.mockRejectedValue(new Error('Auth failed'));
+    const repl = new Repl(deps);
+    await repl.start();
+    await repl.processLine('/provider opencode');
+    // Settings should NOT have been updated after failed activation
+    expect(deps.settings.updateGlobal).not.toHaveBeenCalled();
     await repl.stop();
   });
 
@@ -177,12 +195,13 @@ describe('Repl', () => {
     await repl.stop();
   });
 
-  it('processes /model change and triggers activation', async () => {
+  it('processes /model change with primaryAgentModel precedence', async () => {
     const deps = createMockDeps() as any;
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('/model claude-3-haiku');
-    expect(deps.settings.updateGlobal).toHaveBeenCalled();
+    // Should update primaryAgentModel (highest precedence), not provider-specific model
+    expect(deps.settings.updateGlobal).toHaveBeenCalledWith({ primaryAgentModel: 'claude-3-haiku' });
     expect(deps.activatePrimaryProvider).toHaveBeenCalled();
     await repl.stop();
   });
@@ -209,13 +228,25 @@ describe('Repl', () => {
     await repl.stop();
   });
 
-  it('processes /exit command and triggers shutdown', async () => {
+  it('processes /exit command and triggers exit repl', async () => {
     const deps = createMockDeps() as any;
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('/exit');
     expect(repl.isRunning).toBe(false);
-    expect(deps.onShutdown).toHaveBeenCalled();
+    expect(deps.onExitRepl).toHaveBeenCalled();
+    expect(deps.onSigintShutdown).not.toHaveBeenCalled();
+    await repl.stop();
+  });
+
+  it('triggers sigint shutdown on SIGINT', async () => {
+    const deps = createMockDeps() as any;
+    const repl = new Repl(deps);
+    await repl.start();
+    const rl = (repl as any).rl;
+    rl?.emit('SIGINT');
+    expect(deps.onSigintShutdown).toHaveBeenCalled();
+    expect(deps.onExitRepl).not.toHaveBeenCalled();
     await repl.stop();
   });
 
@@ -404,14 +435,15 @@ describe('Repl', () => {
     await repl.stop();
   });
 
-  it('handles activation failure gracefully', async () => {
+  it('handles activation failure without persisting', async () => {
     const deps = createMockDeps() as any;
     deps.providers.list.mockReturnValue(['codex', 'opencode']);
     deps.activatePrimaryProvider.mockRejectedValue(new Error('Provider not available'));
     const repl = new Repl(deps);
     await repl.start();
     await repl.processLine('/provider opencode');
-    expect(deps.activatePrimaryProvider).toHaveBeenCalled();
+    expect(deps.activatePrimaryProvider).toHaveBeenCalledWith('opencode');
+    expect(deps.settings.updateGlobal).not.toHaveBeenCalled();
     await repl.stop();
   });
 

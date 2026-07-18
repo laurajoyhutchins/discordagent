@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
@@ -40,31 +40,31 @@ export interface OpenCodePrimaryModelOptions {
 }
 
 export function openCodePrimaryEnvironment(
-  baseEnvironment: NodeJS.ProcessEnv = process.env,
+  baseEnvironment: NodeJS.ProcessEnv,
+  isolationRoot: string,
 ): NodeJS.ProcessEnv {
+  const environment = { ...baseEnvironment };
+  delete environment.OPENCODE_CONFIG;
+  delete environment.OPENCODE_CONFIG_DIR;
+
   return {
-    ...baseEnvironment,
+    ...environment,
+    XDG_CONFIG_HOME: join(isolationRoot, 'xdg-config'),
+    OPENCODE_CONFIG_DIR: join(isolationRoot, 'opencode-config'),
     OPENCODE_CONFIG_CONTENT: JSON.stringify(PRIMARY_RUNTIME_CONFIG),
   };
 }
 
 export class OpenCodePrimaryModel implements PrimaryModel {
   private readonly timeoutMs: number;
-  private readonly createConnection: (handlers: OpenCodeAcpHandlers) => Promise<OpenCodeAcpConnection>;
 
   constructor(private readonly options: OpenCodePrimaryModelOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? 120_000;
-    this.createConnection = options.createConnection ?? (handlers => Promise.resolve(new OpenCodeAcpTransport({
-      ...(options.cliPath ? { cliPath: options.cliPath } : {}),
-      handlers,
-      env: openCodePrimaryEnvironment(),
-    })));
   }
 
   async respond(input: { context: string; message: string }): Promise<PrimaryResponse> {
     let connection: OpenCodeAcpConnection | undefined;
-    let workingDirectory = this.options.workingDirectory;
-    let ownsWorkingDirectory = false;
+    let isolationRoot: string | undefined;
     let text = '';
     const adapter = createOpenCodeEventAdapter();
     const handlers: OpenCodeAcpHandlers = {
@@ -77,12 +77,19 @@ export class OpenCodePrimaryModel implements PrimaryModel {
     };
 
     try {
-      if (!workingDirectory) {
-        workingDirectory = mkdtempSync(join(tmpdir(), 'discordagent-opencode-pm-'));
-        ownsWorkingDirectory = true;
+      isolationRoot = mkdtempSync(join(tmpdir(), 'discordagent-opencode-pm-'));
+      const workingDirectory = this.options.workingDirectory ?? join(isolationRoot, 'workspace');
+      if (!this.options.workingDirectory) {
+        mkdirSync(workingDirectory);
       }
 
-      connection = await this.createConnection(handlers);
+      connection = this.options.createConnection
+        ? await this.options.createConnection(handlers)
+        : new OpenCodeAcpTransport({
+            ...(this.options.cliPath ? { cliPath: this.options.cliPath } : {}),
+            handlers,
+            env: openCodePrimaryEnvironment(process.env, isolationRoot),
+          });
       const initialized = await this.withTimeout(connection.initialize(), 'initialization');
       if (initialized.protocolVersion !== PROTOCOL_VERSION) {
         throw new Error(
@@ -117,11 +124,11 @@ export class OpenCodePrimaryModel implements PrimaryModel {
       return { reply: `I could not complete the coordination turn: ${redactErrorMessage(error)}` };
     } finally {
       await connection?.close().catch(() => undefined);
-      if (ownsWorkingDirectory && workingDirectory) {
+      if (isolationRoot) {
         try {
-          rmSync(workingDirectory, { recursive: true, force: true });
+          rmSync(isolationRoot, { recursive: true, force: true });
         } catch {
-          // Workspace cleanup is best effort and must not replace the PM response.
+          // Isolation cleanup is best effort and must not replace the PM response.
         }
       }
     }

@@ -1,4 +1,4 @@
-import type { AgentProviderId, ProviderUsage, TaskResult } from '../agents/contracts.js';
+import { AGENT_PROVIDER_IDS, type AgentProviderId, type ProviderUsage, type TaskResult } from '../agents/contracts.js';
 import type {
   UsageRepository,
   UsageReservation,
@@ -184,7 +184,7 @@ export function createUsageAdmissionService(
     },
 
     detail() {
-      return (['claude', 'codex'] as const).map(provider => {
+      return AGENT_PROVIDER_IDS.map(provider => {
         const state = posture(provider);
         const availability = state.available === undefined ? '' : `, ${state.available.toFixed(1)} available`;
         return `${provider}: ${state.posture}${availability}, ${state.reserved.toFixed(1)} reserved`;

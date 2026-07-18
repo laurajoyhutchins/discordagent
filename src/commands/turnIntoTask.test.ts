@@ -26,26 +26,39 @@ const task: TaskRecord = {
   updatedAt: 1,
 };
 
+interface FakeTurnIntoTaskInteraction {
+  user: { id: string };
+  guild: { members: { fetch: ReturnType<typeof vi.fn> } };
+  targetMessage: {
+    channelId: string;
+    content: string;
+    hasThread: boolean;
+    thread: { id: string } | null;
+  };
+  reply: ReturnType<typeof vi.fn>;
+  deferReply: ReturnType<typeof vi.fn>;
+  editReply: ReturnType<typeof vi.fn>;
+}
+
 function makeInteraction(overrides: Partial<{
   channelId: string;
   content: string;
   hasThread: boolean;
   threadId: string;
-}> = {}) {
-  const targetMessage = {
-    channelId: overrides.channelId ?? project.agentChannelId,
-    content: overrides.content ?? '  Implement the feature  ',
-    hasThread: overrides.hasThread ?? false,
-    thread: overrides.threadId ? { id: overrides.threadId } : null,
-  };
+}> = {}): FakeTurnIntoTaskInteraction {
   return {
     user: { id: 'user-1' },
     guild: { members: { fetch: vi.fn(async () => ({ id: 'member-1' })) } },
-    targetMessage,
+    targetMessage: {
+      channelId: overrides.channelId ?? project.agentChannelId,
+      content: overrides.content ?? '  Implement the feature  ',
+      hasThread: overrides.hasThread ?? false,
+      thread: overrides.threadId ? { id: overrides.threadId } : null,
+    },
     reply: vi.fn(async () => undefined),
     deferReply: vi.fn(async () => undefined),
     editReply: vi.fn(async () => undefined),
-  } as never;
+  };
 }
 
 function dependencies(overrides: Partial<TurnIntoTaskDependencies> = {}): TurnIntoTaskDependencies {
@@ -71,7 +84,7 @@ describe('Turn into task', () => {
     const interaction = makeInteraction();
     const deps = dependencies();
 
-    await handleTurnIntoTask(interaction, deps);
+    await handleTurnIntoTask(interaction as never, deps);
 
     expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
     expect(deps.coordinator.startFromMessage).toHaveBeenCalledWith({
@@ -86,7 +99,7 @@ describe('Turn into task', () => {
     const interaction = makeInteraction();
     const deps = dependencies({ isAuthorized: vi.fn(() => false) });
 
-    await handleTurnIntoTask(interaction, deps);
+    await handleTurnIntoTask(interaction as never, deps);
 
     expect(deps.coordinator.startFromMessage).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
@@ -99,7 +112,7 @@ describe('Turn into task', () => {
     const interaction = makeInteraction({ channelId: 'other-channel' });
     const deps = dependencies({ getProjectByChannel: vi.fn(() => undefined) });
 
-    await handleTurnIntoTask(interaction, deps);
+    await handleTurnIntoTask(interaction as never, deps);
 
     expect(deps.coordinator.startFromMessage).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
@@ -112,7 +125,7 @@ describe('Turn into task', () => {
     const interaction = makeInteraction({ content: '   ' });
     const deps = dependencies();
 
-    await handleTurnIntoTask(interaction, deps);
+    await handleTurnIntoTask(interaction as never, deps);
 
     expect(deps.coordinator.startFromMessage).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
@@ -125,7 +138,7 @@ describe('Turn into task', () => {
     const interaction = makeInteraction({ hasThread: true, threadId: 'existing-thread' });
     const deps = dependencies();
 
-    await handleTurnIntoTask(interaction, deps);
+    await handleTurnIntoTask(interaction as never, deps);
 
     expect(deps.coordinator.startFromMessage).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith({

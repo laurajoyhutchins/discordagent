@@ -5,8 +5,15 @@ import {
   EmbedBuilder,
 } from 'discord.js';
 import type { AgentProviderId, TaskResult, TaskStatus } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { TaskControlCardRecord, TaskControlCardPinState } from '../types.js';
 import { redactSensitiveText } from '../utils/redaction.js';
+import {
+  operatorEmbed,
+  sessionStateLabel,
+  taskStatusLabel,
+  taskStatusTone,
+} from './presentation.js';
 
 const PLAIN_TEXT_LIMIT = 1_900;
 const EMBED_OUTPUT_LIMIT = 4_000;
@@ -46,17 +53,6 @@ export interface TaskControlCardMessage {
   pin?(): Promise<unknown>;
 }
 
-const STATUS_LABELS: Readonly<Record<TaskStatus, string>> = {
-  created: 'created',
-  starting: 'starting',
-  running: 'running',
-  waiting_for_user: 'waiting for user',
-  completed: 'completed',
-  failed: 'failed',
-  cancelled: 'cancelled',
-  interrupted: 'interrupted',
-};
-
 export function taskControlCustomId(action: TaskControlAction): string {
   return `task-control:${action}`;
 }
@@ -76,17 +72,17 @@ function linesFor(view: TaskControlCardView): string[] {
   return [
     `Objective: ${safe(view.objective)}`,
     `Project: ${safe(view.projectName)}`,
-    `Provider: ${view.provider}`,
+    `Provider: ${providerLabel(view.provider)}`,
     ...(view.model ? [`Model: ${safe(view.model)}`] : []),
-    `State: ${STATUS_LABELS[view.status]}`,
+    `State: ${taskStatusLabel(view.status)}`,
     ...(view.branchName ? [`Branch: ${safe(view.branchName)}`] : []),
-    `Session: ${view.sessionState}`,
-    ...(view.phase ? [`Phase: ${safe(view.phase)}`] : []),
+    `Session: ${sessionStateLabel(view.sessionState)}`,
+    ...(view.phase ? [`Current work: ${safe(view.phase)}`] : []),
     ...(view.usagePosture && !['healthy', 'normal'].includes(view.usagePosture)
       ? [`Usage posture: ${safe(view.usagePosture)}`]
       : []),
     ...(result?.summary ? [`Outcome: ${safe(result.summary)}`] : []),
-    ...(result?.unresolved?.length ? [`Unresolved decisions: ${result.unresolved.map(safe).join('; ')}`] : []),
+    ...(result?.unresolved?.length ? [`Needs attention: ${result.unresolved.map(safe).join('; ')}`] : []),
   ];
 }
 
@@ -118,18 +114,19 @@ export function renderTaskControlCard(
   if (!options.embeds) return { content, components };
 
   const [objective, ...fields] = lines;
-  const embed = new EmbedBuilder()
-    .setTitle('Task control card')
-    .setDescription(objective.slice('Objective: '.length, 4_000))
-    .addFields(fields.map(line => {
-      const separator = line.indexOf(': ');
-      return {
-        name: separator >= 0 ? line.slice(0, separator) : 'Status',
-        value: (separator >= 0 ? line.slice(separator + 2) : line).slice(0, 1_024),
-        inline: line.startsWith('Provider:') || line.startsWith('Model:') || line.startsWith('State:') || line.startsWith('Session:'),
-      };
-    }))
-    .setFooter({ text: 'Durable task projection; SQLite remains authoritative.' });
+  const embed = operatorEmbed({
+    title: `Task · ${taskStatusLabel(view.status)}`,
+    description: objective.slice('Objective: '.length, 4_000),
+    tone: taskStatusTone(view.status),
+    footer: 'Durable task state · Use Inspect for details.',
+  }).addFields(fields.map(line => {
+    const separator = line.indexOf(': ');
+    return {
+      name: separator >= 0 ? line.slice(0, separator) : 'Status',
+      value: (separator >= 0 ? line.slice(separator + 2) : line).slice(0, 1_024),
+      inline: line.startsWith('Provider:') || line.startsWith('Model:') || line.startsWith('State:') || line.startsWith('Session:'),
+    };
+  }));
   if (JSON.stringify(embed.toJSON()).length > EMBED_OUTPUT_LIMIT) return { content, components };
   return { content: '', embeds: [embed], components };
 }

@@ -2,6 +2,8 @@ import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { existsSync, statSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import type { AgentProviderId } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
+import { operatorEmbed } from '../discord/presentation.js';
 import { addProject, getDefaultProvider, getProject } from '../services/projectStore.js';
 import { createProjectChannels, deleteProjectChannels } from '../services/channelManager.js';
 import { config } from '../config.js';
@@ -120,20 +122,30 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     });
     if (channels.roborevChannelId) notifyRoborevConfigurationChanged();
 
-    let replyMsg = `Project **${name}** created!\n` +
-      `- <#${channels.agentChannelId}> — talk to the project agent here`;
+    const embed = operatorEmbed({
+      title: 'Project ready',
+      description: `**${name}** is registered. Open the project channel and describe an outcome to create an isolated durable task.`,
+      tone: isGitRepo ? 'success' : 'attention',
+      footer: 'New tasks inherit the project provider and settings; existing tasks remain immutable.',
+    }).addFields(
+      { name: 'Project channel', value: `<#${channels.agentChannelId}>`, inline: true },
+      { name: 'Provider', value: providerLabel(defaultProvider), inline: true },
+      {
+        name: 'Reviews',
+        value: channels.roborevChannelId
+          ? `<#${channels.roborevChannelId}>`
+          : `Not enabled · use \`/roborev project:${name} enable:true\` later`,
+      },
+    );
 
     if (!isGitRepo) {
-      replyMsg += `\n\n⚠️ **Warning:** This non-Git project was registered, but agent tasks cannot start until the directory is initialized as a Git repository. Run \`git init && git add -A && git commit -m "initial"\` before sending a task.`;
+      embed.addFields({
+        name: 'Before tasks can start',
+        value: 'Initialize the directory as a Git repository and create an initial commit on the bot host.',
+      });
     }
 
-    if (channels.roborevChannelId) {
-      replyMsg += `\n- <#${channels.roborevChannelId}> — code reviews appear here`;
-    } else {
-      replyMsg += `\n\n💡 RoboRev not enabled. To add it later, use \`/roborev project:${name} enable:true\`.`;
-    }
-
-    await interaction.editReply(replyMsg);
+    await interaction.editReply({ embeds: [embed] });
 
   } catch (err) {
     if (channels && !getProject(name)) {

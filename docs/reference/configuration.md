@@ -82,6 +82,7 @@ Development normally stores the database at `src/data/discordagent.sqlite`; comp
 | `ROBOREV_CLI_PATH` | executable path or command | `roborev` | Roborev executable | Potentially |
 | `USAGE_CHANNEL_ID` | Discord channel ID | empty | Optional channel for detailed provider-usage posts | No |
 | `INSTANCE_LOCK_PORT` | integer TCP port | `47831` | Loopback port used to prevent multiple bot processes from handling the same events | No |
+| `TERMINAL_REPL_ENABLED` | boolean | `true` (only when both stdin and stdout are TTY) | Enable the interactive terminal REPL for the primary PM agent. Set to `false` to disable in CI or piped environments | No |
 
 ## Settings precedence
 

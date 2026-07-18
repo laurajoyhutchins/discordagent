@@ -23,6 +23,7 @@ Goal-oriented procedures for specific operational tasks.
 ## Operations
 
 - [Recover an interrupted task](operations/recover-an-interrupted-task.md)
+- [Use the terminal REPL](operations/use-the-terminal-repl.md)
 
 ## Integrations
 

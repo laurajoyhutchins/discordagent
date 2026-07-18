@@ -6,15 +6,19 @@ import type { UsageAdmissionService } from '../services/usageAdmission.js';
 
 export function createContextAssembler(deps: { projects: ProjectRepository; tasks: TaskRepository; messages: MessageRepository; memories: MemoryRepository; usage?: UsageAdmissionService }) {
   return {
-    assemble(input: { channelId: string; query: string }): string {
+    assemble(input: { channelId: string; query: string; currentProjectName?: string }): string {
       const memories = ['policy','user','goals','projects','decisions'].flatMap(ns => deps.memories.list(ns)).slice(0, 40);
       const projects = deps.projects.listActive();
       const active = deps.tasks.listActive();
       const recent = deps.messages.recent(input.channelId, 16);
       let retrieved: ReturnType<MessageRepository['search']> = [];
       try { retrieved = deps.messages.search(input.query.replace(/["'():*]/g, ' '), { channelId: input.channelId, limit: 8 }); } catch { retrieved = []; }
+      const projectContext = input.currentProjectName
+        ? `CURRENT PROJECT: ${input.currentProjectName}`
+        : 'CURRENT PROJECT: none selected';
       return [
         'PINNED MEMORY', ...memories.map(m => `- ${m.namespace}/${m.key}: ${JSON.stringify(m.value)}`),
+        projectContext,
         'PROJECTS', ...projects.map(p => `- ${p.name}: provider=${p.defaultProvider}`),
         'ACTIVE TASKS', ...active.map(t => `- ${t.projectName}/${t.provider}/${t.status}: ${t.objective}`),
         'USAGE POSTURE', deps.usage?.detail() ?? 'provider usage is not available',

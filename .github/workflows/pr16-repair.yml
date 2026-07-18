@@ -1,0 +1,73 @@
+name: PR16 Reconciliation
+
+on:
+  push:
+    branches:
+      - codex/discord-capabilities-control-cards
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    if: contains(github.event.head_commit.message, 'chore: run PR16 reconciliation')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/discord-capabilities-control-cards
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply reconciliation
+        run: node scripts/reconcile-pr16.mjs
+
+      - name: Refresh lockfile
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test.log
+
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee build.log
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Remove one-time repair machinery
+        run: rm scripts/reconcile-pr16.mjs .github/workflows/pr16-repair.yml
+
+      - name: Commit repaired branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: reconcile settings and capabilities with OpenCode"
+          git push origin HEAD:codex/discord-capabilities-control-cards
+
+      - name: Upload verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr16-reconciliation-logs
+          path: |
+            test.log
+            build.log
+          if-no-files-found: ignore
+          retention-days: 7

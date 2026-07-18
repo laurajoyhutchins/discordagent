@@ -10,11 +10,13 @@ import type {
 import { spawnStream, fetchReviewBody, isCliAvailable } from './roborevCli.js';
 import { matchProject, normalizeToNotification } from './roborevEventParser.js';
 import { anyProjectHasRoborev } from './roborevRenderer.js';
+import { onRoborevConfigurationChanged } from './roborevLifecycle.js';
 import { redactErrorMessage, redactSensitiveText } from '../../utils/redaction.js';
 
 const MAX_BACKOFF = 60_000;
 const MAX_FAILURES = 10;
 const INITIAL_BACKOFF = 1000;
+const STABILITY_WINDOW = 5000;
 
 export interface RoborevReviewSourceDependencies {
   cliPath: string;
@@ -38,21 +40,77 @@ export function createRoborevReviewSource(
   let disposed = false;
   let started = false;
   let activePublish: ((notification: ReviewNotification) => Promise<void>) | null = null;
+  let unsubscribeConfigurationChanges: (() => void) | null = null;
 
-  async function doStart(): Promise<void> {
-    if (disposed || !activePublish) return;
+  function clearStabilityTimer(): void {
+    if (!stabilityTimer) return;
+    clearTimeout(stabilityTimer);
+    stabilityTimer = null;
+  }
 
+  function clearRestartTimer(): void {
+    if (!restartTimer) return;
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
+
+  function stopActiveProcess(): void {
+    clearRestartTimer();
+    clearStabilityTimer();
     if (childProcess) {
       childProcess.removeAllListeners('close');
       childProcess.removeAllListeners('error');
       childProcess.kill('SIGTERM');
       childProcess = null;
     }
+    backoffMs = INITIAL_BACKOFF;
+    consecutiveFailures = 0;
+  }
 
-    childProcess = spawnStream(cliPath);
+  function scheduleRestart(reason: string): void {
+    if (disposed || restartTimer) return;
 
+    consecutiveFailures++;
+    if (consecutiveFailures >= MAX_FAILURES) {
+      console.error(
+        `[roborev] Process failed ${consecutiveFailures} times. `
+        + 'Change the RoboRev configuration or restart the bot to retry.',
+      );
+      return;
+    }
+
+    const delay = backoffMs;
+    console.log(
+      `[roborev] ${reason}. Restarting in ${delay}ms `
+      + `(attempt ${consecutiveFailures}/${MAX_FAILURES})`,
+    );
+    backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
+
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      void reconcile().catch(error => {
+        console.error('[roborev] Retry failed:', redactErrorMessage(error));
+      });
+    }, delay);
+  }
+
+  async function doStart(): Promise<void> {
+    if (disposed || !activePublish || childProcess || restartTimer) return;
+
+    let process: ChildProcess;
+    try {
+      process = spawnStream(cliPath);
+    } catch (error) {
+      console.error('[roborev] Failed to spawn:', redactErrorMessage(error));
+      scheduleRestart('Process failed to spawn');
+      return;
+    }
+
+    childProcess = process;
+    let settled = false;
     let lineBuffer = '';
-    childProcess.stdout!.on('data', async (data: Buffer) => {
+
+    process.stdout!.on('data', async (data: Buffer) => {
       lineBuffer += data.toString();
       const lines = lineBuffer.split('\n');
       lineBuffer = lines.pop() ?? '';
@@ -81,7 +139,9 @@ export function createRoborevReviewSource(
             }
           }
 
-          void activePublish!(notification).catch(error => {
+          const publish = activePublish;
+          if (!publish) continue;
+          void publish(notification).catch(error => {
             console.error('[roborev] Failed to publish notification:', redactErrorMessage(error));
           });
         } catch {
@@ -92,67 +152,55 @@ export function createRoborevReviewSource(
       }
     });
 
-    childProcess.stderr!.on('data', (data: Buffer) => {
+    process.stderr!.on('data', (data: Buffer) => {
       console.error('[roborev stderr]', redactSensitiveText(data.toString()));
     });
 
     stabilityTimer = setTimeout(() => {
-      if (childProcess) {
+      stabilityTimer = null;
+      if (childProcess === process && !settled) {
         backoffMs = INITIAL_BACKOFF;
         consecutiveFailures = 0;
       }
-    }, 5000);
+    }, STABILITY_WINDOW);
 
-    const currentStabilityTimer = stabilityTimer;
-    stabilityTimer = null;
-    clearTimeout(currentStabilityTimer!);
-    childProcess.on('close', code => {
-      childProcess = null;
-      if (disposed) return;
+    const finish = (reason: string): void => {
+      if (settled) return;
+      settled = true;
+      clearStabilityTimer();
+      if (childProcess === process) childProcess = null;
+      if (!disposed) scheduleRestart(reason);
+    };
 
-      consecutiveFailures++;
-      if (consecutiveFailures >= MAX_FAILURES) {
-        console.error(
-          `[roborev] Process failed ${consecutiveFailures} times. Restart the bot to retry.`,
-        );
-        return;
-      }
-
-      const delay = backoffMs;
-      console.log(
-        `[roborev] Process exited with code ${code}. Restarting in ${delay}ms `
-        + `(attempt ${consecutiveFailures}/${MAX_FAILURES})`,
-      );
-      backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
-
-      restartTimer = setTimeout(() => {
-        void doStart().catch(error => {
-          console.error('[roborev] Retry failed:', redactErrorMessage(error));
-        });
-      }, delay);
+    process.on('close', code => {
+      finish(`Process exited with code ${code}`);
     });
 
-    childProcess.on('error', error => {
-      clearTimeout(currentStabilityTimer!);
-      stabilityTimer = null;
-      if (disposed) return;
+    process.on('error', error => {
       console.error('[roborev] Failed to spawn:', redactErrorMessage(error));
-      childProcess = null;
-      consecutiveFailures++;
-      if (consecutiveFailures >= MAX_FAILURES) {
-        console.error(
-          `[roborev] Spawn failed ${consecutiveFailures} times. Restart the bot to retry.`,
-        );
-        return;
-      }
-      const delay = backoffMs;
-      backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
-      restartTimer = setTimeout(() => {
-        void doStart().catch(retryError => {
-          console.error('[roborev] Retry failed:', redactErrorMessage(retryError));
-        });
-      }, delay);
+      finish('Process failed to spawn');
     });
+  }
+
+  async function reconcile(): Promise<void> {
+    if (disposed || !activePublish) return;
+
+    if (!anyProjectHasRoborev(getProjects())) {
+      if (childProcess || restartTimer) {
+        console.log('[roborev] No projects with roborev enabled, stopping watcher.');
+        stopActiveProcess();
+      }
+      return;
+    }
+
+    if (childProcess || restartTimer) return;
+
+    if (!(await isCliAvailable(cliPath))) {
+      console.warn(`[roborev] CLI not found at "${cliPath}". Watcher disabled.`);
+      return;
+    }
+
+    await doStart();
   }
 
   return {
@@ -168,47 +216,23 @@ export function createRoborevReviewSource(
         throw new Error('Roborev review source was already started');
       }
       started = true;
-
-      if (!anyProjectHasRoborev(getProjects())) {
-        console.log('[roborev] No projects with roborev enabled, skipping watcher.');
-        return {
-          dispose: async () => {
-            disposed = true;
-          },
-        };
-      }
-
-      if (!(await isCliAvailable(cliPath))) {
-        console.warn(
-          `[roborev] CLI not found at "${cliPath}". Watcher disabled.`,
-        );
-        return {
-          dispose: async () => {
-            disposed = true;
-          },
-        };
-      }
-
       activePublish = publish;
-      await doStart();
+      unsubscribeConfigurationChanges = onRoborevConfigurationChanged(() => {
+        void reconcile().catch(error => {
+          console.error('[roborev] Failed to reconcile configuration:', redactErrorMessage(error));
+        });
+      });
+
+      await reconcile();
 
       return {
         async dispose() {
+          if (disposed) return;
           disposed = true;
-          if (restartTimer) {
-            clearTimeout(restartTimer);
-            restartTimer = null;
-          }
-          if (stabilityTimer) {
-            clearTimeout(stabilityTimer);
-            stabilityTimer = null;
-          }
-          if (childProcess) {
-            childProcess.removeAllListeners('close');
-            childProcess.removeAllListeners('error');
-            childProcess.kill('SIGTERM');
-            childProcess = null;
-          }
+          activePublish = null;
+          unsubscribeConfigurationChanges?.();
+          unsubscribeConfigurationChanges = null;
+          stopActiveProcess();
         },
       };
     },

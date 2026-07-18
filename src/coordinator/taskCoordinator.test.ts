@@ -41,11 +41,13 @@ function deferred<T>() {
 
 class FakeThread {
   readonly sent: unknown[] = [];
+  typingCalls = 0;
   constructor(
     readonly id = 'thread-123456',
     readonly parentId = 'agent-1',
   ) {}
   async send(payload: unknown) { this.sent.push(payload); return payload; }
+  async sendTyping() { this.typingCalls += 1; }
 }
 
 class FakeMessage {
@@ -396,6 +398,34 @@ describe('TaskCoordinator', () => {
     expect(context.broker.approvals).toBe(1);
     expect(context.broker.lastThread?.id).toBe('thread-123456');
     expect(context.events.list(task.id).map(entry => entry.event.type)).toContain('approval_request');
+  });
+
+  it('shows typing indicator while waiting for provider completion and stops after', async () => {
+    vi.useFakeTimers();
+    const context = setup();
+    const completion = deferred<TaskResult>();
+    context.provider.startImpl = async (_input, _host) => ({
+      session: { provider: 'claude', sessionId: 'typing-session', createdAt: 1 },
+      completion: completion.promise,
+    });
+    const thread = new FakeThread('thread-typing');
+    const message = new FakeMessage(thread);
+
+    context.coordinator.startFromMessage({
+      projectName: 'factory-floor', prompt: 'Long running task',
+      message: message as unknown as Message,
+    });
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(thread.typingCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(thread.typingCalls).toBe(2);
+
+    completion.resolve(completed('typing-session'));
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(thread.typingCalls).toBe(2);
+
+    vi.useRealTimers();
   });
 
   it('redacts sensitive provider events, approvals, and terminal results before persistence or Discord', async () => {

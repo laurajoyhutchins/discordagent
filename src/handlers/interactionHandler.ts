@@ -16,6 +16,7 @@ import { stopLoopFromButton } from '../services/loopRunner.js';
 import { handleCodexAuth, handleCodexAuthButton } from '../commands/codexAuth.js';
 import { maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
 import { handleCapabilities } from '../commands/capabilities.js';
+import { handleRoborev } from '../commands/roborev.js';
 import { handleSettings, handleSettingsComponent } from '../commands/settings.js';
 import { handleProjectSettings, handleProjectSettingsComponent } from '../commands/projectSettings.js';
 import { handleTaskControlButton } from '../discord/taskControlHandler.js';
@@ -145,6 +146,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
         break;
       case 'model':
         await handleModel(interaction);
+        break;
+      case 'roborev':
+        await handleRoborev(interaction);
         break;
       default:
         await interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });

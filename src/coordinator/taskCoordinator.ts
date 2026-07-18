@@ -357,6 +357,10 @@ export function createTaskCoordinator(
     await syncRendererCard(input.renderer, input.taskId, { phase: 'Provider turn running' });
     gate.resolve();
 
+    const typingInterval = setInterval(() => {
+      input.thread.sendTyping().catch(() => {});
+    }, 8_000);
+
     let result: TaskResult;
     try {
       result = await run.completion;
@@ -372,6 +376,8 @@ export function createTaskCoordinator(
         summary: message,
         error: { code: 'provider_completion_failed', message, retryable: true },
       };
+    } finally {
+      clearInterval(typingInterval);
     }
     return finalizeTask(input.taskId, result, input.renderer, input.reservationId);
   }

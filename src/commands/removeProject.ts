@@ -1,6 +1,7 @@
 import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { removeProject } from '../services/projectStore.js';
 import { deleteProjectChannels } from '../services/channelManager.js';
+import { notifyRoborevConfigurationChanged } from '../integrations/roborev/index.js';
 
 export async function handleRemoveProject(interaction: ChatInputCommandInteraction): Promise<void> {
   const name = interaction.options.getString('name', true);
@@ -10,6 +11,7 @@ export async function handleRemoveProject(interaction: ChatInputCommandInteracti
     await interaction.reply({ content: `Project "${name}" not found.`, flags: MessageFlags.Ephemeral });
     return;
   }
+  if (project.roborevChannelId) notifyRoborevConfigurationChanged();
 
   await interaction.deferReply();
 

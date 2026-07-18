@@ -1,5 +1,6 @@
 import { MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
 import type { AgentProviderId } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { Project } from '../types.js';
 import { activatePrimaryProvider, capturePrimaryProviderState, getPrimaryChannelId, getPrimaryOwnerId, getProviderRegistry, getSettingsService, maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
 import type { PrimaryProviderActivationResult } from '../services/agentRuntimeService.js';
@@ -25,21 +26,21 @@ export interface ProviderCommandDependencies {
 
 function defaultDependencies(): ProviderCommandDependencies {
   return {
-  getProjectByChannel,
-  getDefaultProvider,
-  activateDefaultProvider: activatePrimaryProvider,
-  captureDefaultProviderState: capturePrimaryProviderState,
-  reconcileProviderOnboarding: async () => { await maybeGetProviderOnboardingService()?.ensurePrompt(); },
+    getProjectByChannel,
+    getDefaultProvider,
+    activateDefaultProvider: activatePrimaryProvider,
+    captureDefaultProviderState: capturePrimaryProviderState,
+    reconcileProviderOnboarding: async () => { await maybeGetProviderOnboardingService()?.ensurePrompt(); },
     primaryChannelId: optionalPrimary(getPrimaryChannelId),
     primaryOwnerId: optionalPrimary(getPrimaryOwnerId),
-  settings: getSettingsService(),
-  checkProvider: async provider => {
-    const registry = getProviderRegistry();
-    if (!registry.list().includes(provider)) {
-      return { available: false, reason: `${provider === 'codex' ? 'Codex' : 'Claude'} is unavailable on this host.` };
-    }
-    return registry.availability(provider);
-  },
+    settings: getSettingsService(),
+    checkProvider: async provider => {
+      const registry = getProviderRegistry();
+      if (!registry.list().includes(provider)) {
+        return { available: false, reason: `${providerLabel(provider)} is unavailable on this host.` };
+      }
+      return registry.availability(provider);
+    },
   };
 }
 
@@ -49,7 +50,7 @@ export async function handleProvider(
 ): Promise<void> {
   if (interaction.channel?.isThread()) {
     await interaction.reply({
-      content: 'A task thread keeps the provider it started with. Use `/provider claude` or `/provider codex` as a text command in this task thread to request a confirmed sibling handoff.',
+      content: 'A task thread keeps the provider it started with. Use `/provider claude`, `/provider codex`, or `/provider opencode` as a text command in this task thread to request a confirmed sibling handoff.',
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -85,7 +86,7 @@ export async function handleProvider(
     }
     await dependencies.reconcileProviderOnboarding?.();
     await interaction.reply({
-      content: `Global default provider set to **${requested === 'codex' ? 'Codex' : 'Claude'}**. The PM chat and new projects will use ${requested}.`,
+      content: `Global default provider set to **${providerLabel(requested)}**. The PM chat and new projects will use ${requested}.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -114,7 +115,7 @@ export async function handleProvider(
 
   dependencies.settings.updateProject(project.name, { defaultProvider: requested });
   await interaction.reply({
-    content: `Default provider for **${project.name}** set to **${requested === 'codex' ? 'Codex' : 'Claude'}**. New task threads will use ${requested}.`,
+    content: `Default provider for **${project.name}** set to **${providerLabel(requested)}**. New task threads will use ${requested}.`,
     flags: MessageFlags.Ephemeral,
   });
 }

@@ -51,7 +51,7 @@ describe('provider onboarding activation retry', () => {
 
     await service.ensurePrompt();
     const deferUpdate = vi.fn(async () => undefined);
-    const editReply = vi.fn(async () => undefined);
+    const editReply = vi.fn(async (_payload: unknown) => undefined);
     await service.handleButton({
       customId: 'provider_setup:codex',
       user: { id: 'owner' },
@@ -74,8 +74,13 @@ describe('provider onboarding activation retry', () => {
       content: expect.stringMatching(/could not be activated/i),
       components: expect.any(Array),
     }));
-    const payload = editReply.mock.calls[0]?.[0] as { components: Array<{ toJSON(): { components: Array<{ custom_id: string }> } }> };
-    const buttonIds = payload.components[0].toJSON().components.map(component => component.custom_id);
+    const payload = editReply.mock.calls[0]?.[0] as {
+      components: Array<{ toJSON(): { components: Array<{ custom_id: string }> } }>;
+    } | undefined;
+    expect(payload).toBeDefined();
+    const firstRow = payload?.components[0];
+    expect(firstRow).toBeDefined();
+    const buttonIds = firstRow!.toJSON().components.map(component => component.custom_id);
     expect(buttonIds).toEqual(expect.arrayContaining(['provider_setup:claude', 'provider_setup:codex']));
   });
 });

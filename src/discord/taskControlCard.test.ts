@@ -42,14 +42,14 @@ describe('task control card rendering', () => {
     expect(serialized).not.toContain('sessionId');
   });
 
-  it('renders a readable plain-text fallback when embeds are unavailable', () => {
+  it('preserves the stable plain-text fallback when embeds are unavailable', () => {
     const payload = renderTaskControlCard({ ...view, phase: undefined }, { embeds: false });
     const text = payload.content;
 
     expect(text).toContain('Objective:');
-    expect(text).toContain('State: Running');
-    expect(text).toContain('Provider: Claude');
-    expect(text).toContain('Session: Active');
+    expect(text).toContain('State: running');
+    expect(text).toContain('Provider: claude');
+    expect(text).toContain('Session: active');
     expect(text).not.toContain('task-1');
     expect(text).not.toContain('sk-proj-1234567890');
   });

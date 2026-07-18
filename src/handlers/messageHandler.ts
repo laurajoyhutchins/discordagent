@@ -1,5 +1,6 @@
 import type { GuildMember, Message } from 'discord.js';
-import type { AgentProviderId } from '../agents/contracts.js';
+import { isAgentProviderId, type AgentProviderId } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
 import type { Project } from '../types.js';
 import {
@@ -29,12 +30,26 @@ export interface MessageHandlerDependencies {
   deferPendingTask?(input: { userId: string; projectName: string; prompt: string; message: Message; model?: string }): void;
   isAuthorized(member: GuildMember | null | undefined): boolean;
   defaultClaudeModel: string;
+  defaultCodexModel?: string;
+  defaultOpenCodeModel?: string;
   startLoop: typeof startLoop;
   stopLoop: typeof stopLoop;
   getLoopStatus: typeof getLoopStatus;
   getLoopChannelForThread: typeof getLoopChannelForThread;
   primaryChannelId?: string;
   primaryOwnerId?: string;
+}
+
+type ProjectModelSettingKey = 'claudeModel' | 'codexModel' | 'openCodeModel';
+
+function modelSettingKey(provider: AgentProviderId): ProjectModelSettingKey {
+  return provider === 'claude' ? 'claudeModel' : provider === 'codex' ? 'codexModel' : 'openCodeModel';
+}
+
+function configuredDefaultModel(dependencies: MessageHandlerDependencies, provider: AgentProviderId): string | undefined {
+  if (provider === 'claude') return dependencies.defaultClaudeModel;
+  if (provider === 'codex') return dependencies.defaultCodexModel;
+  return dependencies.defaultOpenCodeModel;
 }
 
 function defaultDependencies(): MessageHandlerDependencies {
@@ -45,13 +60,15 @@ function defaultDependencies(): MessageHandlerDependencies {
     checkProvider: async provider => {
       const registry = getProviderRegistry();
       if (!registry.list().includes(provider)) {
-        return { available: false, reason: `${provider === 'codex' ? 'Codex' : 'Claude'} is unavailable on this host.` };
+        return { available: false, reason: `${providerLabel(provider)} is unavailable on this host.` };
       }
       return registry.availability(provider);
     },
     deferPendingTask: input => { maybeGetPendingTaskService()?.defer(input); },
     isAuthorized,
     defaultClaudeModel: process.env.CLAUDE_MODEL ?? '',
+    defaultCodexModel: process.env.CODEX_MODEL ?? '',
+    defaultOpenCodeModel: process.env.OPENCODE_MODEL ?? '',
     startLoop,
     stopLoop,
     getLoopStatus,
@@ -78,7 +95,7 @@ function errorReply(error: unknown, title: string): { embeds: ReturnType<typeof 
 }
 
 function providerUnavailable(provider: AgentProviderId): string {
-  return `${provider === 'codex' ? 'Codex' : 'Claude'} is unavailable on this host. Try again later or contact the bot owner.`;
+  return `${providerLabel(provider)} is unavailable on this host. Try again later or contact the bot owner.`;
 }
 
 async function safeProviderCheck(
@@ -95,7 +112,6 @@ async function safeProviderCheck(
     return { available: false };
   }
 }
-
 
 export async function handleMessage(
   message: Message,
@@ -146,15 +162,16 @@ export async function handleMessage(
     }
 
     if (lower.startsWith('/provider')) {
-      const target = lower.split(/\s+/)[1] as AgentProviderId | undefined;
-      if (target !== 'claude' && target !== 'codex') {
-        await message.reply('Use `/provider claude` or `/provider codex`. A confirmed handoff creates a sibling thread.');
+      const targetValue = lower.split(/\s+/)[1];
+      if (!isAgentProviderId(targetValue)) {
+        await message.reply('Use `/provider claude`, `/provider codex`, or `/provider opencode`. A confirmed handoff creates a sibling thread.');
         return;
       }
+      const target = targetValue;
       try {
         const estimate = await dependencies.coordinator.estimateHandoff(message.channel.id, target);
         const confirmation = await message.reply({
-          content: `Switching providers creates a fresh **${target}** session in a sibling thread. Estimated handoff context: ~${estimate.estimatedInputTokens.toLocaleString()} input tokens (${estimate.confidence} confidence). This excludes future tool output.`,
+          content: `Switching providers creates a fresh **${providerLabel(target)}** session in a sibling thread. Estimated handoff context: ~${estimate.estimatedInputTokens.toLocaleString()} input tokens (${estimate.confidence} confidence). This excludes future tool output.`,
           components: [{ type: 1, components: [
             { type: 2, custom_id: `handoff_confirm:${target}`, label: 'Create sibling task', style: 3 },
             { type: 2, custom_id: 'handoff_cancel', label: 'Cancel', style: 2 },
@@ -165,7 +182,7 @@ export async function handleMessage(
           await decision.update({ content: 'Provider handoff cancelled. The original task is unchanged.', components: [] });
           return;
         }
-        await decision.update({ content: `Creating the ${target} sibling task…`, components: [] });
+        await decision.update({ content: `Creating the ${providerLabel(target)} sibling task…`, components: [] });
         await dependencies.coordinator.handoffFromThread({ sourceThread: message.channel, targetProvider: target });
       } catch (error) {
         await message.reply(errorReply(error, 'Unable to hand off task'));
@@ -253,22 +270,23 @@ async function handleBotCommand(
   const lower = content.toLowerCase();
 
   if (lower === '/provider' || /^\/provider\s+\S+$/i.test(content)) {
-    const requested = content.split(/\s+/)[1]?.toLowerCase() as AgentProviderId | undefined;
-    if (!requested) {
+    const requestedValue = content.split(/\s+/)[1]?.toLowerCase();
+    if (!requestedValue) {
       await message.reply(`Default provider for **${project.name}**: \`${project.defaultProvider}\`.`);
       return true;
     }
-    if (requested !== 'claude' && requested !== 'codex') {
-      await message.reply('Provider must be `claude` or `codex`.');
+    if (!isAgentProviderId(requestedValue)) {
+      await message.reply('Provider must be `claude`, `codex`, or `opencode`.');
       return true;
     }
+    const requested = requestedValue;
     const availability = await safeProviderCheck(dependencies, requested, requested === 'claude');
     if (!availability.available) {
       await message.reply(providerUnavailable(requested));
       return true;
     }
     dependencies.settings.updateProject(project.name, { defaultProvider: requested });
-    await message.reply(`Default provider for **${project.name}** set to **${requested === 'codex' ? 'Codex' : 'Claude'}**.`);
+    await message.reply(`Default provider for **${project.name}** set to **${providerLabel(requested)}**.`);
     return true;
   }
 
@@ -282,16 +300,16 @@ async function handleBotCommand(
     }
     if (!arg) {
       const current = project.models?.[provider]
-        || (provider === 'claude' ? dependencies.defaultClaudeModel : '')
+        || configuredDefaultModel(dependencies, provider)
         || 'provider default';
       await message.reply(
-        `Current ${provider} model for **${project.name}**: \`${current}\`.\n` +
+        `Current ${providerLabel(provider)} model for **${project.name}**: \`${current}\`.\n` +
         'Set it with `/model <name>`, or prefix a prompt with `/model <name>` for a one-shot override.',
       );
       return true;
     }
-    dependencies.settings.updateProject(project.name, provider === 'claude' ? { claudeModel: arg } : { codexModel: arg });
-    await message.reply(`${provider} model for **${project.name}** set to \`${arg}\`.`);
+    dependencies.settings.updateProject(project.name, { [modelSettingKey(provider)]: arg });
+    await message.reply(`${providerLabel(provider)} model for **${project.name}** set to \`${arg}\`.`);
     return true;
   }
 

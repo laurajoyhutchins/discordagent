@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { OpenCodeAcpConnection, OpenCodeAcpHandlers } from './acpTransport.js';
 import { OpenCodePrimaryModel, openCodePrimaryEnvironment } from './opencodePrimaryModel.js';
@@ -118,9 +119,21 @@ describe('OpenCodePrimaryModel', () => {
   });
 
   it('builds an isolated deny-all OpenCode runtime configuration', () => {
-    const env = openCodePrimaryEnvironment({ KEEP_ME: 'yes', OPENCODE_CONFIG_CONTENT: '{"permission":"allow"}' });
+    const isolationRoot = '/tmp/opencode-pm-isolation';
+    const env = openCodePrimaryEnvironment({
+      KEEP_ME: 'yes',
+      OPENCODE_CONFIG: '/unsafe/opencode.json',
+      OPENCODE_CONFIG_DIR: '/unsafe/opencode-dir',
+      OPENCODE_CONFIG_CONTENT: '{"permission":"allow"}',
+      XDG_CONFIG_HOME: '/unsafe/global-config',
+      XDG_DATA_HOME: '/credentials/data',
+    }, isolationRoot);
 
     expect(env.KEEP_ME).toBe('yes');
+    expect(env.OPENCODE_CONFIG).toBeUndefined();
+    expect(env.XDG_CONFIG_HOME).toBe(join(isolationRoot, 'xdg-config'));
+    expect(env.OPENCODE_CONFIG_DIR).toBe(join(isolationRoot, 'opencode-config'));
+    expect(env.XDG_DATA_HOME).toBe('/credentials/data');
     expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT!)).toEqual({
       permission: 'deny',
       default_agent: 'discord-agent-primary',

@@ -1,7 +1,7 @@
 import type { Migration } from './migrations.js';
 
-const PROVIDER_CHECK = "CHECK (default_provider IN ('claude', 'codex'))";
-const TASK_PROVIDER_CHECK = "CHECK (provider IN ('claude', 'codex'))";
+const PROVIDER_CHECK = "CHECK (default_provider IN ('claude', 'codex', 'opencode'))";
+const TASK_PROVIDER_CHECK = "CHECK (provider IN ('claude', 'codex', 'opencode'))";
 const TASK_STATUS_CHECK = `CHECK (status IN (
   'created', 'starting', 'running', 'waiting_for_user',
   'completed', 'failed', 'cancelled', 'interrupted'
@@ -315,6 +315,158 @@ export const SCHEMA_MIGRATIONS: readonly Migration[] = [
         updated_at INTEGER NOT NULL
       )`,
       'CREATE INDEX task_control_cards_message_idx ON task_control_cards(message_id)',
+    ],
+  },
+  {
+    version: 9,
+    name: 'allow OpenCode in provider-constrained tables',
+    disableForeignKeys: true,
+    statements: [
+      `CREATE TABLE projects_v9 (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+        working_directory TEXT NOT NULL,
+        category_id TEXT NOT NULL,
+        agent_channel_id TEXT NOT NULL UNIQUE,
+        default_provider TEXT NOT NULL DEFAULT 'claude' ${PROVIDER_CHECK},
+        models_json TEXT NOT NULL DEFAULT '{}',
+        base_branch TEXT,
+        roborev_channel_id TEXT,
+        legacy_metadata_json TEXT,
+        archived_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        reasoning_efforts_json TEXT NOT NULL DEFAULT '{}'
+      )`,
+      `INSERT INTO projects_v9 (
+        id, name, working_directory, category_id, agent_channel_id,
+        default_provider, models_json, base_branch, roborev_channel_id,
+        legacy_metadata_json, archived_at, created_at, updated_at, reasoning_efforts_json
+      ) SELECT
+        id, name, working_directory, category_id, agent_channel_id,
+        default_provider, models_json, base_branch, roborev_channel_id,
+        legacy_metadata_json, archived_at, created_at, updated_at, reasoning_efforts_json
+      FROM projects`,
+      'DROP TABLE projects',
+      'ALTER TABLE projects_v9 RENAME TO projects',
+
+      `CREATE TABLE tasks_v9 (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        provider TEXT NOT NULL ${TASK_PROVIDER_CHECK},
+        status TEXT NOT NULL ${TASK_STATUS_CHECK},
+        channel_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL UNIQUE,
+        objective TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER,
+        settings_json TEXT NOT NULL DEFAULT '{}'
+      )`,
+      `INSERT INTO tasks_v9 (
+        id, project_id, provider, status, channel_id, thread_id, objective,
+        created_at, updated_at, started_at, completed_at, settings_json
+      ) SELECT
+        id, project_id, provider, status, channel_id, thread_id, objective,
+        created_at, updated_at, started_at, completed_at, settings_json
+      FROM tasks`,
+      'DROP TABLE tasks',
+      'ALTER TABLE tasks_v9 RENAME TO tasks',
+      'CREATE INDEX tasks_project_status_idx ON tasks(project_id, status)',
+
+      `CREATE TABLE provider_sessions_v9 (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL ${TASK_PROVIDER_CHECK},
+        session_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(provider, session_id)
+      )`,
+      `INSERT INTO provider_sessions_v9
+        (id, task_id, provider, session_id, created_at, updated_at)
+        SELECT id, task_id, provider, session_id, created_at, updated_at FROM provider_sessions`,
+      'DROP TABLE provider_sessions',
+      'ALTER TABLE provider_sessions_v9 RENAME TO provider_sessions',
+
+      `CREATE TABLE usage_snapshots_v9 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL ${TASK_PROVIDER_CHECK},
+        window_type TEXT NOT NULL,
+        utilization REAL,
+        remaining REAL,
+        resets_at INTEGER,
+        payload_json TEXT NOT NULL,
+        captured_at INTEGER NOT NULL
+      )`,
+      `INSERT INTO usage_snapshots_v9
+        (id, provider, window_type, utilization, remaining, resets_at, payload_json, captured_at)
+        SELECT id, provider, window_type, utilization, remaining, resets_at, payload_json, captured_at
+        FROM usage_snapshots`,
+      'DROP TABLE usage_snapshots',
+      'ALTER TABLE usage_snapshots_v9 RENAME TO usage_snapshots',
+      'CREATE INDEX usage_snapshots_provider_time_idx ON usage_snapshots(provider, captured_at)',
+
+      `CREATE TABLE usage_reservations_v9 (
+        id TEXT PRIMARY KEY,
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        provider TEXT NOT NULL ${TASK_PROVIDER_CHECK},
+        task_class TEXT NOT NULL DEFAULT 'contained_feature',
+        estimated_low REAL NOT NULL CHECK (estimated_low >= 0),
+        estimated_high REAL NOT NULL CHECK (estimated_high >= estimated_low),
+        confidence TEXT NOT NULL CHECK (confidence IN ('low', 'medium', 'high')),
+        status TEXT NOT NULL CHECK (status IN ('active', 'released', 'consumed')),
+        actual_cost REAL,
+        created_at INTEGER NOT NULL,
+        released_at INTEGER
+      )`,
+      `INSERT INTO usage_reservations_v9
+        (id, task_id, provider, task_class, estimated_low, estimated_high,
+         confidence, status, actual_cost, created_at, released_at)
+        SELECT id, task_id, provider, task_class, estimated_low, estimated_high,
+         confidence, status, actual_cost, created_at, released_at
+        FROM usage_reservations`,
+      'DROP TABLE usage_reservations',
+      'ALTER TABLE usage_reservations_v9 RENAME TO usage_reservations',
+      'CREATE INDEX usage_reservations_provider_status_idx ON usage_reservations(provider, status)',
+      'CREATE INDEX usage_reservations_task_status_idx ON usage_reservations(task_id, status, created_at)',
+
+      `CREATE TABLE pending_auth_flows_v9 (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL ${TASK_PROVIDER_CHECK},
+        requested_by TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN (
+          'checking', 'authentication_required', 'awaiting_user',
+          'verifying', 'failed', 'cancelled'
+        )),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `INSERT INTO pending_auth_flows_v9
+        (id, provider, requested_by, state, created_at, expires_at, updated_at)
+        SELECT id, provider, requested_by, state, created_at, expires_at, updated_at
+        FROM pending_auth_flows`,
+      'DROP TABLE pending_auth_flows',
+      'ALTER TABLE pending_auth_flows_v9 RENAME TO pending_auth_flows',
+
+      `CREATE TABLE usage_observations_v9 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL ${TASK_PROVIDER_CHECK},
+        task_class TEXT NOT NULL,
+        actual_cost REAL NOT NULL CHECK (actual_cost >= 0),
+        token_count INTEGER,
+        duration_ms INTEGER,
+        recorded_at INTEGER NOT NULL
+      )`,
+      `INSERT INTO usage_observations_v9
+        (id, provider, task_class, actual_cost, token_count, duration_ms, recorded_at)
+        SELECT id, provider, task_class, actual_cost, token_count, duration_ms, recorded_at
+        FROM usage_observations`,
+      'DROP TABLE usage_observations',
+      'ALTER TABLE usage_observations_v9 RENAME TO usage_observations',
+      'CREATE INDEX usage_observations_class_idx ON usage_observations(provider, task_class, recorded_at)',
     ],
   },
 ] as const;

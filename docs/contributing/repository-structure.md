@@ -2,53 +2,60 @@
 
 ## Source layout
 
-```
+```text
 src/
-├── index.ts                 # Entry point: Discord client, lock, startup/shutdown
+├── index.ts                 # Discord client, lock, startup, review-source wiring, shutdown
 ├── agents/
-│   ├── contracts.ts         # Provider-neutral domain contracts (AgentProvider, AgentEvent, etc.)
-│   ├── providerRegistry.ts  # Registration and lookup
+│   ├── contracts.ts         # Provider-neutral coding-agent contracts
+│   ├── providerRegistry.ts  # Provider registration and lookup
 │   ├── claude/              # Claude Agent SDK adapter
 │   ├── codex/               # Codex App Server transport, auth, provider
 │   └── opencode/            # ACP transport, normalization, provider
 ├── commands/
-│   ├── definitions.ts       # SlashCommandBuilder definitions
+│   ├── definitions.ts       # Slash and context command builders
 │   └── *.ts                 # Command handlers
 ├── coordinator/
-│   ├── taskCoordinator.ts   # Durable task lifecycle
+│   ├── taskCoordinator.ts   # Durable coding-task lifecycle
 │   ├── taskRecovery.ts      # Startup recovery
-│   └── *.test.ts            # Tests
+│   └── *.test.ts            # Coordinator tests
 ├── db/                      # SQLite handle, schema, migrations
-├── repositories/            # SQL access (project, task, event, settings, memory, usage)
+├── repositories/            # SQL access for projects, tasks, events, settings, memory, usage
 ├── git/
 │   ├── gitClient.ts         # Safe Git process wrapper
 │   └── worktreeManager.ts   # Worktree creation and management
-├── discord/
-│   ├── capabilities/        # Permission registry, profiles, evaluator
-│   ├── DiscordTaskRenderer.ts
-│   └── DiscordInteractionBroker.ts
+├── discord/                 # Capabilities, task rendering, interactions, control cards
 ├── handlers/                # Discord event routing
-├── services/                # Runtime, loopRunner, roborevWatcher, usage, projectStore
-├── primary/                 # Primary agent contracts and models
-└── smoke/                   # Preflight and connectivity checks
+├── integrations/
+│   ├── reviewSource.ts      # Generic review-source lifecycle and notification contract
+│   └── roborev/             # RoboRev CLI adapter, parser, lifecycle, matching, renderer
+├── services/                # Runtime assembly, loops, usage, project-store facade
+├── primary/                 # PM-style primary agent, journal, memory, bounded context
+└── smoke/                   # Host preflight and Discord connectivity checks
 ```
+
+Coding-agent providers and review sources are separate extension boundaries:
+
+- `src/agents/` executes durable coding tasks through `AgentProvider` and emits `AgentEvent` values.
+- `src/integrations/` observes external review systems through `ReviewSource` and emits `ReviewNotification` values.
+
+Do not place RoboRev under the provider registry or route review notifications through task-session state.
 
 ## Documentation layout
 
-```
+```text
 docs/
 ├── README.md                # Documentation gateway
 ├── tutorials/               # Guided end-to-end journeys
 ├── how-to/                  # Goal-oriented procedures
 │   ├── discord/             # Discord bot setup
-│   ├── providers/           # Provider configuration
+│   ├── providers/           # Coding-agent provider configuration
 │   ├── projects/            # Project management
 │   ├── operations/          # Operational procedures
-│   └── integrations/        # External integrations
-├── reference/               # Authoritative reference
+│   └── integrations/        # Optional external integrations
+├── reference/               # Authoritative commands, configuration, states, capabilities
 └── explanation/             # Architecture and rationale
-    ├── architecture/        # Runtime topology, isolation, recovery
-    ├── security/            # Trust model, auth, redaction
+    ├── architecture/        # Runtime, isolation, recovery, review-source boundaries
+    ├── security/            # Trust model, authentication, redaction
     ├── decisions/           # Architecture Decision Records
     └── product/             # Motivation and design philosophy
 ```
@@ -58,12 +65,13 @@ docs/
 - Source files: `camelCase.ts`
 - Test files: `*.test.ts` alongside source
 - Documentation: `kebab-case.md`
-- Provider modules: `kebab-case/` subdirectory
+- Provider and integration modules: descriptive subdirectories
 
 ## Architecture boundaries
 
-1. **Provider-neutral core** — `contracts.ts` defines all shared types. Do not import Discord or provider SDK types here.
-2. **TaskCoordinator** owns lifecycle ordering. Handlers must not call provider SDKs directly.
-3. **Provider isolation** — provider-specific code under `src/agents/<provider>/`. Normalize all output to `AgentEvent`.
-4. **No in-place provider switching** — a provider change in a task thread is a sibling handoff, not a session conversion.
-5. **Primary agent isolation** — the PM agent has no repository tools and cannot bypass `TaskCoordinator`.
+1. **Provider-neutral core** — `src/agents/contracts.ts` defines shared coding-agent types. Do not import Discord or provider SDK types there.
+2. **TaskCoordinator authority** — handlers and integrations do not start providers directly or create competing task state.
+3. **Provider isolation** — provider-specific code stays under `src/agents/<provider>/` and normalizes output to `AgentEvent`.
+4. **Review-source isolation** — external review adapters implement `ReviewSource`; they do not become agent providers or task events.
+5. **Immutable task provider** — a provider change in a task thread creates a sibling handoff, not a session conversion.
+6. **Primary-agent isolation** — the PM agent has no repository tools and cannot bypass `TaskCoordinator`.

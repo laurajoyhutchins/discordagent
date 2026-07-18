@@ -67,22 +67,25 @@ function safe(value: string | undefined): string | undefined {
   return value === undefined ? undefined : redactSensitiveText(value);
 }
 
-function linesFor(view: TaskControlCardView): string[] {
+function linesFor(view: TaskControlCardView, mode: 'plain' | 'rich'): string[] {
   const result = view.result;
+  const rich = mode === 'rich';
   return [
     `Objective: ${safe(view.objective)}`,
     `Project: ${safe(view.projectName)}`,
-    `Provider: ${providerLabel(view.provider)}`,
+    `Provider: ${rich ? providerLabel(view.provider) : view.provider}`,
     ...(view.model ? [`Model: ${safe(view.model)}`] : []),
-    `State: ${taskStatusLabel(view.status)}`,
+    `State: ${rich ? taskStatusLabel(view.status) : view.status}`,
     ...(view.branchName ? [`Branch: ${safe(view.branchName)}`] : []),
-    `Session: ${sessionStateLabel(view.sessionState)}`,
-    ...(view.phase ? [`Current work: ${safe(view.phase)}`] : []),
+    `Session: ${rich ? sessionStateLabel(view.sessionState) : view.sessionState}`,
+    ...(view.phase ? [`${rich ? 'Current work' : 'Phase'}: ${safe(view.phase)}`] : []),
     ...(view.usagePosture && !['healthy', 'normal'].includes(view.usagePosture)
       ? [`Usage posture: ${safe(view.usagePosture)}`]
       : []),
     ...(result?.summary ? [`Outcome: ${safe(result.summary)}`] : []),
-    ...(result?.unresolved?.length ? [`Needs attention: ${result.unresolved.map(safe).join('; ')}`] : []),
+    ...(result?.unresolved?.length
+      ? [`${rich ? 'Needs attention' : 'Unresolved decisions'}: ${result.unresolved.map(safe).join('; ')}`]
+      : []),
   ];
 }
 
@@ -108,12 +111,12 @@ export function renderTaskControlCard(
   view: TaskControlCardView,
   options: { embeds: boolean },
 ): TaskControlCardPayload {
-  const lines = linesFor(view);
-  const content = lines.join('\n').slice(0, PLAIN_TEXT_LIMIT);
+  const plainLines = linesFor(view, 'plain');
+  const content = plainLines.join('\n').slice(0, PLAIN_TEXT_LIMIT);
   const components = controlsFor(view.status);
   if (!options.embeds) return { content, components };
 
-  const [objective, ...fields] = lines;
+  const [objective, ...fields] = linesFor(view, 'rich');
   const embed = operatorEmbed({
     title: `Task · ${taskStatusLabel(view.status)}`,
     description: objective.slice('Objective: '.length, 4_000),

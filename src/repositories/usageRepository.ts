@@ -25,4 +25,3 @@ export function createUsageRepository(db:DatabaseHandle):UsageRepository{return{
  recordObservation(o){db.raw.prepare(`INSERT INTO usage_observations(provider,task_class,actual_cost,token_count,duration_ms,recorded_at) VALUES(?,?,?,?,?,?)`).run(o.provider,o.taskClass,o.actualCost,o.tokenCount??null,o.durationMs??null,o.recordedAt);},
  observations(provider,taskClass,limit=50){return(db.raw.prepare(`SELECT * FROM usage_observations WHERE provider=? AND task_class=? ORDER BY recorded_at DESC LIMIT ?`).all(provider,taskClass,limit) as any[]).map(r=>({provider:r.provider,taskClass:r.task_class,actualCost:r.actual_cost,...(r.token_count==null?{}:{tokenCount:r.token_count}),...(r.duration_ms==null?{}:{durationMs:r.duration_ms}),recordedAt:r.recorded_at}));},
 };}
-

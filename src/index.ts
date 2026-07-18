@@ -9,6 +9,7 @@ import { startRuntime, stopRuntime, type RuntimeServices } from './services/runt
 import { stopAllLoops } from './services/loopRunner.js';
 import { commands } from './commands/definitions.js';
 import { redactErrorMessage } from './utils/redaction.js';
+import { PROCESS_GATEWAY_INTENTS } from './discord/capabilities/registry.js';
 
 // ── Single-instance lock ─────────────────────────────────────────────
 // Multiple bot processes sharing one token cause duplicate message
@@ -35,12 +36,7 @@ lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
 let runtime: RuntimeServices | null = null;
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-  ],
+  intents: PROCESS_GATEWAY_INTENTS.map(intent => GatewayIntentBits[intent]),
   partials: [Partials.Message, Partials.Channel],
 });
 

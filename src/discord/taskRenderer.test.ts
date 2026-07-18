@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MessageFlags, type AnyThreadChannel } from 'discord.js';
 import type {
   AgentEvent,
@@ -6,13 +6,19 @@ import type {
   TaskResult,
   UserQuestion,
 } from '../agents/contracts.js';
+import type { TaskControlCardRecord, TaskRecord } from '../types.js';
 import { DiscordInteractionBroker } from './interactionBroker.js';
 import { DiscordTaskRenderer } from './taskRenderer.js';
 
 class FakeSentMessage {
+  private static nextId = 0;
+  readonly id = `message-${++FakeSentMessage.nextId}`;
   readonly edits: unknown[] = [];
+  pinCount = 0;
   componentQueue: Array<FakeButtonInteraction | null> = [];
   content = '';
+  failNextEdit = false;
+  editFailures = 0;
 
   constructor(readonly payload: unknown) {
     if (typeof payload === 'string') this.content = payload;
@@ -22,6 +28,11 @@ class FakeSentMessage {
   }
 
   async edit(payload: unknown) {
+    if (this.failNextEdit || this.editFailures > 0) {
+      this.failNextEdit = false;
+      this.editFailures = Math.max(0, this.editFailures - 1);
+      throw new Error('transient Discord edit failure');
+    }
     this.edits.push(payload);
     if (typeof payload === 'string') this.content = payload;
     else if (payload && typeof payload === 'object' && 'content' in payload) {
@@ -29,6 +40,8 @@ class FakeSentMessage {
     }
     return this;
   }
+
+  async pin() { this.pinCount += 1; return this; }
 
   async awaitMessageComponent(options?: { time?: number }) {
     const deadline = Date.now() + (options?.time ?? 0);
@@ -70,9 +83,14 @@ class FakeButtonInteraction {
 class FakeThread {
   readonly id = 'thread-123456789';
   readonly sent: FakeSentMessage[] = [];
+  failNextSend = false;
   messageQueue: Array<{ author: { bot: boolean; id: string }; content: string; guild: FakeButtonInteraction['guild'] } | null> = [];
 
   async send(payload: unknown) {
+    if (this.failNextSend) {
+      this.failNextSend = false;
+      throw new Error('transient Discord send failure');
+    }
     const message = new FakeSentMessage(payload);
     this.sent.push(message);
     return message;
@@ -100,6 +118,307 @@ function payloadText(payload: unknown): string {
 }
 
 describe('DiscordTaskRenderer', () => {
+  const task = (status: TaskRecord['status']): TaskRecord => ({
+    id: 'task-card-1', projectName: 'factory-floor', provider: 'claude', status,
+    channelId: 'agent-1', threadId: 'thread-123456789', objective: 'Implement the feature',
+    createdAt: 1, updatedAt: 1,
+  });
+
+  it('recovers the card update queue after a failed send so a later update runs', async () => {
+    const fake = new FakeThread();
+    fake.failNextSend = true;
+    const renderer = new DiscordTaskRenderer({ editIntervalMs: 0, controlCardCanEmbed: () => false });
+
+    await expect(renderer.start(thread(fake), { task: task('starting') })).rejects.toThrow(/transient Discord send failure/);
+    await expect(renderer.updateCard?.({ task: task('running'), phase: 'Retry' })).resolves.toBeUndefined();
+    expect(fake.sent).toHaveLength(1);
+  });
+
+  it('refetches a stale control card after an edit failure and updates it', async () => {
+    const fake = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>();
+    const renderer = new DiscordTaskRenderer({
+      editIntervalMs: 0,
+      controlCardStore: {
+        getControlCard: taskId => cards.get(taskId),
+        saveControlCard: (taskId, input) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+      controlCardCanEmbed: () => false,
+    });
+    await renderer.start(thread(fake), { task: task('starting') });
+    fake.sent[0].editFailures = 2;
+    await expect(renderer.updateCard?.({ task: task('running') })).rejects.toThrow(/transient Discord edit failure/);
+    const fetch = vi.fn(async () => fake.sent[0]);
+    (fake as unknown as { messages: { fetch: typeof fetch } }).messages = { fetch };
+    await renderer.updateCard?.({ task: task('completed') });
+
+    expect(fetch).toHaveBeenCalledWith(fake.sent[0].id);
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].edits).toHaveLength(1);
+    expect(cards.get('task-card-1')?.messageId).toBe(fake.sent[0].id);
+  });
+
+  it('falls back to a plain-text control-card edit after an embed edit is rejected', async () => {
+    const fake = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>();
+    const renderer = new DiscordTaskRenderer({
+      editIntervalMs: 0,
+      controlCardStore: {
+        getControlCard: taskId => cards.get(taskId),
+        saveControlCard: (taskId, input) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+      controlCardCanEmbed: () => true,
+    });
+    await renderer.start(thread(fake), { task: task('starting') });
+    fake.sent[0].failNextEdit = true;
+    await renderer.updateCard?.({ task: task('running') });
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].edits).toHaveLength(1);
+    expect(payloadText(fake.sent[0].edits[0])).toContain('State: running');
+    expect(cards.get('task-card-1')?.messageId).toBe(fake.sent[0].id);
+  });
+
+  it('re-pins a replacement when a persisted pinned card is missing', async () => {
+    const fake = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>([['task-card-1', {
+      taskId: 'task-card-1', messageId: 'missing-card', pinState: 'pinned', updatedAt: 1,
+    }]]);
+    (fake as unknown as { messages: { fetch: (id: string) => Promise<null> } }).messages = {
+      fetch: async id => { expect(id).toBe('missing-card'); return null; },
+    };
+    const renderer = new DiscordTaskRenderer({
+      controlCardStore: {
+        getControlCard: taskId => cards.get(taskId),
+        saveControlCard: (taskId, input) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+      controlCardCanPin: () => true,
+    });
+    await renderer.start(thread(fake), { task: task('running') });
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].pinCount).toBe(1);
+    expect(cards.get('task-card-1')?.pinState).toBe('pinned');
+  });
+
+  it('does not retry a persisted failed pin when replacing a missing card', async () => {
+    const fake = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>([['task-card-1', {
+      taskId: 'task-card-1', messageId: 'failed-card', pinState: 'failed', updatedAt: 1,
+    }]]);
+    (fake as unknown as { messages: { fetch: (id: string) => Promise<null> } }).messages = {
+      fetch: async id => { expect(id).toBe('failed-card'); return null; },
+    };
+    const renderer = new DiscordTaskRenderer({
+      controlCardStore: {
+        getControlCard: taskId => cards.get(taskId),
+        saveControlCard: (taskId, input) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+      controlCardCanPin: () => true,
+    });
+    await renderer.start(thread(fake), { task: task('running') });
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].pinCount).toBe(0);
+    expect(cards.get('task-card-1')?.pinState).toBe('failed');
+  });
+
+  it('rethrows transient control-card fetch failures without sending a duplicate', async () => {
+    const fake = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>([['task-card-1', {
+      taskId: 'task-card-1', messageId: 'existing-card', pinState: 'pinned', updatedAt: 1,
+    }]]);
+    (fake as unknown as { messages: { fetch: () => Promise<never> } }).messages = {
+      fetch: async () => { throw new Error('Discord fetch unavailable'); },
+    };
+    const renderer = new DiscordTaskRenderer({
+      controlCardStore: {
+        getControlCard: taskId => cards.get(taskId),
+        saveControlCard: (taskId, input) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+    });
+
+    await expect(renderer.start(thread(fake), { task: task('running') })).rejects.toThrow(/fetch unavailable/);
+    expect(fake.sent).toHaveLength(0);
+  });
+
+  it('persists text mode after an embed send failure for later card updates', async () => {
+    const fake = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>();
+    const originalSend = fake.send.bind(fake);
+    let rejectedEmbed = false;
+    fake.send = async (payload: unknown) => {
+      if (!rejectedEmbed && payload && typeof payload === 'object' && 'embeds' in payload) {
+        rejectedEmbed = true;
+        throw new Error('embed unavailable');
+      }
+      return originalSend(payload);
+    };
+    const renderer = new DiscordTaskRenderer({
+      editIntervalMs: 0,
+      controlCardStore: {
+        getControlCard: taskId => cards.get(taskId),
+        saveControlCard: (taskId, input) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+      controlCardCanEmbed: () => true,
+    });
+    await renderer.start(thread(fake), { task: task('starting') });
+    await renderer.updateCard?.({ task: task('running') });
+
+    expect(fake.sent[0].edits[0]).toMatchObject({ content: expect.stringContaining('State: running') });
+  });
+
+  it('disposes its interval idempotently', async () => {
+    vi.useFakeTimers();
+    try {
+      const renderer = new DiscordTaskRenderer({ editIntervalMs: 1000 });
+      await renderer.start(thread(new FakeThread()));
+      renderer.dispose();
+      renderer.dispose();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('falls back to plain text when an embed send fails', async () => {
+    const fake = new FakeThread();
+    const originalSend = fake.send.bind(fake);
+    fake.send = async (payload: unknown) => {
+      if (payload && typeof payload === 'object' && 'embeds' in payload) throw new Error('embeds unavailable');
+      return originalSend(payload);
+    };
+    const renderer = new DiscordTaskRenderer({ editIntervalMs: 0 });
+    await renderer.start(thread(fake));
+    await renderer.handle({ type: 'status', phase: 'Streaming', detail: 'Output continues' });
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].content).toContain('Streaming');
+    expect(fake.sent[0].content).toContain('Output continues');
+  });
+
+  it('falls back to plain text for terminal results when embeds are rejected', async () => {
+    const fake = new FakeThread();
+    const originalSend = fake.send.bind(fake);
+    fake.send = async (payload: unknown) => {
+      if (payload && typeof payload === 'object' && 'embeds' in payload) throw new Error('result embeds unavailable');
+      return originalSend(payload);
+    };
+    const renderer = new DiscordTaskRenderer({ editIntervalMs: 0 });
+    await renderer.start(thread(fake));
+    await renderer.finish({
+      provider: 'claude', outcome: 'completed', exitType: 'success', startedAt: 1, completedAt: 2,
+      summary: 'Terminal result survived',
+    });
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].content).toContain('Task complete');
+    expect(fake.sent[0].content).toContain('Terminal result survived');
+  });
+
+  it('falls back to a persisted plain-text control card when its embed is rejected', async () => {
+    const fake = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>();
+    const originalSend = fake.send.bind(fake);
+    fake.send = async (payload: unknown) => {
+      if (payload && typeof payload === 'object' && 'embeds' in payload) throw new Error('card embeds unavailable');
+      return originalSend(payload);
+    };
+    const renderer = new DiscordTaskRenderer({
+      editIntervalMs: 0,
+      controlCardStore: {
+        getControlCard: taskId => cards.get(taskId),
+        saveControlCard: (taskId, input) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+      controlCardCanEmbed: () => true,
+    });
+    await renderer.start(thread(fake), { task: task('starting') });
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].content).toContain('Implement the feature');
+    expect(fake.sent[0].content).toContain('State: starting');
+    expect(cards.get('task-card-1')?.messageId).toBe(fake.sent[0].id);
+  });
+
+  it('creates one durable card, edits it through lifecycle changes, and degrades without pin permission', async () => {
+    const fake = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>();
+    const renderer = new DiscordTaskRenderer({
+      editIntervalMs: 0,
+      controlCardStore: {
+        getControlCard: (taskId: string) => cards.get(taskId),
+        saveControlCard: (taskId, input) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+      controlCardCanEmbed: () => false,
+      controlCardCanPin: () => false,
+    });
+
+    await renderer.start(thread(fake), { task: task('starting') });
+    await renderer.updateCard?.({ task: task('running'), phase: 'Working' });
+    await renderer.updateCard?.({ task: task('completed'), result: {
+      provider: 'claude', outcome: 'completed', exitType: 'success', startedAt: 1, completedAt: 2,
+      summary: 'Done',
+    } });
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0].edits).toHaveLength(2);
+    expect(cards.get('task-card-1')).toMatchObject({ pinState: 'not_pinned' });
+    expect(payloadText(fake.sent[0].edits.at(-1))).toContain('State: completed');
+  });
+
+  it('pins the card once when the effective pin capability is available', async () => {
+    const fake = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>();
+    const renderer = new DiscordTaskRenderer({
+      controlCardStore: {
+        getControlCard: taskId => cards.get(taskId),
+        saveControlCard: (taskId, input) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+      controlCardCanPin: () => true,
+    });
+
+    await renderer.start(thread(fake), { task: task('starting') });
+    await renderer.updateCard?.({ task: task('running') });
+
+    expect(fake.sent[0].pinCount).toBe(1);
+    expect(cards.get('task-card-1')?.pinState).toBe('pinned');
+  });
+
+  it('coalesces rapid card updates and reloads the persisted message after restart', async () => {
+    const first = new FakeThread();
+    const cards = new Map<string, TaskControlCardRecord>();
+    const options = {
+      controlCardStore: {
+        getControlCard: (taskId: string) => cards.get(taskId),
+        saveControlCard: (taskId: string, input: Omit<TaskControlCardRecord, 'taskId' | 'updatedAt'>) => cards.set(taskId, { taskId, ...input, updatedAt: Date.now() }),
+      },
+      controlCardCanEmbed: () => false,
+      controlCardCanPin: () => false,
+    };
+    const renderer = new DiscordTaskRenderer(options);
+    await renderer.start(thread(first), { task: task('starting') });
+    await Promise.all([
+      renderer.updateCard?.({ task: task('running'), phase: 'one' }),
+      renderer.updateCard?.({ task: task('running'), phase: 'two' }),
+      renderer.updateCard?.({ task: task('running'), phase: 'three' }),
+    ]);
+    expect(first.sent).toHaveLength(1);
+    expect(first.sent[0].edits).toHaveLength(1);
+
+    const second = new FakeThread();
+    (second as unknown as { messages: { fetch: (id: string) => Promise<FakeSentMessage> } }).messages = {
+      fetch: async id => {
+        expect(id).toBe(first.sent[0].id);
+        return first.sent[0];
+      },
+    };
+    const restarted = new DiscordTaskRenderer(options);
+    await restarted.start(thread(second), { task: task('running') });
+    expect(second.sent).toHaveLength(0);
+    expect(first.sent[0].edits.at(-1)).toMatchObject({ content: expect.stringContaining('State: running') });
+  });
+
   it('renders every normalized event without provider-specific labels and coalesces text edits', async () => {
     const fake = new FakeThread();
     const renderer = new DiscordTaskRenderer({ editIntervalMs: 0 });
@@ -184,6 +503,20 @@ describe('DiscordTaskRenderer', () => {
     expect(text).not.toContain('9.99');
     expect(text).not.toContain('999999');
     expect(text).not.toMatch(/Claude|Codex/);
+  });
+
+  it('caps terminal embed fallback text at Discord message size', async () => {
+    const fake = new FakeThread();
+    fake.failNextSend = true;
+    const renderer = new DiscordTaskRenderer({ editIntervalMs: 0 });
+    renderer.start(thread(fake));
+
+    await renderer.finish({
+      provider: 'claude', outcome: 'completed', exitType: 'success', startedAt: 1, completedAt: 2,
+      summary: 'x'.repeat(8_000),
+    });
+
+    expect(fake.sent.at(-1)?.content.length).toBeLessThanOrEqual(2_000);
   });
 
   it('renders structured terminal failures as an error card instead of raw JSON', async () => {

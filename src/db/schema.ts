@@ -304,4 +304,17 @@ export const SCHEMA_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 8,
+    name: 'persist Discord task control-card projections',
+    statements: [
+      `CREATE TABLE task_control_cards (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        message_id TEXT NOT NULL,
+        pin_state TEXT NOT NULL CHECK (pin_state IN ('unknown', 'pinned', 'not_pinned', 'failed')),
+        updated_at INTEGER NOT NULL
+      )`,
+      'CREATE INDEX task_control_cards_message_idx ON task_control_cards(message_id)',
+    ],
+  },
 ] as const;

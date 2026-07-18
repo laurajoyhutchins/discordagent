@@ -1,5 +1,37 @@
-import { describe, expect, it } from 'vitest';
-import { buildHelpEmbed } from './help.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { addProject, closeProjectStore, initializeProjectStore } from '../services/projectStore.js';
+import { buildHelpEmbed, handleHelp } from './help.js';
+
+const directories: string[] = [];
+
+afterEach(() => {
+  closeProjectStore();
+  while (directories.length > 0) rmSync(directories.pop()!, { recursive: true, force: true });
+});
+
+function registerProject(): void {
+  const directory = mkdtempSync(join(tmpdir(), 'discordagent-help-'));
+  directories.push(directory);
+  initializeProjectStore({
+    databasePath: join(directory, 'store.sqlite'),
+    legacyPath: join(directory, 'projects.json'),
+  });
+  addProject({
+    name: 'factory-floor',
+    workingDirectory: '/repos/factory-floor',
+    categoryId: 'category-1',
+    agentChannelId: 'agent-1',
+    roborevChannelId: 'review-1',
+    defaultProvider: 'codex',
+  });
+}
+
+function responseText(reply: ReturnType<typeof vi.fn>): string {
+  return JSON.stringify(reply.mock.calls[0]?.[0]);
+}
 
 describe('contextual help presentation', () => {
   it('guides the primary channel toward natural PM conversation', () => {
@@ -27,5 +59,34 @@ describe('contextual help presentation', () => {
     expect(serialized).toMatch(/reply here to continue/i);
     expect(serialized).toContain('Inspect');
     expect(serialized).toMatch(/sibling handoff/i);
+  });
+
+  it('treats a RoboRev channel as a review surface rather than a task channel', async () => {
+    registerProject();
+    const reply = vi.fn(async () => undefined);
+
+    await handleHelp({
+      channelId: 'review-1',
+      channel: { isThread: () => false },
+      reply,
+    } as never);
+
+    expect(responseText(reply)).toMatch(/review notifications/i);
+    expect(responseText(reply)).toContain('<#agent-1>');
+    expect(responseText(reply)).not.toMatch(/send a task in ordinary language/i);
+  });
+
+  it('does not mistake a thread beneath the RoboRev channel for a durable task thread', async () => {
+    registerProject();
+    const reply = vi.fn(async () => undefined);
+
+    await handleHelp({
+      channelId: 'review-thread-1',
+      channel: { isThread: () => true, parentId: 'review-1' },
+      reply,
+    } as never);
+
+    expect(responseText(reply)).toMatch(/review notifications/i);
+    expect(responseText(reply)).not.toMatch(/reply here to continue the existing task/i);
   });
 });

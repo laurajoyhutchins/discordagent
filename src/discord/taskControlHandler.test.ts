@@ -29,7 +29,23 @@ const worktree: WorktreeRecord = {
   createdAt: 1,
 };
 
-function interaction(action: 'inspect' | 'cancel', options: { thread?: boolean } = {}) {
+interface FakeTaskButtonInteraction {
+  customId: string;
+  channelId: string;
+  channel: { isThread(): boolean };
+  user: { id: string };
+  guild: { members: { fetch: ReturnType<typeof vi.fn> } };
+  deferred: boolean;
+  replied: boolean;
+  reply: ReturnType<typeof vi.fn>;
+  deferReply: ReturnType<typeof vi.fn>;
+  editReply: ReturnType<typeof vi.fn>;
+}
+
+function interaction(
+  action: 'inspect' | 'cancel',
+  options: { thread?: boolean } = {},
+): FakeTaskButtonInteraction {
   return {
     customId: taskControlCustomId(action),
     channelId: 'thread-1',
@@ -41,14 +57,14 @@ function interaction(action: 'inspect' | 'cancel', options: { thread?: boolean }
     reply: vi.fn(async () => undefined),
     deferReply: vi.fn(async () => undefined),
     editReply: vi.fn(async () => undefined),
-  } as never;
+  };
 }
 
 function dependencies(overrides: Partial<TaskControlButtonDependencies> = {}): TaskControlButtonDependencies {
   return {
     tasks: {
-      findByThreadId: vi.fn(() => task),
-      getResult: vi.fn(() => ({
+      findByThreadId: vi.fn((_threadId: string) => task),
+      getResult: vi.fn((_taskId: string) => ({
         provider: 'codex',
         outcome: 'completed',
         exitType: 'success',
@@ -56,9 +72,9 @@ function dependencies(overrides: Partial<TaskControlButtonDependencies> = {}): T
         completedAt: 2,
         summary: 'Implemented successfully',
       })),
-      getWorktree: vi.fn(() => worktree),
+      getWorktree: vi.fn((_taskId: string) => worktree),
     } as Pick<TaskRepository, 'findByThreadId' | 'getResult' | 'getWorktree'>,
-    coordinator: { cancelByThread: vi.fn(async () => true) } as Pick<TaskCoordinator, 'cancelByThread'>,
+    coordinator: { cancelByThread: vi.fn(async (_threadId: string) => true) } as Pick<TaskCoordinator, 'cancelByThread'>,
     isAuthorized: vi.fn(() => true),
     ...overrides,
   };
@@ -69,7 +85,7 @@ describe('task control buttons', () => {
     const button = interaction('inspect');
     const deps = dependencies();
 
-    await expect(handleTaskControlButton(button, deps)).resolves.toBe(true);
+    await expect(handleTaskControlButton(button as never, deps)).resolves.toBe(true);
 
     const payload = button.reply.mock.calls[0]?.[0];
     const serialized = JSON.stringify(payload);
@@ -87,7 +103,7 @@ describe('task control buttons', () => {
     const button = interaction('cancel');
     const deps = dependencies();
 
-    await expect(handleTaskControlButton(button, deps)).resolves.toBe(true);
+    await expect(handleTaskControlButton(button as never, deps)).resolves.toBe(true);
 
     expect(button.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(deps.coordinator.cancelByThread).toHaveBeenCalledWith('thread-1');
@@ -96,15 +112,16 @@ describe('task control buttons', () => {
 
   it('rejects terminal cancellation without invoking the coordinator', async () => {
     const button = interaction('cancel');
+    const completedTask: TaskRecord = { ...task, status: 'completed' };
     const deps = dependencies({
       tasks: {
-        findByThreadId: vi.fn(() => ({ ...task, status: 'completed' })),
-        getResult: vi.fn(() => undefined),
-        getWorktree: vi.fn(() => worktree),
-      },
+        findByThreadId: vi.fn((_threadId: string) => completedTask),
+        getResult: vi.fn((_taskId: string) => undefined),
+        getWorktree: vi.fn((_taskId: string) => worktree),
+      } as Pick<TaskRepository, 'findByThreadId' | 'getResult' | 'getWorktree'>,
     });
 
-    await handleTaskControlButton(button, deps);
+    await handleTaskControlButton(button as never, deps);
 
     expect(deps.coordinator.cancelByThread).not.toHaveBeenCalled();
     expect(button.reply).toHaveBeenCalledWith({
@@ -117,7 +134,7 @@ describe('task control buttons', () => {
     const button = interaction('inspect');
     const deps = dependencies({ isAuthorized: vi.fn(() => false) });
 
-    await handleTaskControlButton(button, deps);
+    await handleTaskControlButton(button as never, deps);
 
     expect(deps.tasks.findByThreadId).not.toHaveBeenCalled();
     expect(button.reply).toHaveBeenCalledWith({
@@ -130,7 +147,7 @@ describe('task control buttons', () => {
     const button = interaction('inspect', { thread: false });
     const deps = dependencies();
 
-    await handleTaskControlButton(button, deps);
+    await handleTaskControlButton(button as never, deps);
 
     expect(deps.tasks.findByThreadId).not.toHaveBeenCalled();
     expect(button.reply).toHaveBeenCalledWith({

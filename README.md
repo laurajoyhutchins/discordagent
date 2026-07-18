@@ -44,7 +44,7 @@ Discord Agent is intended for a private server with trusted users and repositori
 - At least one provider installed and authenticated on the bot host
 - Claude Code is optional; Codex CLI is optional when Claude is the only provider
 
-Run the provider you intend to use once locally to complete authentication. Codex can also be authenticated privately from Discord with `/codex-auth login`, or locally with `codex login --device-auth`.
+Run the provider you intend to use once locally to complete authentication. Codex device authentication is host-local: run `codex login --device-auth` on the bot host and never send the verification URL or one-time code to Discord. `/codex-auth login` only starts the in-memory flow and provides local-host instructions.
 
 ## Installation
 
@@ -80,9 +80,32 @@ npm run build
 npm start
 ```
 
-## Discord bot permissions
+## Discord setup and least-privilege permissions
 
-The bot requires the message-content and server-members privileged intents. It needs permission to view channels, send messages, embed links, create and manage threads, and create/delete project channels. Roborev uses the bot identity; `Manage Webhooks` is no longer required by Discord Agent itself.
+Discord Agent separates bot permission bits, Gateway intents, OAuth scopes, and application features. Use the calculator to print the current values from the installed Discord.js constants:
+
+```bash
+npm run discord:permissions
+```
+
+The ordinary runtime profile is:
+
+- `View Channel` — read private project/task channels;
+- `Send Messages` — reply and publish task output;
+- `Embed Links` — richer status and result cards (plain-text fallback remains available);
+- `Read Message History` — inspect task-thread context;
+- `Create Public Threads` — create one thread for each new task;
+- `Send Messages in Threads` — publish the control card, output, and decisions.
+
+The temporary/bootstrap profile adds `Manage Channels` for creating project categories/channels, installing their permission overwrites, and deleting project channels. Remove it after setup when project-channel management is no longer needed. The bot must have these permissions at guild level; a channel overwrite cannot grant a permission the bot does not possess.
+
+The configured Gateway intents are `Guilds`, `Guild Members`, `Guild Messages`, and the privileged `Message Content` intent. Enable `Guild Members` and `Message Content` in the Discord Developer Portal before starting the bot.
+
+Optional profiles are represented by the capability registry but are not included in the default runtime invitation: `Pin Messages` for pinned control cards, `Send Polls` for native polls, `View Audit Log` for audit reconciliation, `Manage Webhooks` for future webhook personas, `Create Events` for scheduled events, `Send Voice Messages` for voice messages, `Connect`/`Speak` plus `Guild Voice States` for live voice, and `Set Voice Channel Status` for voice status. Each feature has a graceful fallback and must be enabled deliberately.
+
+Buttons, select menus, modals, and message context commands are Discord Interaction API features; they are not enabled by selecting similarly named bot permissions. Command registration uses the `applications.commands` OAuth scope. Activities require application configuration and an Entry Point command; `Use Embedded Activities`, `Use Application Commands`, and `Use External Apps` are member-behavior permissions, not baseline bot-role requirements. Do not select `Administrator`: it is neither required nor recommended.
+
+After installation, run `/capabilities` in a project or task channel for an authorized ephemeral report of effective permissions, channel overwrites, fallbacks, Gateway intents, and application configuration. The report remains useful when optional permissions are missing.
 
 ## Registering a project
 
@@ -118,6 +141,7 @@ Send a normal message in `#agent` to create a task. Discord Agent will:
 | `/stop-loop` | Stop the loop associated with the project or loop thread. |
 | `/agents` | Show active task threads, providers, status, and reserved capacity. |
 | `/usage` | Show provider windows, operating posture, and active reservations. |
+| `/capabilities` | Show effective Discord capabilities and graceful fallbacks in the current channel. |
 | `/codex-auth status\|login\|logout` | Check, establish, or revoke Codex authentication using owner-only ephemeral controls. |
 
 Text commands in `#agent` include `/provider`, `/model`, `/loop`, `/stop-loop`, and `/status`. Ordinary natural-language messages are the default interface.
@@ -143,7 +167,7 @@ In `#agent-chat`, `/model` changes the global PM model and Codex reasoning effor
 
 Codex runs through a singleton local App Server process using newline-delimited JSON requests, responses, notifications, and server-initiated approval/input requests. A Codex task persists the returned thread identifier before awaiting turn completion, streams normalized plans/commands/file changes/diffs/usage, and maps Discord decisions back to App Server approval values.
 
-When sign-in is required, the original request is held in memory for up to 30 minutes without creating a thread or worktree. `/codex-auth login` shows the OpenAI device URL and one-time code only in an ephemeral owner interaction. The bot performs a fresh account read after completion and requires an explicit **Start task** or **Discard** action. API keys and secret tool inputs are never requested through Discord.
+When sign-in is required, the original request is held in memory for up to 30 minutes without creating a thread or worktree. `/codex-auth login` never displays the OpenAI device URL or one-time code in Discord; complete the flow locally on the bot host. Login details are memory-only, expire automatically, and are cleared on completion, cancellation, logout, or shutdown. The bot performs a fresh account read after completion and requires an explicit **Start task** or **Discard** action. API keys and secret tool inputs are never requested through Discord.
 
 A provider change inside a completed task thread is a confirmed sibling handoff, not an in-place session conversion. The new task receives a fresh provider session and isolated worktree based on the committed source-task branch. The handoff transfers a bounded structured summary rather than the complete transcript.
 

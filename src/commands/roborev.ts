@@ -1,7 +1,11 @@
 import { ChatInputCommandInteraction, MessageFlags, ChannelType, type Guild, type GuildTextBasedChannel } from 'discord.js';
 import { getProject, getProjectRepository } from '../services/projectStore.js';
 import { config } from '../config.js';
-import { isRoborevCliAvailable, hasRoborevSetup } from '../integrations/roborev/index.js';
+import {
+  isRoborevCliAvailable,
+  hasRoborevSetup,
+  notifyRoborevConfigurationChanged,
+} from '../integrations/roborev/index.js';
 import type { Project } from '../types.js';
 
 export interface RoborevCommandDependencies {
@@ -83,6 +87,7 @@ export async function handleRoborev(
     try {
       const roborevChannelId = await deps.createRoborevChannel(interaction.guild!, project.categoryId, projectName);
       deps.updateRoborevChannel(projectName, roborevChannelId);
+      notifyRoborevConfigurationChanged();
       await interaction.editReply(`RoboRev enabled for **${projectName}**. Reviews will appear in <#${roborevChannelId}>.`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -102,6 +107,7 @@ export async function handleRoborev(
     try {
       await deps.deleteChannel(interaction.guild!, project.roborevChannelId);
       deps.updateRoborevChannel(projectName, undefined);
+      notifyRoborevConfigurationChanged();
       await interaction.editReply(`RoboRev disabled for **${projectName}**. The review channel has been removed.`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

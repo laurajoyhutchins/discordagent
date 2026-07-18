@@ -1,7 +1,7 @@
 # Discord Task Actions Design
 
 **Date:** 2026-07-18
-**Status:** Approved
+**Status:** Implemented
 **Target:** `laurajoyhutchins/discordagent`
 
 ## Purpose
@@ -33,8 +33,8 @@ The guild message context command:
 
 1. authorizes the invoking member with the existing role policy;
 2. requires the selected message to be in a registered project `#agent` channel;
-3. requires non-empty text content;
-4. rejects messages that already own a thread;
+3. requires non-empty message text;
+4. rejects messages that already own a Discord thread;
 5. privately acknowledges the interaction;
 6. delegates to `TaskCoordinator.startFromMessage` using the project name and exact message text;
 7. returns a link to the created task thread.
@@ -48,7 +48,7 @@ Provider, model, reasoning, MCP, timeout, and other settings remain resolved by 
 - **Inspect** for every task state;
 - **Cancel** only for nonterminal task states.
 
-The controls are retained when the card falls back from embeds to plain text.
+The controls are retained when the card renders in embed or permission-driven plain-text mode.
 
 **Inspect** reads the current task, result, and worktree from the repository and returns a redacted private summary. **Cancel** delegates to `TaskCoordinator.cancelByThread`; the existing active renderer updates the persisted card through the normal coordinator lifecycle.
 
@@ -62,6 +62,6 @@ The controls are retained when the card falls back from embeds to plain text.
 
 ## Testing
 
-Tests cover command registration, intake guards, coordinator delegation, active and terminal button rendering, plain-text fallback components, inspect behavior, cancellation behavior, authorization, stale controls, and interaction routing.
+Tests cover command registration, intake guards, coordinator delegation, active and terminal button rendering, plain-text card components, inspect behavior, cancellation behavior, authorization, stale controls, and interaction routing.
 
 GitHub Actions is the authoritative full-suite and TypeScript build verification environment.

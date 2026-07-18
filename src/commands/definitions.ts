@@ -88,6 +88,16 @@ export const commands = [
     .addSubcommand(command => command.setName('logout').setDescription('Log out Codex after confirmation')),
 
   new SlashCommandBuilder()
+    .setName('roborev')
+    .setDescription('Enable or disable RoboRev code review integration for a project')
+    .addStringOption(opt =>
+      opt.setName('project').setDescription('Project name').setRequired(true)
+    )
+    .addBooleanOption(opt =>
+      opt.setName('enable').setDescription('Enable or disable RoboRev').setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
     .setName('model')
     .setDescription("Set this project's model and thinking depth")
     .addStringOption(opt =>

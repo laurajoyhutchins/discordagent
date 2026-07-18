@@ -58,7 +58,7 @@ function captureOutput(repl: Repl): { text(): string } {
 }
 
 describe('terminal command regressions', () => {
-  it('prints a successful provider change exactly once', async () => {
+  it('prints a completed provider change exactly once', async () => {
     const deps = createDependencies() as any;
     const repl = new Repl(deps);
     const output = captureOutput(repl);
@@ -68,6 +68,7 @@ describe('terminal command regressions', () => {
     expect(deps.activatePrimaryProvider).toHaveBeenCalledWith('opencode');
     expect(deps.settings.updateGlobal).toHaveBeenCalledWith({ defaultProvider: 'opencode' });
     expect(output.text().match(/Primary provider set to/g)).toHaveLength(1);
+    expect(output.text()).not.toContain('Activating');
   });
 
   it('does not print provider success after activation failure', async () => {

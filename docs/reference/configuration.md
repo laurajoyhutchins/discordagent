@@ -1,74 +1,113 @@
 # Configuration
 
+Discord Agent reads host configuration from environment variables when the process starts. Changing an environment variable requires restarting the bot. Discord settings commands may override some model and provider defaults without changing the host environment.
+
 ## Environment variables
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DISCORD_TOKEN` | Yes | — | Discord bot token |
-| `DISCORD_CLIENT_ID` | Yes | — | Discord application client ID |
-| `DISCORD_GUILD_ID` | Yes | — | Discord server (guild) ID |
-| `AUTHORIZED_ROLE_IDS` | Yes | — | Comma-separated Discord role IDs authorized for project access |
-| `AUTHORIZED_USER_ID` | PM/Codex auth | `NOTIFY_USER_ID` | Exact owner authorized for `#agent-chat` and Codex authentication |
-| `NOTIFY_USER_ID` | No | — | User ID to mention on task completion |
-| `PROJECTS_BASE_DIR` | No | unrestricted | Optional parent-directory boundary for registered repositories |
-| `DATABASE_PATH` | No | runtime data directory | SQLite database file path |
-| `WORKTREES_BASE_DIR` | No | `<db-dir>/discordagent-worktrees` | Base directory for Git worktrees |
-| `CLAUDE_ENABLED` | No | `true` | Enable the Claude provider |
-| `CLAUDE_MODEL` | No | provider default | Default Claude task model |
-| `CLAUDE_TIMEOUT_MS` | No | `900000` | Default Claude task timeout in milliseconds |
-| `CODEX_ENABLED` | No | `true` | Enable the Codex provider |
-| `CODEX_CLI_PATH` | No | `codex` | Codex CLI executable used to launch App Server |
-| `CODEX_MODEL` | No | provider default | Default Codex task model |
-| `OPENCODE_ENABLED` | No | `true` | Enable the OpenCode ACP provider |
-| `OPENCODE_CLI_PATH` | No | `opencode` | OpenCode CLI executable |
-| `OPENCODE_TIMEOUT_MS` | No | `900000` | OpenCode task timeout in milliseconds |
-| `OPENCODE_MODEL` | No | provider default | Default OpenCode task model |
-| `OPENCODE_PRIMARY_MODEL` | No | global/provider fallback | OpenCode-specific PM-chat model |
-| `PRIMARY_AGENT_MODEL` | No | provider default | Default PM-agent model for any provider |
-| `PRIMARY_USAGE_RESERVE` | No | `10` | Percentage points reserved for PM operations |
-| `ROBOREV_CLI_PATH` | No | `roborev` | Roborev executable path |
-| `USAGE_CHANNEL_ID` | No | — | Optional detailed usage channel |
-| `ALLOW_NON_GIT` | No | `false` | Allow registration of non-Git directories; agent tasks still require Git worktrees |
+### Required
 
-Disable providers that are not installed on the host. `npm run smoke:host` treats a missing Codex or OpenCode CLI as a failure when its provider remains enabled and as a warning when disabled.
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `DISCORD_TOKEN` | string | — | Discord bot token | Yes |
+| `DISCORD_CLIENT_ID` | string | — | Discord application ID used for command registration and connectivity checks | No |
+| `DISCORD_GUILD_ID` | string | — | Private Discord server ID | No |
+| `AUTHORIZED_ROLE_IDS` | comma-separated Discord role IDs | — | Roles allowed to use project and task functionality | No |
 
-## Claude MCP servers
+### Owner identity
 
-MCP servers are loaded from `~/.claude/settings.json` under `mcpServers`. Only user-level settings are used; project/local Claude settings are ignored.
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `AUTHORIZED_USER_ID` | Discord user ID | `NOTIFY_USER_ID` | Exact owner allowed to use `#agent-chat`, global settings, and Codex authentication controls | No |
+| `NOTIFY_USER_ID` | Discord user ID | empty | User to mention when a task completes; also supplies the owner fallback when `AUTHORIZED_USER_ID` is omitted | No |
 
-Servers named `default` and `disabled` are reserved for profile resolution:
+Set `AUTHORIZED_USER_ID` explicitly when using the PM-style primary agent or Codex authentication. Leaving both owner variables empty prevents owner-only flows from identifying an authorized owner.
 
-- **default** — all host-allowlisted servers
-- **disabled** — no MCP servers
+### Security and project registration
 
-Every other server name becomes a selectable single-server MCP profile in `/project-settings`.
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `PROJECTS_BASE_DIR` | absolute path | unrestricted | Restrict registered project paths to descendants of this directory | Potentially |
+| `ALLOW_NON_GIT` | boolean | `false` | Allow registration of non-Git directories; agent tasks still require a Git repository | No |
+
+### Claude provider
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `CLAUDE_ENABLED` | boolean | `true` | Enable Claude when its provider startup checks succeed | No |
+| `CLAUDE_MODEL` | string | provider default | Host default Claude task model | No |
+| `CLAUDE_TIMEOUT_MS` | integer milliseconds | `900000` | Claude turn timeout | No |
+
+Claude authentication and user-level settings remain host-local. Project and local Claude settings are intentionally ignored by the runtime.
+
+### Codex provider
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `CODEX_ENABLED` | boolean | `true` | Enable the Codex App Server provider | No |
+| `CODEX_CLI_PATH` | executable path or command | `codex` | Codex CLI used to launch the local App Server | Potentially |
+| `CODEX_MODEL` | string | provider default | Host default Codex task model | No |
+
+Codex credentials and device-authentication state are managed by the Codex CLI on the bot host, not by environment variables stored in Discord Agent.
+
+### OpenCode provider
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `OPENCODE_ENABLED` | boolean | `true` | Enable the OpenCode ACP provider | No |
+| `OPENCODE_CLI_PATH` | executable path or command | `opencode` | OpenCode CLI executable | Potentially |
+| `OPENCODE_TIMEOUT_MS` | integer milliseconds | `900000` | OpenCode task-turn timeout | No |
+| `OPENCODE_MODEL` | string | provider default | Host default OpenCode task model | No |
+| `OPENCODE_PRIMARY_MODEL` | string | provider/global default | OpenCode-specific model for PM-style primary-agent turns | No |
+
+### Primary agent and usage admission
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `PRIMARY_AGENT_MODEL` | string | provider default | Optional host default model for PM-style primary-agent turns | No |
+| `PRIMARY_USAGE_RESERVE` | number | `10` | Percentage points of provider capacity reserved for coordination and recovery | No |
+
+### Storage
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `DATABASE_PATH` | path | runtime data directory | SQLite database file | Yes |
+| `WORKTREES_BASE_DIR` | path | `discordagent-worktrees` beside `DATABASE_PATH` | Managed directory containing isolated task worktrees | Yes |
+
+Development normally stores the database at `src/data/discordagent.sqlite`; compiled execution normally stores it at `dist/data/discordagent.sqlite`. A custom `DATABASE_PATH` changes the default worktree parent accordingly.
+
+### Integrations and operations
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `ROBOREV_CLI_PATH` | executable path or command | `roborev` | Roborev executable | Potentially |
+| `USAGE_CHANNEL_ID` | Discord channel ID | empty | Optional channel for detailed provider-usage posts | No |
+| `INSTANCE_LOCK_PORT` | integer TCP port | `47831` | Loopback port used to prevent multiple bot processes from handling the same events | No |
+
+## Settings precedence
+
+For supported task settings, precedence is highest to lowest:
+
+1. A one-turn override supplied with the current prompt
+2. The durable task's provider-scoped settings
+3. Project settings
+4. Global settings
+5. Host environment defaults and provider defaults
+
+Existing task threads retain their provider and durable session identity. Provider changes inside a task thread create a confirmed sibling handoff rather than converting the existing session.
+
+## Provider setting capabilities
+
+| Setting | Claude | Codex | OpenCode |
+|---|---:|---:|---:|
+| Model | Yes | Yes | Yes |
+| Reasoning effort | No | Yes | No |
+| Timeout | Yes | No | No |
+| MCP profile | Yes | No | No |
 
 ## Database
 
-The SQLite database is created automatically on first run. Migrations are versioned and transactional. Provider-constraint rebuilds temporarily disable SQLite foreign-key enforcement, run `foreign_key_check` before commit, and restore the prior pragma value.
+The SQLite database is created automatically on first run. Migrations are versioned and transactional. The current schema version is documented in [Compatibility](compatibility.md).
 
-## Discord permissions
+## Source of truth
 
-See [Capability Model](../explanation/capability-model.md) for the complete permission breakdown.
-
-Required Gateway intents (enable in Discord Developer Portal):
-
-- `Guilds`
-- `GuildMessages`
-- `GuildMembers` (privileged)
-- `MessageContent` (privileged)
-
-Required bot permissions at guild level:
-
-- View Channel
-- Send Messages
-- Embed Links
-- Read Message History
-- Create Public Threads
-- Send Messages in Threads
-
-Use the permission calculator to print exact values:
-
-```bash
-npm run discord:permissions
-```
+Runtime behavior in `src/config.ts` is authoritative. This reference and `.env.example` must agree with it. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.

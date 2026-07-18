@@ -26,4 +26,4 @@ Goal-oriented procedures for specific operational tasks.
 
 ## Integrations
 
-- [Enable Roborev](integrations/enable-roborev.md)
+- [Enable or disable RoboRev](integrations/enable-roborev.md)

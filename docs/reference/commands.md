@@ -15,7 +15,6 @@
 | `/agents` | Guild channel | Show active task threads, providers, and status |
 | `/usage` | Guild channel | Show provider usage posture and reservations |
 | `/cancel` | Task thread | Cancel the durable task while preserving its worktree |
-| `/close` | Completed task thread | Remove a clean completed task worktree |
 | `/loop` | Project channel | Start periodic task execution |
 | `/stop-loop` | Project channel or loop thread | Stop periodic task execution |
 | `/codex-auth` | `#agent-chat` only | Check, establish, or revoke Codex authentication |

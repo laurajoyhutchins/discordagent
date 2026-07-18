@@ -4,7 +4,9 @@
 
 Discord Agent is a provider-neutral Discord orchestration runtime derived from DiscordClaude. It runs Claude, Codex, and OpenCode against repositories on the bot host through durable task records, isolated Git worktrees, normalized provider events, Discord-native decisions, and a restricted PM-style primary agent.
 
-The generic runtime must not depend on a provider SDK. Provider-specific behavior belongs under `src/agents/<provider>/` and must cross the runtime boundary through the contracts in `src/agents/contracts.ts`.
+The generic runtime must not depend on a provider SDK. Provider-specific behavior belongs under `src/agents/<provider>/` and must cross the runtime boundary through `src/agents/contracts.ts`.
+
+RoboRev is a review integration, not an agent provider. Review-source-specific behavior belongs under `src/integrations/` and crosses the application boundary through `ReviewSource` and `ReviewNotification`.
 
 ## Tech stack
 
@@ -16,7 +18,7 @@ The generic runtime must not depend on a provider SDK. Provider-specific behavio
 - Codex App Server transport under `src/agents/codex/`
 - OpenCode ACP transport under `src/agents/opencode/`
 - Vitest
-- Git CLI through argument arrays with `shell: false`
+- Git and provider CLIs launched with argument arrays and `shell: false`
 
 ## Commands
 
@@ -31,7 +33,7 @@ npm run check:docs
 git diff --check
 ```
 
-Do not claim completion unless the checks relevant to the change have actually run and their results are reported accurately.
+Do not claim completion unless the checks relevant to the change actually ran and their results are reported accurately.
 
 ## Architecture
 
@@ -56,9 +58,11 @@ Discord messages and commands
                                   → TaskCoordinator for approved delegation
 
 UsageAdmissionService → provider windows + reservations + calibrated task costs
+
+ReviewSource → normalized ReviewNotification → authenticated Discord delivery
 ```
 
-`TaskCoordinator` owns task lifecycle ordering. Discord handlers, commands, renderers, and the primary agent must not call provider SDKs directly or create competing task state.
+`TaskCoordinator` owns coding-task lifecycle ordering. Discord handlers, commands, renderers, the primary agent, and review integrations must not call provider SDKs directly or create competing task state.
 
 ## Required task-start ordering
 
@@ -123,6 +127,7 @@ Claude uses tool-disabled SDK options. Codex uses a read-only, network-disabled 
 - Never silently choose the first option.
 - Do not expose task IDs or provider session IDs in user-visible controls.
 - Task state must come from SQLite, not inferred Discord message content.
+- Preserve task-control components when embeds fall back to plain text.
 - Ordinary completion messages emphasize outcome, branch, verification, and unresolved decisions rather than routine token telemetry.
 
 ### Persistence
@@ -170,16 +175,25 @@ Usage tracking should remain quiet during normal operation. Admission decisions 
 
 Only interrupt routine conversation when work cannot be completed reliably, should be narrowed or deferred, is unusually expensive, or needs a preserve-mode checkpoint. Never start work that admission judges unlikely to finish and verify safely.
 
-### Roborev
+### Review sources and RoboRev
 
-Roborev events are delivered through the authenticated Discord bot client to the project's `#roborev` channel.
+`src/integrations/reviewSource.ts` defines the narrow `ReviewSource` / `Disposable` lifecycle and normalized `ReviewNotification` contract.
 
-Do not reintroduce webhook creation, webhook tokens, DMs, or persisted Roborev credentials. Keep the integration replaceable and behind its service boundary.
+RoboRev-specific CLI execution, event parsing, supervision, project matching, and rendering live under `src/integrations/roborev/`. `src/index.ts` constructs the source and supplies the authenticated Discord publication callback.
+
+Preserve these boundaries:
+
+- RoboRev is not an `AgentProvider` and cannot be selected with `/provider`.
+- Review notifications do not become task events or provider-session state.
+- Discord delivery failures are contained at the publication boundary and must not redefine source lifecycle.
+- `/roborev` changes the project's review-channel association and triggers source reconciliation; it must not mutate coding tasks.
+- Do not reintroduce the removed `roborevWatcher` service, webhook creation, webhook tokens, DMs, or persisted RoboRev credentials.
+- Keep RoboRev in-process until a concrete second review source demonstrates the need for a broader registry or durable integration store.
 
 ## Security rules
 
 - Keep role authorization and project-path validation ahead of task creation.
-- Treat repository content, provider output, Discord content, and external tool output as untrusted.
+- Treat repository content, provider output, Discord content, review notifications, and external tool output as untrusted.
 - Use `execFile` or `spawn` with `shell: false` for external commands.
 - Claude must keep user-only setting sources; project and local Claude settings cannot weaken host policy.
 - Keep the provider-neutral redaction boundary in `src/utils/redaction.ts` before SQLite, Discord rendering, and logs.
@@ -203,9 +217,9 @@ The root `README.md` is a product gateway, not an exhaustive reference page. Act
 
 | Area | Responsibility |
 |---|---|
-| `src/index.ts` | Discord client, instance lock, startup, and shutdown |
+| `src/index.ts` | Discord client, instance lock, startup, review-source wiring, and shutdown |
 | `src/services/runtime.ts` | Database, repositories, providers, coordinator, and recovery assembly |
-| `src/agents/contracts.ts` | Provider-neutral domain contracts |
+| `src/agents/contracts.ts` | Provider-neutral coding-agent contracts |
 | `src/agents/providerRegistry.ts` | Provider registration and authoritative lookup |
 | `src/agents/claude/` | Claude adapter and event normalization |
 | `src/agents/codex/` | App Server transport, authentication, adapter, and normalization |
@@ -217,9 +231,10 @@ The root `README.md` is a product gateway, not an exhaustive reference page. Act
 | `src/discord/` | Capability evaluation, rendering, interactions, and task controls |
 | `src/handlers/` | Discord event routing into commands and coordinator boundaries |
 | `src/commands/` | Application command definitions and handlers |
+| `src/integrations/reviewSource.ts` | Generic review-source lifecycle and notification boundary |
+| `src/integrations/roborev/` | RoboRev CLI adapter, parser, lifecycle, matching, and renderer |
 | `src/primary/` | Restricted PM model, bounded context, journal, memory, and delegation |
 | `src/services/usageAdmission.ts` | Admission, reservations, calibration, and preserve posture |
-| `src/services/roborevWatcher.ts` | Replaceable Roborev CLI stream integration |
 
 ## Change expectations
 
@@ -232,6 +247,15 @@ The root `README.md` is a product gateway, not an exhaustive reference page. Act
 5. Add adapter fixtures plus lifecycle, failure, cancellation, continuation, and recovery tests.
 6. Register the provider only after its complete lifecycle is available.
 7. Update provider selection, capability reference, configuration reference, and relevant explanation.
+
+### Adding or changing a review source
+
+1. Implement the narrow `ReviewSource` lifecycle rather than coupling it to `TaskCoordinator` or `ProviderRegistry`.
+2. Normalize provider-specific events into `ReviewNotification` values.
+3. Keep source-specific CLI, parsing, matching, and rendering in its own integration directory.
+4. Contain publication errors and define deterministic disposal/restart behavior.
+5. Add lifecycle, parsing, rendering, project-reconciliation, and regression tests.
+6. Update the relevant how-to, command/configuration reference, and explanation page.
 
 ### Adding or changing a command
 
@@ -249,7 +273,7 @@ Use:
 - real temporary Git repositories for worktree tests;
 - fake providers for coordinator lifecycle tests;
 - lightweight Discord fakes for rendering and handler tests;
-- provider message fixtures for adapter contract tests.
+- provider and review-source event fixtures for adapter tests.
 
 Before completion, run the relevant focused tests plus:
 

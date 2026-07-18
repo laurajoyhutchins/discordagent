@@ -156,7 +156,7 @@ describe('/provider', () => {
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/global.*Codex/i) }));
   });
 
-  it('explains that OpenCode is task-only when selected for the PM', async () => {
+  it('activates and persists OpenCode when selected for the PM', async () => {
     const update = vi.fn();
     const activate = vi.fn(async () => undefined);
     const check = vi.fn(async () => ({ available: true }));
@@ -170,11 +170,11 @@ describe('/provider', () => {
       checkProvider: check,
     });
 
-    expect(update).not.toHaveBeenCalled();
-    expect(activate).not.toHaveBeenCalled();
-    expect(check).not.toHaveBeenCalled();
+    expect(check).toHaveBeenCalledWith('opencode');
+    expect(activate).toHaveBeenCalledWith('opencode');
+    expect(update).toHaveBeenCalledWith('opencode');
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringMatching(/OpenCode.*task-only|task-only.*OpenCode/i),
+      content: expect.stringMatching(/global.*OpenCode/i),
       flags: MessageFlags.Ephemeral,
     }));
   });

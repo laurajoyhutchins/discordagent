@@ -110,6 +110,51 @@ describe('TaskRepository', () => {
       .run('{"model":{"unexpected":"value"}}', 'malformed-settings');
 
     expect(tasks.findById('malformed-settings')?.settings).toEqual({});
+    expect(tasks.findById('malformed-settings')?.settingsMalformed).toBe(true);
+  });
+
+  it('redacts task objectives before persistence and reload', () => {
+    const { tasks } = setup();
+    const created = tasks.createWithWorktree(transaction('redacted-objective', { objective: 'Deploy with API_KEY=objective-secret' }));
+
+    expect(created.objective).toContain('[REDACTED]');
+    expect(created.objective).not.toContain('objective-secret');
+    expect(tasks.findById('redacted-objective')?.objective).not.toContain('objective-secret');
+  });
+
+  it('persists and reloads the Discord control-card message identity', () => {
+    const { tasks } = setup();
+    tasks.createWithWorktree(transaction('card-task'));
+
+    tasks.saveControlCard('card-task', { messageId: 'message-1', pinState: 'not_pinned' });
+    expect(tasks.getControlCard('card-task')).toMatchObject({
+      taskId: 'card-task',
+      messageId: 'message-1',
+      pinState: 'not_pinned',
+    });
+
+    tasks.saveControlCard('card-task', { messageId: 'message-1', pinState: 'pinned' });
+    expect(tasks.getControlCard('card-task')?.pinState).toBe('pinned');
+  });
+
+  it('fails closed when a stored timeout snapshot is outside the validated range', () => {
+    const { db, tasks } = setup();
+    tasks.createWithWorktree(transaction('out-of-range-timeout'));
+    for (const timeoutMs of [4_999, 3_600_001]) {
+      db.raw.prepare('UPDATE tasks SET settings_json = ? WHERE id = ?')
+        .run(JSON.stringify({ timeoutMs }), 'out-of-range-timeout');
+
+      expect(tasks.findById('out-of-range-timeout')?.settings).toEqual({});
+    }
+  });
+
+  it('marks non-empty snapshots with unknown settings as malformed', () => {
+    const { db, tasks } = setup();
+    tasks.createWithWorktree(transaction('unknown-setting'));
+    db.raw.prepare('UPDATE tasks SET settings_json = ? WHERE id = ?')
+      .run(JSON.stringify({ timeoutMs: 60_000, unexpected: true }), 'unknown-setting');
+
+    expect(tasks.findById('unknown-setting')).toMatchObject({ settings: {}, settingsMalformed: true });
   });
 
   it('keeps provider identity immutable and attaches one matching provider session', () => {

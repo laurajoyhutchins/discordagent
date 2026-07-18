@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexAuthService } from './codexAuthService.js';
 
 class FakeTransport extends EventEmitter {
@@ -7,6 +7,8 @@ class FakeTransport extends EventEmitter {
 }
 
 describe('CodexAuthService', () => {
+  afterEach(() => vi.useRealTimers());
+
   it('uses the documented ChatGPT device-code login request', async () => {
     const transport = new FakeTransport();
     transport.request.mockResolvedValueOnce({
@@ -15,6 +17,17 @@ describe('CodexAuthService', () => {
     const auth = new CodexAuthService(transport as never);
     await expect(auth.startDeviceLogin()).resolves.toMatchObject({ loginId: 'login-1', userCode: 'ABCD-1234' });
     expect(transport.request).toHaveBeenCalledWith('account/login/start', { type: 'chatgptDeviceCode' });
+  });
+
+  it('expires device-login details from memory', async () => {
+    vi.useFakeTimers();
+    const transport = new FakeTransport();
+    transport.request.mockResolvedValueOnce({ loginId: 'login-expiring', verificationUrl: 'https://example.test/device', userCode: 'SECRET-CODE', expiresAt: Date.now() + 1_000 });
+    const auth = new CodexAuthService(transport as never);
+    await auth.startDeviceLogin();
+    expect(auth.getPendingLogin()?.userCode).toBe('SECRET-CODE');
+    vi.advanceTimersByTime(1_001);
+    expect(auth.getPendingLogin()).toBeUndefined();
   });
 
   it('parses the multi-bucket rate-limit response and derives remaining percent', async () => {

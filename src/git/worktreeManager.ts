@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { AgentProviderId } from '../agents/contracts.js';
 import type { GitClient } from './gitClient.js';
+import { redactSensitiveText } from '../utils/redaction.js';
 
 export interface CreateWorktreeInput {
   repositoryPath: string;
@@ -34,10 +35,18 @@ export interface RemoveWorktreeInput {
 }
 
 export interface WorktreeManager {
+  validateBaseBranch?(repositoryPath: string, baseBranch?: string): Promise<string>;
   create(input: CreateWorktreeInput): Promise<CreatedWorktree>;
   inspect(path: string): Promise<WorktreeInspection>;
   remove(input: RemoveWorktreeInput): Promise<void>;
   pruneAdministrativeMetadata(repositoryPath: string): Promise<void>;
+}
+
+export function isManagedWorktreePath(baseDirectory: string, worktreePath: string, pathApi = { relative, isAbsolute, sep }): boolean {
+  const relativePath = pathApi.relative(baseDirectory, worktreePath);
+  return relativePath.length > 0 && relativePath !== '..'
+    && !relativePath.startsWith(`..${pathApi.sep}`)
+    && !pathApi.isAbsolute(relativePath);
 }
 
 interface WorktreeManagerOptions {
@@ -144,6 +153,9 @@ export function createWorktreeManager(options: WorktreeManagerOptions): Worktree
   const baseDirectory = resolve(options.baseDirectory);
 
   return {
+    async validateBaseBranch(repositoryPath: string, baseBranch?: string): Promise<string> {
+      return resolveBaseRef(git, resolve(repositoryPath), baseBranch);
+    },
     async create(input: CreateWorktreeInput): Promise<CreatedWorktree> {
       return withRepositoryLock(input.repositoryPath, async () => {
         const repositoryPath = resolve(input.repositoryPath);
@@ -151,7 +163,7 @@ export function createWorktreeManager(options: WorktreeManagerOptions): Worktree
         await assertNoOperationInProgress(git, repositoryPath);
 
         const baseRef = await resolveBaseRef(git, repositoryPath, input.baseBranch);
-        const objectiveSlug = slug(input.objective, 'task');
+        const objectiveSlug = slug(redactSensitiveText(input.objective), 'task');
         const threadSuffix = input.threadId.slice(-6) || 'thread';
         const primaryBranch = `agent/${input.provider}/${objectiveSlug}-${threadSuffix}`;
         let branchName = primaryBranch;
@@ -198,6 +210,11 @@ export function createWorktreeManager(options: WorktreeManagerOptions): Worktree
     },
 
     async remove(input: RemoveWorktreeInput): Promise<void> {
+      const managedBase = resolve(baseDirectory);
+      const candidate = resolve(input.worktreePath);
+      if (!isManagedWorktreePath(managedBase, candidate)) {
+        throw new Error(`Refusing to remove worktree outside managed base directory: ${input.worktreePath}`);
+      }
       const inspection = await this.inspect(input.worktreePath);
       if (!inspection.exists) return;
       if (inspection.dirty) {

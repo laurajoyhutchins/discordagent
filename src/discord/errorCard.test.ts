@@ -30,4 +30,16 @@ describe('Discord error cards', () => {
     })}`)).toBe(true);
     expect(isStructuredErrorMessage('The task completed successfully.')).toBe(false);
   });
+
+  it('redacts secret-bearing structured status, type, and code fields', () => {
+    const rendered = buildErrorEmbed(new Error(JSON.stringify({
+      type: 'error', status: 'apiKey=json-status-secret',
+      error: { type: 'Bearer json-type-secret', code: 'deviceCode=json-code-secret', message: 'Request failed' },
+    }))).toJSON();
+    const serialized = JSON.stringify(rendered);
+    expect(serialized).not.toContain('json-status-secret');
+    expect(serialized).not.toContain('json-type-secret');
+    expect(serialized).not.toContain('json-code-secret');
+    expect(serialized).toContain('[REDACTED]');
+  });
 });

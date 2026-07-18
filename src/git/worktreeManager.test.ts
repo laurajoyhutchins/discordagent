@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createGitClient } from './gitClient.js';
-import { createWorktreeManager } from './worktreeManager.js';
+import { createWorktreeManager, isManagedWorktreePath } from './worktreeManager.js';
 
 const roots: string[] = [];
 
@@ -32,6 +32,14 @@ afterEach(() => {
 });
 
 describe('WorktreeManager', () => {
+  it('contains Windows-style worktrees by path components, not sibling prefixes', () => {
+    const pathApi = { relative: win32.relative, isAbsolute: win32.isAbsolute, sep: win32.sep };
+
+    expect(isManagedWorktreePath('C:\\agent-worktrees', 'C:\\agent-worktrees\\task-1', pathApi)).toBe(true);
+    expect(isManagedWorktreePath('C:\\agent-worktrees', 'C:\\agent-worktrees-archive\\task-1', pathApi)).toBe(false);
+    expect(isManagedWorktreePath('C:\\agent-worktrees', 'D:\\agent-worktrees\\task-1', pathApi)).toBe(false);
+  });
+
   it('creates an isolated branch and worktree from the current local branch', async () => {
     const { repo, worktrees } = createRepository();
     const mainCommit = git(repo, 'rev-parse', 'main');
@@ -51,6 +59,22 @@ describe('WorktreeManager', () => {
     expect(existsSync(join(created.worktreePath, 'README.md'))).toBe(true);
     expect(git(created.worktreePath, 'rev-parse', 'HEAD')).toBe(mainCommit);
     expect(git(created.worktreePath, 'branch', '--show-current')).toBe(created.branchName);
+  });
+
+  it('never includes objective secrets in branch or worktree metadata', async () => {
+    const { repo, worktrees } = createRepository();
+    const manager = createWorktreeManager({ baseDirectory: worktrees, git: createGitClient() });
+
+    const created = await manager.create({
+      repositoryPath: repo,
+      provider: 'claude',
+      taskId: 'safe-task',
+      threadId: 'thread-secret-123456',
+      objective: 'Deploy API_KEY=branch-secret to production',
+    });
+
+    expect(created.branchName).not.toContain('branch-secret');
+    expect(created.worktreePath).not.toContain('branch-secret');
   });
 
   it('serializes concurrent collisions into unique branches and writable paths', async () => {

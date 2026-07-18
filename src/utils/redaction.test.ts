@@ -34,6 +34,21 @@ describe('secret redaction', () => {
     expect(serialized).not.toContain('header-secret');
   });
 
+  it('redacts quoted JSON secret keys in text payloads', () => {
+    const redacted = redactSensitiveText('{"apiKey":"json-secret","nested":{"password":"json-password"}}');
+
+    expect(redacted).not.toContain('json-secret');
+    expect(redacted).not.toContain('json-password');
+    expect(redacted).toContain('[REDACTED]');
+  });
+
+  it('redacts device and verification fields embedded in URLs and errors', () => {
+    const redacted = redactSensitiveText('verificationUrl=https://example.test/device?user_code=URL-CODE verificationCode=ERROR-CODE');
+
+    expect(redacted).not.toContain('URL-CODE');
+    expect(redacted).not.toContain('ERROR-CODE');
+  });
+
 
   it('redacts secrets from unknown errors before logging', () => {
     const error = new Error('provider failed with API_KEY=log-secret and Bearer bearer-log-secret');

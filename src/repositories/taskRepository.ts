@@ -7,7 +7,8 @@ import type {
   TaskStatus,
 } from '../agents/contracts.js';
 import type { DatabaseHandle } from '../db/database.js';
-import { parseAgentTaskSettings, parseStoredAgentTaskSettings, type TaskRecord, type WorktreeRecord } from '../types.js';
+import { parseAgentTaskSettings, parseStoredAgentTaskSettings, type TaskControlCardRecord, type TaskRecord, type TaskControlCardPinState, type WorktreeRecord } from '../types.js';
+import { redactSensitiveText } from '../utils/redaction.js';
 
 export interface CreateTaskWorktreeInput {
   id: string;
@@ -42,6 +43,8 @@ export interface TaskRepository {
   listActive(): TaskRecord[];
   saveResult(taskId: string, result: TaskResult): void;
   getResult(taskId: string): TaskResult | undefined;
+  getControlCard(taskId: string): TaskControlCardRecord | undefined;
+  saveControlCard(taskId: string, input: { messageId: string; pinState: TaskControlCardPinState }): void;
 }
 
 
@@ -113,6 +116,8 @@ const LEGAL_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
 
 function toTaskRecord(row: TaskRow): TaskRecord {
   const settings = parseStoredAgentTaskSettings(row.settings_json);
+  const isLegacyEmptySnapshot = row.settings_json.trim() === '{}';
+  const settingsMalformed = !isLegacyEmptySnapshot && settings !== undefined && Object.keys(settings).length === 0;
   return {
     id: row.id,
     projectName: row.project_name,
@@ -127,6 +132,7 @@ function toTaskRecord(row: TaskRow): TaskRecord {
     ...(row.completed_at === null ? {} : { completedAt: row.completed_at }),
     ...(row.provider_session_id === null ? {} : { providerSessionId: row.provider_session_id }),
     ...(settings === undefined ? {} : { settings }),
+    ...(settingsMalformed ? { settingsMalformed: true } : {}),
   };
 }
 
@@ -176,7 +182,7 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
           input.provider,
           input.channelId,
           input.threadId,
-          input.objective,
+          redactSensitiveText(input.objective),
           now,
           now,
           JSON.stringify(parseAgentTaskSettings(input.settings) ?? {}),
@@ -396,6 +402,26 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
         result.usage ? JSON.stringify(result.usage) : null,
         result.completedAt,
       );
+    },
+
+    getControlCard(taskId: string): TaskControlCardRecord | undefined {
+      const row = db.raw.prepare(`
+        SELECT task_id, message_id, pin_state, updated_at
+        FROM task_control_cards WHERE task_id = ?
+      `).get(taskId) as { task_id: string; message_id: string; pin_state: TaskControlCardPinState; updated_at: number } | undefined;
+      return row ? { taskId: row.task_id, messageId: row.message_id, pinState: row.pin_state, updatedAt: row.updated_at } : undefined;
+    },
+
+    saveControlCard(taskId: string, input: { messageId: string; pinState: TaskControlCardPinState }): void {
+      requireTask(taskId);
+      db.raw.prepare(`
+        INSERT INTO task_control_cards (task_id, message_id, pin_state, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET
+          message_id = excluded.message_id,
+          pin_state = excluded.pin_state,
+          updated_at = excluded.updated_at
+      `).run(taskId, input.messageId, input.pinState, Date.now());
     },
   };
 }

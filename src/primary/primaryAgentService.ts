@@ -4,14 +4,15 @@ import type { ProjectRepository } from '../repositories/projectRepository.js';
 import type { MessageRepository } from '../repositories/messageRepository.js';
 import type { MemoryRepository } from '../repositories/memoryRepository.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
-import type { PrimaryModel, PrimaryTaskProposal } from './primaryModel.js';
+import type { PrimaryModel, PrimaryResponse, PrimaryTaskProposal } from './primaryModel.js';
 import type { ContextAssembler } from './contextAssembler.js';
-import { redactSensitiveText } from '../utils/redaction.js';
+import { redactSensitiveText, redactSensitiveValue } from '../utils/redaction.js';
 import { UsageAdmissionError } from '../services/usageAdmission.js';
 import { buildErrorEmbed, isStructuredErrorMessage } from '../discord/errorCard.js';
 
 export interface PrimaryAgentService {
   readonly channelId: string;
+  readonly ownerId: string;
   handleMessage(message: Message): Promise<void>;
 }
 export function createPrimaryAgentService(deps: {
@@ -19,6 +20,36 @@ export function createPrimaryAgentService(deps: {
   messages: MessageRepository; memories: MemoryRepository; projects: ProjectRepository; coordinator: TaskCoordinator;
   fetchProjectChannel(channelId: string): Promise<TextChannel | null>;
 }): PrimaryAgentService {
+  function sanitizeResponse(response: PrimaryResponse): PrimaryResponse {
+    return {
+      ...response,
+      reply: redactSensitiveText(response.reply),
+      ...(response.taskProposal ? {
+        taskProposal: {
+          ...response.taskProposal,
+          projectName: redactSensitiveText(response.taskProposal.projectName),
+          objective: redactSensitiveText(response.taskProposal.objective),
+          ...(response.taskProposal.rationale ? { rationale: redactSensitiveText(response.taskProposal.rationale) } : {}),
+        },
+      } : {}),
+      ...(response.memoryWrites ? {
+        memoryWrites: response.memoryWrites.map(write => ({
+          ...write,
+          namespace: redactSensitiveText(write.namespace),
+          key: redactSensitiveText(write.key),
+          value: redactSensitiveValue(write.value),
+          sourceQuote: redactSensitiveText(write.sourceQuote),
+        })),
+      } : {}),
+      ...(response.decision ? {
+        decision: {
+          ...response.decision,
+          prompt: redactSensitiveText(response.decision.prompt),
+          options: response.decision.options.map(redactSensitiveText),
+        },
+      } : {}),
+    };
+  }
   async function launch(proposal: PrimaryTaskProposal): Promise<void> {
     const project = deps.projects.findByName(proposal.projectName);
     if (!project) throw new Error(`Project "${proposal.projectName}" is not registered`);
@@ -43,11 +74,12 @@ ${error.recommendation}`);
   }
   return {
     channelId: deps.channelId,
+    ownerId: deps.ownerId,
     async handleMessage(message) {
       if (message.author.bot || message.author.id !== deps.ownerId || message.channelId !== deps.channelId) return;
       deps.messages.append({ id: message.id, channelId: message.channelId, authorId: message.author.id, role: 'user', content: redactSensitiveText(message.content), createdAt: message.createdTimestamp });
       const context = deps.context.assemble({ channelId: message.channelId, query: message.content });
-      const response = await deps.model.respond({ context, message: message.content });
+      const response = sanitizeResponse(await deps.model.respond({ context, message: message.content }));
       const replyText = redactSensitiveText(response.reply);
       const replyPayload = isStructuredErrorMessage(replyText)
         ? { embeds: [buildErrorEmbed(replyText, 'Coordination error')] }
@@ -58,7 +90,7 @@ ${error.recommendation}`);
         const quote = write.sourceQuote?.trim();
         if (!quote || !message.content.toLowerCase().includes(quote.toLowerCase())) continue;
         if (!allowedMemoryNamespaces.has(write.namespace)) continue;
-        deps.memories.put({ namespace: write.namespace, key: write.key, value: write.value, sourceType: 'direct_user', sourceId: message.id, confidence: write.confidence ?? 0.9, readOnly: false });
+        deps.memories.put({ namespace: write.namespace, key: write.key, value: redactSensitiveValue(write.value), sourceType: 'direct_user', sourceId: message.id, confidence: write.confidence ?? 0.9, readOnly: false });
       }
       if (typeof replyPayload !== 'string') {
         await message.reply(replyPayload);

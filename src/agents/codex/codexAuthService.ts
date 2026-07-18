@@ -27,6 +27,7 @@ export interface CodexRateLimitWindow {
 
 export class CodexAuthService {
   private activeLogin: DeviceLogin | undefined;
+  private loginExpiryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly listeners = new Set<(state: CodexAccountState) => void>();
   private readonly rateLimitListeners = new Set<(windows: CodexRateLimitWindow[]) => void>();
   private readonly notificationListener: (method: string, params: unknown) => void;
@@ -38,7 +39,7 @@ export class CodexAuthService {
       }
       if (method === 'account/login/completed' && isRecord(params)) {
         const completedId = typeof params.loginId === 'string' ? params.loginId : undefined;
-        if (!completedId || completedId === this.activeLogin?.loginId) this.activeLogin = undefined;
+        if (!completedId || completedId === this.activeLogin?.loginId) this.clearActiveLogin();
       }
       if (method === 'account/rateLimits/updated') {
         const windows = parseRateLimitResponse(params);
@@ -81,23 +82,25 @@ export class CodexAuthService {
       loginId: typeof result.loginId === 'string' ? result.loginId : randomUUID(),
       verificationUrl: String(result.verificationUrl ?? ''),
       userCode: String(result.userCode ?? ''),
-      ...(typeof result.expiresAt === 'number' ? { expiresAt: result.expiresAt } : {}),
+      expiresAt: normalizeExpiry(typeof result.expiresAt === 'number' ? result.expiresAt : undefined),
     };
     if (!login.verificationUrl || !login.userCode) throw new Error('Codex device login is unavailable');
     this.activeLogin = login;
+    this.loginExpiryTimer = setTimeout(() => this.clearActiveLogin(), Math.max(0, login.expiresAt! - Date.now()));
+    this.loginExpiryTimer.unref?.();
     return login;
   }
 
   async cancelLogin(): Promise<void> {
     if (!this.activeLogin) return;
     const id = this.activeLogin.loginId;
-    this.activeLogin = undefined;
+    this.clearActiveLogin();
     await this.transport.request('account/login/cancel', { loginId: id }).catch(() => undefined);
   }
 
   async logout(): Promise<void> {
     await this.transport.request('account/logout');
-    this.activeLogin = undefined;
+    this.clearActiveLogin();
   }
 
   async readRateLimits(): Promise<CodexRateLimitWindow[]> {
@@ -106,6 +109,7 @@ export class CodexAuthService {
   }
 
   getPendingLogin(): DeviceLogin | undefined {
+    if (this.activeLogin?.expiresAt !== undefined && this.activeLogin.expiresAt <= Date.now()) this.clearActiveLogin();
     return this.activeLogin;
   }
 
@@ -115,6 +119,17 @@ export class CodexAuthService {
     this.listeners.clear();
     this.rateLimitListeners.clear();
   }
+
+  private clearActiveLogin(): void {
+    this.activeLogin = undefined;
+    if (this.loginExpiryTimer) clearTimeout(this.loginExpiryTimer);
+    this.loginExpiryTimer = undefined;
+  }
+}
+
+function normalizeExpiry(value: number | undefined): number {
+  const candidate = value === undefined ? Date.now() + 30 * 60_000 : value < 1_000_000_000_000 ? value * 1000 : value;
+  return Math.min(candidate, Date.now() + 30 * 60_000);
 }
 
 function parseRateLimitResponse(value: unknown): CodexRateLimitWindow[] {

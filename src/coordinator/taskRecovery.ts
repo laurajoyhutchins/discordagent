@@ -2,6 +2,7 @@ import type { EventRepository } from '../repositories/eventRepository.js';
 import type { TaskRepository } from '../repositories/taskRepository.js';
 import type { WorktreeManager } from '../git/worktreeManager.js';
 import type { TaskRecord } from '../types.js';
+import { redactErrorMessage } from '../utils/redaction.js';
 
 export interface TaskRecoveryDependencies {
   tasks: TaskRepository;
@@ -25,7 +26,7 @@ export async function recoverInterruptedTasks(
           ? `Worktree preserved at ${worktree.worktreePath} (${inspection.dirty ? 'uncommitted changes present' : 'clean'}). Resume requires explicit user action; no provider turn was replayed.`
           : `Worktree path ${worktree.worktreePath} is missing. Resume requires explicit user action; no provider turn was replayed.`;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = redactErrorMessage(error);
         detail = `Worktree inspection failed: ${message}. Resume requires explicit user action; no provider turn was replayed.`;
       }
     }

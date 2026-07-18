@@ -52,13 +52,6 @@ export async function handleProvider(
       });
       return;
     }
-    if (requested === 'opencode') {
-      await interaction.reply({
-        content: `${providerLabel(requested)} is task-only and available for project task channels; the PM chat requires a PM-capable provider. Your global PM provider was not changed.`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
     const availability = await dependencies.checkProvider(requested);
     if (!availability.available) {
       await interaction.reply({ content: availability.reason ?? `Provider ${requested} is unavailable.`, flags: MessageFlags.Ephemeral });

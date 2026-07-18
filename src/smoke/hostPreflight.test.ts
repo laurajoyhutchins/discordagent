@@ -12,7 +12,7 @@ function dependencies(overrides: Partial<HostPreflightDependencies> = {}): HostP
     nodeVersion: '22.12.0',
     runCommand: () => available,
     ensureWritableDirectory: path => ({ ok: true, detail: path }),
-    verifyDatabase: () => ({ ok: true, detail: '4 migrations applied in memory.' }),
+    verifyDatabase: () => ({ ok: true, detail: '9 migrations applied in memory.' }),
     ...overrides,
   };
 }
@@ -27,6 +27,7 @@ const validEnvironment: NodeJS.ProcessEnv = {
   DATABASE_PATH: '/data/discordagent.sqlite',
   WORKTREES_BASE_DIR: '/worktrees',
   CODEX_ENABLED: 'true',
+  OPENCODE_ENABLED: 'true',
   PRIMARY_USAGE_RESERVE: '10',
 };
 
@@ -57,18 +58,36 @@ describe('host preflight', () => {
     ]));
   });
 
-  it('allows Codex and Roborev to be absent when they are disabled or optional', () => {
+  it('fails when enabled OpenCode is unavailable', () => {
+    const checks = evaluateHostPreflight(validEnvironment, dependencies({
+      runCommand(command) {
+        return command === 'opencode'
+          ? { ok: false, detail: 'command not found' }
+          : { ok: true, detail: 'available' };
+      },
+    }));
+
+    expect(checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'OpenCode CLI', status: 'fail' }),
+    ]));
+  });
+
+  it('allows disabled providers and optional Roborev to be absent', () => {
     const checks = evaluateHostPreflight({
       ...validEnvironment,
       CODEX_ENABLED: 'false',
+      OPENCODE_ENABLED: 'false',
     }, dependencies({
       runCommand(command) {
-        if (command === 'codex' || command === 'roborev') return { ok: false, detail: 'command not found' };
+        if (command === 'codex' || command === 'opencode' || command === 'roborev') {
+          return { ok: false, detail: 'command not found' };
+        }
         return { ok: true, detail: 'available' };
       },
     }));
 
     expect(checks.find(check => check.name === 'Codex CLI')?.status).toBe('warn');
+    expect(checks.find(check => check.name === 'OpenCode CLI')?.status).toBe('warn');
     expect(checks.find(check => check.name === 'Roborev CLI')?.status).toBe('warn');
     expect(checks.filter(check => check.status === 'fail')).toEqual([]);
   });

@@ -5,20 +5,23 @@
 ```text
 discordagent/
 ├── src/
-│   ├── index.ts                 # Discord client, lock, startup and shutdown
+│   ├── index.ts                 # Discord client, lock, startup, review-source wiring, shutdown
 │   ├── agents/
-│   │   ├── contracts.ts         # Provider-neutral domain contracts
+│   │   ├── contracts.ts         # Provider-neutral coding-agent contracts
 │   │   ├── providerRegistry.ts  # Provider registration and lookup
 │   │   ├── claude/              # Claude Agent SDK adapter
 │   │   ├── codex/               # Codex App Server transport, auth, provider
 │   │   └── opencode/            # ACP transport, normalization, provider
-│   ├── commands/                # Application command handlers and definitions
+│   ├── commands/                # Application and context command handlers
 │   ├── coordinator/             # Durable task lifecycle and recovery
 │   ├── db/                      # SQLite handle, schema, and migrations
 │   ├── repositories/            # SQL access layer
 │   ├── git/                     # Safe Git wrapper and worktree manager
 │   ├── discord/                 # Rendering, controls, and capability evaluation
 │   ├── handlers/                # Discord event routing
+│   ├── integrations/
+│   │   ├── reviewSource.ts      # Review-source lifecycle contract
+│   │   └── roborev/             # RoboRev CLI adapter, parser, lifecycle, renderer
 │   ├── services/                # Runtime assembly and supporting services
 │   ├── primary/                 # PM-style primary-agent boundary and memory
 │   └── smoke/                   # Host and Discord preflight checks
@@ -49,6 +52,8 @@ The branch name and directory name are related but not identical:
 
 Development normally stores the database at `src/data/discordagent.sqlite`; compiled execution normally stores it at `dist/data/discordagent.sqlite`. When `DATABASE_PATH` is set explicitly, the default worktree parent is a `discordagent-worktrees` directory beside that database file.
 
+RoboRev uses the configured host executable and repository-local configuration. It does not create an additional durable runtime directory or store webhook credentials.
+
 ## Branch naming
 
 Task branches use:
@@ -78,3 +83,4 @@ A detached `HEAD` without an explicitly configured base branch is rejected.
 - Dirty worktrees are never force-removed.
 - The runtime does not use force reset, force checkout, or force worktree removal.
 - Project removal archives the project and deletes its Discord channels; it does not delete historical task worktrees.
+- Review sources do not receive task worktree ownership or provider-session state.

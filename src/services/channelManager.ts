@@ -2,6 +2,7 @@ import {
   ChannelType,
   Guild,
   OverwriteResolvable,
+  OverwriteType,
 } from 'discord.js';
 import { calculateProfile } from '../discord/capabilities/profiles.js';
 import { getCapability, permissionBit, permissionBitForCapability } from '../discord/capabilities/registry.js';
@@ -41,12 +42,14 @@ export async function createProjectChannels(
     {
       id: guild.id,
       deny: [viewChannel],
+      type: OverwriteType.Role,
     },
     {
       id: botMember.id,
       allow: botAllow,
+      type: OverwriteType.Member,
     },
-    ...authorizedRoleIds.map(id => ({ id, allow: authorizedAllow })),
+    ...authorizedRoleIds.map(id => ({ id, allow: authorizedAllow, type: OverwriteType.Role })),
   ];
 
   let category: import('discord.js').CategoryChannel | undefined;
@@ -146,10 +149,10 @@ export async function ensurePrimaryAgentChannel(
     .filter((permission): permission is bigint => permission !== undefined);
   const viewChannel = permissionBitForCapability('core.channel.view')!;
   const permissionOverwrites: OverwriteResolvable[] = [
-    { id: guild.id, deny: [viewChannel] },
-    { id: botMember.id, allow: botAllow },
-    ...(ownerId ? [{ id: ownerId, allow: authorizedAllow }] : []),
-    ...authorizedRoleIds.map(id => ({ id, allow: authorizedAllow })),
+    { id: guild.id, deny: [viewChannel], type: OverwriteType.Role },
+    { id: botMember.id, allow: botAllow, type: OverwriteType.Member },
+    ...(ownerId ? [{ id: ownerId, allow: authorizedAllow, type: OverwriteType.Member }] : []),
+    ...authorizedRoleIds.map(id => ({ id, allow: authorizedAllow, type: OverwriteType.Role })),
   ];
   let existing: import('discord.js').TextChannel | undefined;
   if (configuredChannelId) {
@@ -158,6 +161,11 @@ export async function ensurePrimaryAgentChannel(
       throw new Error(`Configured primary channel "${configuredChannelId}" is missing or is not a text channel.`);
     }
     existing = fetched;
+  } else {
+    const found = guild.channels.cache.find(
+      (ch): ch is import('discord.js').TextChannel => ch.name === 'agent-chat' && ch.type === ChannelType.GuildText,
+    );
+    if (found) existing = found;
   }
   if (existing) {
     if (!existing.permissionOverwrites?.set) {
@@ -170,7 +178,8 @@ export async function ensurePrimaryAgentChannel(
       throw new Error(`Cannot use the primary agent channel; bot is missing channel permissions: ${missingChannelPermissions.join(', ')}`);
     }
     if (ownerId) {
-      const ownerPermissions = existing.permissionsFor?.(ownerId);
+      const ownerMember = await guild.members.fetch(ownerId).catch(() => null);
+      const ownerPermissions = ownerMember ? existing.permissionsFor?.(ownerMember) : undefined;
       const missingOwnerPermissions = requiredPermissions.filter(permission => !(ownerPermissions?.has?.(permissionBit(permission)) ?? false));
       if (missingOwnerPermissions.length > 0) {
         throw new Error(`Cannot use the primary agent channel; owner is missing channel permissions: ${missingOwnerPermissions.join(', ')}`);

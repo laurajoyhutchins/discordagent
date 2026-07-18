@@ -68,16 +68,17 @@ describe('provider onboarding', () => {
       ownerId: 'owner', settings: context.settingsService as never, metadata: context.settings, providers: context.registry, channel: context.channel as never, botUserId: 'bot-1', onSelected,
     });
     await service.ensurePrompt();
-    const update = vi.fn(async () => undefined);
+    const deferUpdate = vi.fn(async () => undefined);
+    const editReply = vi.fn(async () => undefined);
 
     await expect(service.handleButton({
-      customId: 'provider_setup:codex', user: { id: 'owner' }, channelId: 'primary-channel', message: { id: context.message.id, channelId: 'primary-channel', author: { id: 'bot-1', bot: true }, components: [{ components: [{ type: 2, style: 1, customId: 'provider_setup:codex', label: 'Codex' }] }] }, update,
+      customId: 'provider_setup:codex', user: { id: 'owner' }, channelId: 'primary-channel', message: { id: context.message.id, channelId: 'primary-channel', author: { id: 'bot-1', bot: true }, components: [{ components: [{ type: 2, style: 1, customId: 'provider_setup:codex', label: 'Codex' }] }] }, deferUpdate, editReply,
     } as never)).resolves.toBe(true);
 
     expect(context.settings.getDefaultProvider()).toBe('codex');
     expect(context.settingsService.updateGlobalWithActivation).toHaveBeenCalledWith({ defaultProvider: 'codex' }, expect.any(Function), undefined);
     expect(onSelected).toHaveBeenCalledWith('codex');
-    expect(update).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/Codex.*default/i), components: [] }));
+    expect(editReply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/Codex.*default/i), components: [] }));
   });
 
   it('refreshes an old no-button prompt when providers become available', async () => {
@@ -208,7 +209,7 @@ describe('provider onboarding', () => {
     } as never)).resolves.toBe(true);
 
     expect(context.settings.getDefaultProvider()).toBeUndefined();
-    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/sign-in required/i), ephemeral: true }));
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/sign-in required/i), flags: 64 }));
   });
 
   it('does not expose provider activation errors, secrets, or paths to Discord', async () => {
@@ -220,17 +221,66 @@ describe('provider onboarding', () => {
       ownerId: 'owner', settings: context.settingsService as never, metadata: context.settings,
       providers: context.registry, channel: context.channel as never, botUserId: 'bot-1',
     });
-    const reply = vi.fn(async () => undefined);
+    const deferUpdate = vi.fn(async () => undefined);
+    const editReply = vi.fn(async () => undefined);
 
     await service.ensurePrompt();
     await service.handleButton({
       customId: 'provider_setup:codex', user: { id: 'owner' }, channelId: 'primary-channel',
-      message: { id: context.message.id, channelId: 'primary-channel', author: { id: 'bot-1', bot: true }, components: [{ components: [{ type: 2, style: 1, customId: 'provider_setup:codex', label: 'Codex' }] }] }, reply,
+      message: { id: context.message.id, channelId: 'primary-channel', author: { id: 'bot-1', bot: true }, components: [{ components: [{ type: 2, style: 1, customId: 'provider_setup:codex', label: 'Codex' }] }] }, deferUpdate, editReply,
     } as never);
 
-    const content = String((reply as unknown as { mock: { calls: Array<Array<{ content?: unknown }>> } }).mock.calls[0]?.[0]?.content);
+    const content = String((editReply as unknown as { mock: { calls: Array<Array<{ content?: unknown }>> } }).mock.calls[0]?.[0]?.content);
     expect(content).toMatch(/could not be activated/i);
     expect(content).not.toContain('onboarding-secret');
     expect(content).not.toContain('C:\\secrets');
+  });
+
+  it('shows provider buttons instead of auto-selecting when activation fails', async () => {
+    const registry = new ProviderRegistry();
+    registry.register(provider('claude'));
+    const message = { id: 'setup-message', channelId: 'channel-1', author: { id: 'bot-1', bot: true }, edit: vi.fn(async () => undefined) };
+    const channel = { id: 'channel-1', send: vi.fn(async () => message), messages: { fetch: vi.fn(async () => null) } };
+    const settingsService = {
+      global: () => ({}),
+      updateGlobalWithActivation: vi.fn(async () => { throw new Error('activation failed'); }),
+    };
+    const service = createProviderOnboardingService({
+      ownerId: 'owner',
+      settings: settingsService as never,
+      metadata: { get: () => undefined, set: vi.fn() },
+      providers: registry,
+      channel: channel as never,
+      botUserId: 'bot-1',
+      onSelected: vi.fn(async () => undefined),
+    });
+
+    await service.ensurePrompt();
+
+    expect(channel.send).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/choose.*provider/i),
+      components: expect.any(Array),
+    }));
+    const payload = (channel.send as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { components: Array<{ components: unknown[] }> };
+    expect(payload.components[0].components).toHaveLength(1);
+  });
+
+  it('shows provider buttons when multiple providers are available', async () => {
+    const context = setup();
+    const service = createProviderOnboardingService({
+      ownerId: 'owner', settings: context.settingsService as never, metadata: context.settings,
+      providers: context.registry, channel: context.channel as never, botUserId: 'bot-1',
+    });
+
+    await service.ensurePrompt();
+
+    expect(context.channel.send).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/choose.*provider/i),
+      components: expect.any(Array),
+    }));
+    const payload = (context.channel.send as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { components: Array<{ toJSON: () => { components: Array<{ custom_id: string }> } }> };
+    const buttonIds = payload.components[0].toJSON().components.map(c => c.custom_id);
+    expect(buttonIds).toContain('provider_setup:codex');
+    expect(buttonIds).toContain('provider_setup:claude');
   });
 });

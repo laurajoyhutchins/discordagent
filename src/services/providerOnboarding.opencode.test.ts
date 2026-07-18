@@ -70,19 +70,10 @@ describe('provider onboarding with OpenCode PM support', () => {
     });
 
     await service.ensurePrompt();
+    expect(channel.send).toHaveBeenCalledOnce();
     const payload = channel.send.mock.calls[0][0] as any;
-    const customIds = payload.components.flatMap((row: any) => row.toJSON().components.map((component: any) => component.custom_id));
-    expect(customIds).toContain('provider_setup:opencode');
-
-    const update = vi.fn(async () => undefined);
-    await expect(service.handleButton({
-      customId: 'provider_setup:opencode',
-      user: { id: 'owner' },
-      channelId: 'agent-chat',
-      message: sentMessage,
-      update,
-      reply: vi.fn(async () => undefined),
-    } as never)).resolves.toBe(true);
+    expect(payload.components).toHaveLength(0);
+    expect(payload.content).toMatch(/auto-selected.*OpenCode/i);
 
     expect(onSelected).toHaveBeenCalledWith('opencode');
     expect(global().defaultProvider).toBe('opencode');

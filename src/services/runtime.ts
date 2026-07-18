@@ -231,7 +231,13 @@ export async function startRuntime(
       if (claudeProvider.id !== 'claude') {
         throw new Error(`Runtime expected a Claude provider, received "${claudeProvider.id}"`);
       }
-      providers.register(claudeProvider);
+      try {
+        const availability = await claudeProvider.checkAvailability();
+        if (availability.available) providers.register(claudeProvider);
+        else console.warn('[runtime] Claude unavailable:', redactErrorMessage(availability.reason ?? 'Claude provider is unavailable'));
+      } catch (error) {
+        console.warn('[runtime] Claude unavailable:', redactErrorMessage(error));
+      }
     }
 
     if (!codexProvider && !options.disableCodex && config.codexEnabled) {
@@ -322,6 +328,7 @@ export async function startRuntime(
     let primaryProviderActivator: ((provider: AgentProviderId) => Promise<PrimaryProviderActivationResult>) | undefined;
     const selectedProvider = settings.getDefaultProvider();
     if (!options.disablePrimaryAgent && config.authorizedUserId) {
+      seedPolicyMemories(memories);
       const guild = await client.guilds.fetch(config.guildId);
       const configuredPrimaryChannelId = settings.get('primary_channel_id');
       const primaryChannel = await ensurePrimaryAgentChannel(guild, config.authorizedRoleIds, config.authorizedUserId, configuredPrimaryChannelId);
@@ -491,6 +498,41 @@ export async function stopRuntime(runtime: RuntimeServices): Promise<void> {
   await codex?.close?.().catch(() => undefined);
   await runtime.codexTransport?.close().catch(() => undefined);
   closeProjectStore();
+}
+
+function seedPolicyMemories(memories: MemoryRepository): void {
+  const defaults: Array<{ key: string; value: unknown }> = [
+    {
+      key: 'behavior',
+      value: {
+        guidance: 'Be concise and outcome-focused. You have no coding tools and must never pretend to execute work. Propose one bounded task per message when appropriate.',
+      },
+    },
+    {
+      key: 'task_proposal',
+      value: {
+        guidance: 'When the user describes work, propose a single small task with a clear objective. Use the task-proposal buttons (not /task). Let the user confirm before creating.',
+      },
+    },
+    {
+      key: 'decisions',
+      value: {
+        guidance: 'Use polls for group input. Use confirm for simple yes/no. Use select menus when there are clear options. Record the outcome as a decision memory.',
+      },
+    },
+  ];
+  for (const entry of defaults) {
+    if (!memories.get('policy', entry.key)) {
+      memories.put({
+        namespace: 'policy',
+        key: entry.key,
+        value: entry.value,
+        sourceType: 'system',
+        confidence: 1,
+        readOnly: true,
+      });
+    }
+  }
 }
 
 async function notifyRecoveredTasks(

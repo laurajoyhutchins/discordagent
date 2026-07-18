@@ -20,6 +20,7 @@ function interaction(options: {
   return {
     channelId: options.channelId ?? 'agent-1',
     channel: { name: options.channelName, isThread: () => options.isThread ?? false },
+    user: { id: 'user-1' },
     options: { getString: vi.fn(() => options.provider ?? null) },
     reply: vi.fn(async () => undefined),
   } as unknown as ChatInputCommandInteraction & { reply: ReturnType<typeof vi.fn> };
@@ -30,9 +31,8 @@ describe('/provider', () => {
     const command = interaction({ provider: null });
     await handleProvider(command, {
       getProjectByChannel: () => project,
-      updateProjectProvider: vi.fn(),
+      settings: { updateProject: vi.fn(), updateGlobalWithActivation: vi.fn() },
       getDefaultProvider: () => undefined,
-      updateDefaultProvider: vi.fn(),
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
@@ -47,13 +47,12 @@ describe('/provider', () => {
     const command = interaction({ provider: 'claude' });
     await handleProvider(command, {
       getProjectByChannel: () => ({ ...project, defaultProvider: 'codex' }),
-      updateProjectProvider: update,
+      settings: { updateProject: update, updateGlobalWithActivation: vi.fn() },
       getDefaultProvider: () => undefined,
-      updateDefaultProvider: vi.fn(),
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
-    expect(update).toHaveBeenCalledWith('factory-floor', 'claude');
+    expect(update).toHaveBeenCalledWith('factory-floor', { defaultProvider: 'claude' });
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringContaining('Claude'),
     }));
@@ -64,13 +63,12 @@ describe('/provider', () => {
     const command = interaction({ provider: 'codex' });
     await handleProvider(command, {
       getProjectByChannel: () => project,
-      updateProjectProvider: update,
+      settings: { updateProject: update, updateGlobalWithActivation: vi.fn() },
       getDefaultProvider: () => undefined,
-      updateDefaultProvider: vi.fn(),
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
-    expect(update).toHaveBeenCalledWith('factory-floor', 'codex');
+    expect(update).toHaveBeenCalledWith('factory-floor', { defaultProvider: 'codex' });
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringMatching(/Codex/i),
     }));
@@ -81,13 +79,13 @@ describe('/provider', () => {
     const command = interaction({ provider: 'codex' });
     await handleProvider(command, {
       getProjectByChannel: () => project,
-      updateProjectProvider: update,
+      settings: { updateProject: update, updateGlobalWithActivation: vi.fn() },
       getDefaultProvider: () => undefined,
-      updateDefaultProvider: vi.fn(),
       checkProvider: vi.fn(async () => ({ available: false, authenticationRequired: true, reason: 'Sign in with /codex-auth login' })),
     });
     expect(update).not.toHaveBeenCalled();
-    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('/codex-auth login') }));
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/unavailable/i) }));
+    expect(command.reply.mock.calls[0][0].content).not.toContain('/codex-auth login');
   });
 
   it('rejects provider changes from a task thread', async () => {
@@ -95,9 +93,8 @@ describe('/provider', () => {
     const command = interaction({ provider: 'claude', isThread: true });
     await handleProvider(command, {
       getProjectByChannel: () => project,
-      updateProjectProvider: update,
+      settings: { updateProject: update, updateGlobalWithActivation: vi.fn() },
       getDefaultProvider: () => undefined,
-      updateDefaultProvider: vi.fn(),
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
@@ -112,9 +109,8 @@ describe('/provider', () => {
     const command = interaction({ channelId: 'elsewhere', provider: 'claude' });
     await handleProvider(command, {
       getProjectByChannel: () => undefined,
-      updateProjectProvider: vi.fn(),
+      settings: { updateProject: vi.fn(), updateGlobalWithActivation: vi.fn() },
       getDefaultProvider: () => undefined,
-      updateDefaultProvider: vi.fn(),
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
@@ -124,18 +120,63 @@ describe('/provider', () => {
     }));
   });
 
+  it('reports an unregistered provider as unavailable instead of throwing', async () => {
+    const command = interaction({ provider: 'codex' });
+    await handleProvider(command, {
+      getProjectByChannel: () => project,
+      settings: { updateProject: vi.fn(), updateGlobalWithActivation: vi.fn() },
+      getDefaultProvider: () => undefined,
+      checkProvider: vi.fn(async () => ({ available: false, reason: 'Codex is unavailable on this host.' })),
+    });
+
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/unavailable/i) }));
+  });
+
+  it('does not expose provider availability reasons containing secrets or paths', async () => {
+    const command = interaction({ provider: 'codex' });
+    await handleProvider(command, {
+      getProjectByChannel: () => project,
+      settings: { updateProject: vi.fn(), updateGlobalWithActivation: vi.fn() },
+      getDefaultProvider: () => undefined,
+      checkProvider: vi.fn(async () => ({ available: false, reason: 'C:\\secrets\\codex.json API_KEY=provider-secret' })),
+    });
+
+    const content = String(command.reply.mock.calls[0][0].content);
+    expect(content).toMatch(/unavailable/i);
+    expect(content).not.toContain('provider-secret');
+    expect(content).not.toContain('C:\\secrets');
+  });
+
   it('reports and updates the global provider from the PM channel', async () => {
     const update = vi.fn();
+    const reconcile = vi.fn(async () => undefined);
     const command = interaction({ channelId: 'agent-chat', channelName: 'agent-chat', provider: 'codex' });
     await handleProvider(command, {
       getProjectByChannel: () => undefined,
-      updateProjectProvider: vi.fn(),
+      settings: { updateProject: vi.fn(), updateGlobalWithActivation: update },
       getDefaultProvider: () => undefined,
-      updateDefaultProvider: update,
       checkProvider: vi.fn(async () => ({ available: true })),
+      reconcileProviderOnboarding: reconcile,
+      primaryChannelId: 'agent-chat',
+      primaryOwnerId: 'user-1',
     });
 
-    expect(update).toHaveBeenCalledWith('codex');
+    expect(update).toHaveBeenCalledWith({ defaultProvider: 'codex' }, expect.any(Function), undefined);
+    expect(reconcile).toHaveBeenCalledOnce();
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/global.*Codex/i) }));
+  });
+
+  it('does not trust a channel named agent-chat without the configured channel and owner', async () => {
+    const command = interaction({ channelId: 'spoofed-channel', channelName: 'agent-chat', provider: 'codex' });
+    await handleProvider(command, {
+      getProjectByChannel: () => undefined,
+      settings: { updateProject: vi.fn(), updateGlobalWithActivation: vi.fn() },
+      getDefaultProvider: () => undefined,
+      checkProvider: vi.fn(async () => ({ available: true })),
+      primaryChannelId: 'real-agent-chat',
+      primaryOwnerId: 'user-1',
+    });
+
+    expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringMatching(/project channel/i) }));
   });
 });

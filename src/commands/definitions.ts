@@ -51,6 +51,18 @@ export const commands = [
     .setName('usage')
     .setDescription('Show provider rate limit usage and task stats'),
 
+  new SlashCommandBuilder()
+    .setName('capabilities')
+    .setDescription('Show effective Discord capabilities in this channel'),
+
+  new SlashCommandBuilder()
+    .setName('settings')
+    .setDescription('View and edit global agent and PM settings in the primary channel'),
+
+  new SlashCommandBuilder()
+    .setName('project-settings')
+    .setDescription('View and edit settings for the current project channel'),
+
 
   new SlashCommandBuilder()
     .setName('provider')
@@ -79,16 +91,8 @@ export const commands = [
     .setDescription("Set this project's model and thinking depth")
     .addStringOption(opt =>
       opt.setName('model')
-        .setDescription('Choose a model')
+        .setDescription('Set a provider-scoped model alias or exact model ID (use custom for provider-specific choices)')
         .setRequired(false)
-        .addChoices(
-          { name: 'Claude Sonnet — balanced speed & capability (recommended)', value: 'sonnet' },
-          { name: 'Claude Opus — most powerful reasoning', value: 'opus' },
-          { name: 'Claude Haiku — fastest, lightweight tasks', value: 'haiku' },
-          { name: 'Codex GPT-5.6 Luna', value: 'gpt-5.6-luna' },
-          { name: 'Codex GPT-5.4', value: 'gpt-5.4' },
-          { name: 'Default (env/SDK)', value: '__default__' },
-        )
     )
     .addStringOption(opt =>
       opt.setName('custom').setDescription('Set a custom model name directly (alias or exact model ID)').setRequired(false)

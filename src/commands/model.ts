@@ -14,12 +14,11 @@ import {
   getDefaultProvider,
   getDefaultReasoning,
   getProjectByChannel,
-  updateDefaultModel,
-  updateDefaultReasoning,
-  updateProjectModel,
-  updateProjectReasoning,
 } from '../services/projectStore.js';
-import { activatePrimaryProvider } from '../services/agentRuntimeService.js';
+import { activatePrimaryProvider, capturePrimaryProviderState, getPrimaryChannelId, getPrimaryOwnerId, getProviderRegistry, getSettingsService } from '../services/agentRuntimeService.js';
+import type { PrimaryProviderActivationResult } from '../services/agentRuntimeService.js';
+import type { SettingsService } from '../services/settingsService.js';
+import { redactErrorMessage } from '../utils/redaction.js';
 
 interface ModelOption {
   label: string;
@@ -37,31 +36,37 @@ const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
 
 export interface ModelCommandDependencies {
   getProjectByChannel(channelId: string): Project | undefined;
-  updateProjectModel(name: string, model: string, provider?: AgentProviderId): void;
-  updateProjectReasoning(name: string, effort?: ReasoningEffort, provider?: AgentProviderId): void;
+  settings: Pick<SettingsService, 'updateProject' | 'updateGlobal' | 'updateGlobalWithActivation'>;
   getDefaultProvider?(): AgentProviderId | undefined;
   getDefaultModel?(provider: AgentProviderId): string | undefined;
   getDefaultReasoning?(provider: AgentProviderId): ReasoningEffort | undefined;
-  updateDefaultModel?(model: string, provider: AgentProviderId): void;
-  updateDefaultReasoning?(effort: ReasoningEffort | undefined, provider: AgentProviderId): void;
-  activateDefaultProvider?(provider: AgentProviderId): Promise<void>;
+  activateDefaultProvider?(provider: AgentProviderId): Promise<PrimaryProviderActivationResult | void>;
+  captureDefaultProviderState?(): () => void;
   defaultClaudeModel: string;
   defaultCodexModel?: string;
+  primaryChannelId?: string;
+  primaryOwnerId?: string;
+  checkProvider?(provider: AgentProviderId): Promise<{ available: boolean; reason?: string }>;
 }
 
 function defaultDependencies(): ModelCommandDependencies {
   return {
     getProjectByChannel,
-    updateProjectModel,
-    updateProjectReasoning,
+    settings: getSettingsService(),
     getDefaultProvider,
     getDefaultModel,
     getDefaultReasoning,
-    updateDefaultModel,
-    updateDefaultReasoning,
     activateDefaultProvider: activatePrimaryProvider,
+    captureDefaultProviderState: capturePrimaryProviderState,
     defaultClaudeModel: process.env.CLAUDE_MODEL ?? '',
     defaultCodexModel: process.env.CODEX_MODEL ?? '',
+    primaryChannelId: optionalPrimary(getPrimaryChannelId),
+    primaryOwnerId: optionalPrimary(getPrimaryOwnerId),
+    checkProvider: async provider => {
+      const registry = getProviderRegistry();
+      if (!registry.list().includes(provider)) return { available: false, reason: `${provider === 'codex' ? 'Codex' : 'Claude'} is unavailable on this host.` };
+      return registry.availability(provider);
+    },
   };
 }
 
@@ -85,10 +90,15 @@ export async function handleModel(
 
   const project = dependencies.getProjectByChannel(interaction.channelId);
   const channelName = interaction.channel && 'name' in interaction.channel ? interaction.channel.name : undefined;
-  if (!project && channelName === 'agent-chat') {
+  if (!project && dependencies.primaryChannelId === interaction.channelId && dependencies.primaryOwnerId === interaction.user.id) {
     const provider = dependencies.getDefaultProvider?.();
     if (!provider) {
       await interaction.reply({ content: 'No global provider is selected yet. Choose one in the setup prompt first.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const availability = await safeProviderCheck(dependencies, provider);
+    if (!availability.available) {
+      await interaction.reply({ content: providerUnavailable(provider), flags: MessageFlags.Ephemeral });
       return;
     }
     const currentModel = dependencies.getDefaultModel?.(provider)
@@ -109,18 +119,24 @@ export async function handleModel(
       const reasoningToSet = thinkingValue && thinkingValue !== '__default__'
         ? thinkingValue as ReasoningEffort
         : undefined;
-      const setDefaultModel = dependencies.updateDefaultModel;
-      const setDefaultReasoning = dependencies.updateDefaultReasoning;
       const activateProvider = dependencies.activateDefaultProvider;
-      if ((directValue && !setDefaultModel)
-        || (thinkingValue && !setDefaultReasoning)
-        || !activateProvider) {
+      if (!activateProvider) {
         await interaction.reply({ content: 'Global model settings are unavailable until the runtime is fully initialized.', flags: MessageFlags.Ephemeral });
         return;
       }
-      if (directValue) setDefaultModel!(modelToSet ?? '', provider);
-      if (thinkingValue) setDefaultReasoning!(reasoningToSet, provider);
-      await activateProvider!(provider);
+      const updates = {
+        ...(directValue ? (provider === 'claude' ? { claudeModel: modelToSet } : { codexModel: modelToSet }) : {}),
+        ...(thinkingValue ? { reasoningEfforts: { [provider]: reasoningToSet } } : {}),
+      };
+      try {
+        await dependencies.settings.updateGlobalWithActivation(updates, async () => {
+          await activateProvider!(provider);
+        }, dependencies.captureDefaultProviderState?.());
+      } catch (error) {
+        console.error('[model] Global model activation failed:', redactErrorMessage(error));
+        await interaction.reply({ content: 'The global model settings could not be changed. Try again later or contact the bot owner.', flags: MessageFlags.Ephemeral });
+        return;
+      }
       const changes = [
         directValue ? `model set to \`${modelToSet || 'provider default'}\`` : undefined,
         thinkingValue ? `thinking depth set to \`${reasoningToSet || 'provider/model default'}\`` : undefined,
@@ -144,6 +160,11 @@ export async function handleModel(
   }
 
   const provider = project.defaultProvider;
+  const availability = await safeProviderCheck(dependencies, provider);
+  if (!availability.available) {
+    await interaction.reply({ content: providerUnavailable(provider), flags: MessageFlags.Ephemeral });
+    return;
+  }
   const currentReasoning = project.reasoningEfforts?.[provider] || 'provider/model default';
 
   if (thinkingValue && provider !== 'codex') {
@@ -169,8 +190,13 @@ export async function handleModel(
     const reasoningToSet = thinkingValue && thinkingValue !== '__default__'
       ? thinkingValue as ReasoningEffort
       : undefined;
-    if (directValue) dependencies.updateProjectModel(project.name, modelToSet ?? '', provider);
-    if (thinkingValue) dependencies.updateProjectReasoning(project.name, reasoningToSet, provider);
+    const updates: Parameters<SettingsService['updateProject']>[1] = {};
+    if (directValue) {
+      if (provider === 'claude') updates.claudeModel = modelToSet ?? '';
+      else updates.codexModel = modelToSet ?? '';
+    }
+    if (thinkingValue) updates.reasoningEfforts = { [provider]: reasoningToSet };
+    dependencies.settings.updateProject(project.name, updates);
     const changes = [
       directValue ? `model set to \`${modelToSet || 'provider default'}\`` : undefined,
       thinkingValue ? `thinking depth set to \`${reasoningToSet || 'provider/model default'}\`` : undefined,
@@ -227,7 +253,9 @@ export async function handleModel(
     });
     const selected = selection.values[0];
     const modelToSet = selected === '__default__' ? '' : selected;
-    dependencies.updateProjectModel(project.name, modelToSet, provider);
+    dependencies.settings.updateProject(project.name, provider === 'claude'
+      ? { claudeModel: modelToSet }
+      : { codexModel: modelToSet });
     selectMenu.setDisabled(true);
     await selection.update({
       embeds: [new EmbedBuilder()
@@ -246,5 +274,26 @@ export async function handleModel(
         .setDescription(`No selection made. Current model remains \`${currentModel}\`.`)],
       components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu)],
     }).catch(() => undefined);
+  }
+}
+
+function optionalPrimary(read: () => string): string | undefined {
+  try { return read(); } catch { return undefined; }
+}
+
+function providerUnavailable(provider: AgentProviderId): string {
+  return `${provider === 'codex' ? 'Codex' : 'Claude'} is unavailable on this host. Try again later or contact the bot owner.`;
+}
+
+async function safeProviderCheck(
+  dependencies: ModelCommandDependencies,
+  provider: AgentProviderId,
+): Promise<{ available: boolean }> {
+  try {
+    const result = await dependencies.checkProvider?.(provider);
+    return { available: result?.available ?? true };
+  } catch (error) {
+    console.error(`[model] Availability check failed for ${provider}:`, redactErrorMessage(error));
+    return { available: false };
   }
 }

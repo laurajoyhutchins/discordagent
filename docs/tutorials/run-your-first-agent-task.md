@@ -1,39 +1,17 @@
 # Run your first agent task
 
-This tutorial walks through setting up Discord Agent for the first time and running a successful task end to end.
+This tutorial walks through installing Discord Agent, connecting Codex, registering a disposable repository, and running one successful task end to end.
 
 ## Prerequisites
 
 - Node.js 22 or later
 - Git
-- A Discord server where you have **Manage Server** permissions
-- At least one coding agent provider installed and authenticated on the bot host
+- A private Discord server where you have **Manage Server** permission
+- Codex CLI installed on the machine that will host the bot
 
-For this tutorial we use Codex as the primary provider. See the [provider how-to guides](../how-to/providers/configure-claude.md) for alternatives.
+This tutorial uses Codex for one clear learning path. After completing it, see the [provider how-to guides](../how-to/providers/) for Claude and OpenCode.
 
-## 1. Create the Discord application
-
-1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and create a **New Application**.
-2. Go to **Bot** and click **Add Bot**.
-3. Copy the bot token — you will need it as `DISCORD_TOKEN`.
-4. Copy the **Application ID** from **General Information** — this is `DISCORD_CLIENT_ID`.
-5. Copy your server ID from Discord (enable Developer Mode, right-click your server, **Copy ID**) — this is `DISCORD_GUILD_ID`.
-6. Enable the following privileged Gateway Intents under **Bot > Privileged Gateway Intents**:
-   - **Server Members Intent**
-   - **Message Content Intent**
-7. Note at least one role ID on your server that will be authorized to use the bot (Server Settings > Roles > right-click a role > Copy ID).
-
-## 2. Set required permissions
-
-Use the permission calculator to generate an invite URL:
-
-```bash
-npm run discord:permissions
-```
-
-Copy and open the URL in a browser. Select your server and authorize the bot with the calculated permissions. Do not select **Administrator**.
-
-## 3. Clone and install
+## 1. Clone and install Discord Agent
 
 ```bash
 git clone https://github.com/laurajoyhutchins/discordagent.git
@@ -42,70 +20,102 @@ npm ci
 cp .env.example .env
 ```
 
-## 4. Configure environment variables
+Run all remaining `npm` commands from this repository checkout.
 
-Edit `.env` with the values collected in step 1:
+## 2. Create the Discord application
+
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and create a new application.
+2. Open **General Information** and copy the **Application ID**. This becomes `DISCORD_CLIENT_ID`.
+3. Open **Bot**. Newly created Discord applications normally include a bot user; create one if the portal presents that option.
+4. Under **Token**, reset and copy the bot token. This becomes `DISCORD_TOKEN`. Store it as a secret.
+5. Under **Privileged Gateway Intents**, enable:
+   - **Server Members Intent**
+   - **Message Content Intent**
+6. In Discord, enable Developer Mode and copy:
+   - your private server ID for `DISCORD_GUILD_ID`;
+   - at least one trusted role ID for `AUTHORIZED_ROLE_IDS`;
+   - your own user ID for `AUTHORIZED_USER_ID`.
+
+## 3. Configure the required environment variables
+
+Edit `.env`:
 
 ```env
 DISCORD_TOKEN=your-bot-token
 DISCORD_CLIENT_ID=your-application-id
 DISCORD_GUILD_ID=your-server-id
-AUTHORIZED_ROLE_IDS=role-id-1,role-id-2
+AUTHORIZED_ROLE_IDS=your-authorized-role-id
+AUTHORIZED_USER_ID=your-user-id
 ```
 
-Optionally set `PROJECTS_BASE_DIR` to restrict which directories can be registered as projects.
+For a safer host, also restrict project registration to a directory you control:
 
-## 5. Complete provider authentication
+```env
+PROJECTS_BASE_DIR=/absolute/path/to/your/projects
+```
 
-Ensure Codex CLI is installed on the bot host and available in PATH (or set `CODEX_CLI_PATH` in `.env`). Run locally once to establish authentication:
+See the [configuration reference](../reference/configuration.md) for all options.
+
+## 4. Install the bot in your server
+
+From the Discord Agent checkout, generate the least-privilege installation URL:
+
+```bash
+npm run discord:permissions
+```
+
+Open the printed URL, choose **Add to server**, select your private server, and authorize the application. Do not grant **Administrator**.
+
+Expected outcome: the bot appears in the server member list. It remains offline until Discord Agent starts.
+
+## 5. Authenticate Codex on the bot host
+
+Complete Codex authentication locally on the machine running Discord Agent:
 
 ```bash
 codex login --device-auth
 ```
 
-Complete the browser flow on the host machine. Do not send verification URLs or one-time codes to Discord.
+Do not send the verification URL, one-time code, or provider credentials through Discord.
 
-See [configure Codex](../how-to/providers/configure-codex.md) for full authentication steps.
+See [Configure Codex](../how-to/providers/configure-codex.md) for troubleshooting and alternate CLI-path configuration.
 
-## 6. Run smoke checks
+## 6. Run the preflight checks
+
+Check the host before connecting to Discord:
 
 ```bash
 npm run smoke:host
 ```
 
-The host preflight validates Node version, environment variables, directory writability, and CLI availability. Resolve any failures before continuing.
+Resolve any reported missing variables, unwritable paths, or unavailable provider CLIs.
+
+Register the application commands, then verify the Discord connection:
 
 ```bash
-npm run register          # Register slash commands in your guild
-npm run smoke:discord     # Verify Discord connectivity and command registration
+npm run register
+npm run smoke:discord
 ```
 
-Expected outcome: `npm run smoke:discord` prints the bot username, guild name, and confirms all authorized roles and commands are registered.
+Expected outcome: the Discord smoke check identifies the bot and guild and verifies the configured roles and registered commands.
 
-## 7. Start the bot
+## 7. Start Discord Agent
 
 ```bash
 npm run dev
 ```
 
-Expected log output:
+Expected outcome: the process acquires the instance lock, logs in to Discord, initializes SQLite, and creates or reconciles the private `#agent-chat` channel.
 
-```text
-Instance lock acquired
-Logged in as ...
-```
+## 8. Select Codex
 
-On first start, the bot creates SQLite tables, runs migrations, creates or reconciles `#agent-chat`, and posts a provider selection prompt.
+Open `#agent-chat` and select **Codex** in the provider setup controls. If the bot reports that Codex authentication is missing, recheck host-local authentication rather than posting credentials in Discord.
 
-## 8. Select a provider
+Expected outcome: the bot confirms Codex as the primary provider and activates the PM-style primary agent.
 
-In the private `#agent-chat` channel, click the **Codex** button in the setup prompt. If Codex authentication is needed, use `/codex-auth login` and follow the instructions posted by the bot.
+## 9. Create a disposable Git repository
 
-Expected outcome: The bot confirms the provider and activates the primary agent. You can now send messages in `#agent-chat`.
-
-## 9. Register a project
-
-Create a disposable Git repository:
+In another terminal:
 
 ```bash
 mkdir -p ~/projects/discordagent-smoke
@@ -115,62 +125,79 @@ git switch -c main
 echo "# Discord Agent smoke test" > README.md
 git add README.md
 git commit -m "chore: initialize smoke repository"
+pwd
 ```
 
-In any Discord channel, run:
+Copy the absolute path printed by `pwd`. On PowerShell, use `(Get-Location).Path` instead.
+
+In Discord, run `/add-project` and paste the literal absolute path. Do not use `~`, environment variables, or shell substitutions in the Discord command.
 
 ```text
-/add-project name:discordagent-smoke path:~/projects/discordagent-smoke
+/add-project name:discordagent-smoke path:/absolute/path/from-pwd
 ```
 
-Expected outcome: The bot creates a category named `discordagent-smoke` with a private `#agent` channel and posts a welcome message.
+Expected outcome: Discord Agent creates a private project category with an `#agent` channel.
 
-## 10. Send your first task
+## 10. Send the first task
 
-In the project's `#agent` channel, send a normal message:
+In the project's `#agent` channel, send:
 
 ```text
-Add a hello.txt file with the text "Hello from Discord Agent" and verify the file exists.
+Add a hello.txt file containing "Hello from Discord Agent", verify the file exists, and report the verification result.
 ```
 
-## 11. Observe the result
+Discord Agent creates a task thread, an `agent/codex/...` branch, and a separate worktree before starting Codex.
 
-Watch the thread that Discord Agent creates. You should see:
+## 11. Observe and verify the result
 
-1. A task thread with a pinned control card showing status, provider, and branch.
-2. Normalized output streaming in — text, status updates, file changes.
-3. A completion message confirming the outcome and branch.
-4. The file `hello.txt` exists on the worktree at the project path.
+In the task thread, look for:
 
-To confirm the worktree:
+1. A task control card showing the objective, provider, status, and branch. It is pinned only when the optional `Pin Messages` capability is enabled.
+2. Provider-neutral status, plan, command, and file-change events.
+3. Any approval or user-input controls required by the provider.
+4. A terminal result summarizing the outcome and verification.
+
+From the original disposable repository, list its worktrees:
 
 ```bash
-ls ~/projects/discordagent-smoke/hello.txt
-git branch --list 'agent/codex/*'
+git -C /absolute/path/from-pwd worktree list
 ```
 
-## 12. Continue the task
+Find the entry whose branch is `agent/codex/...`, copy the worktree path from that output, and verify the generated file there:
 
-Reply in the task thread with:
+```bash
+cat /absolute/worktree/path/hello.txt
+```
+
+Do not expect `hello.txt` to appear in the original checkout; the task edits its isolated worktree.
+
+## 12. Continue the same task
+
+Reply in the task thread:
 
 ```text
-Add a line to hello.txt with the current date and time.
+Add a second line to hello.txt containing the current date and time, then verify both lines.
+```
 
-Then check the thread for streaming output in the same provider session and worktree.
+The continuation keeps the same durable task, Codex session, branch, and worktree.
 
-## 13. Cleanup
+## 13. Clean up
 
-Remove the disposable project:
+Inspect anything you want to retain before removing the project, because project removal deletes its Discord category and task threads.
+
+In Discord:
 
 ```text
 /remove-project name:discordagent-smoke
 ```
 
-Stop the bot with Ctrl+C. The task thread, branch, and worktree remain available for inspection.
+The project record is archived and its Discord channels are deleted. Historical SQLite records and task worktrees are preserved for inspection; `/remove-project` does not clean them from disk.
+
+Stop the bot with Ctrl+C.
 
 ## Next steps
 
-- [Configure Claude](../how-to/providers/configure-claude.md) as an additional provider
-- [Configure OpenCode](../how-to/providers/configure-opencode.md) for ACP-based agents
-- [Manage settings](../how-to/README.md) for global and project configuration
-- Read the [architecture overview](../explanation/architecture/provider-neutral-runtime.md) to understand the system design
+- [Configure Claude](../how-to/providers/configure-claude.md)
+- [Configure OpenCode](../how-to/providers/configure-opencode.md)
+- [Register a project](../how-to/projects/register-a-project.md)
+- [Understand task isolation and Git worktrees](../explanation/architecture/task-isolation-and-git-worktrees.md)

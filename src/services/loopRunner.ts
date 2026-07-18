@@ -328,15 +328,6 @@ async function doStopLoop(loop: ActiveLoop, channelId: string): Promise<void> {
   }
 
   activeLoops.delete(channelId);
-
-  // Rename the loop thread to show it's stopped
-  if (loop.threadId) {
-    // We need to fetch the thread to rename it
-    try {
-      // Can't rename without the thread object — but we stored the ID
-      // The caller should handle the thread rename if they have access
-    } catch {}
-  }
 }
 
 function makeStoppedEmbed(loop: ActiveLoop): EmbedBuilder {

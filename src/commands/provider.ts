@@ -8,6 +8,7 @@ import {
   getDefaultProvider,
 } from '../services/projectStore.js';
 import type { SettingsService } from '../services/settingsService.js';
+import { optionalPrimary, providerUnavailable, safeProviderCheck } from '../utils/providerUtils.js';
 import { redactErrorMessage } from '../utils/redaction.js';
 
 export interface ProviderCommandDependencies {
@@ -42,27 +43,6 @@ function defaultDependencies(): ProviderCommandDependencies {
   };
 }
 
-function optionalPrimary(read: () => string): string | undefined {
-  try { return read(); } catch { return undefined; }
-}
-
-function providerUnavailable(provider: AgentProviderId): string {
-  return `${provider === 'codex' ? 'Codex' : 'Claude'} is unavailable on this host. Try again later or contact the bot owner.`;
-}
-
-async function safeProviderCheck(
-  dependencies: ProviderCommandDependencies,
-  provider: AgentProviderId,
-): Promise<{ available: boolean }> {
-  try {
-    const result = await dependencies.checkProvider(provider);
-    return { available: result.available };
-  } catch (error) {
-    console.error(`[provider] Availability check failed for ${provider}:`, redactErrorMessage(error));
-    return { available: false };
-  }
-}
-
 export async function handleProvider(
   interaction: ChatInputCommandInteraction,
   dependencies: ProviderCommandDependencies = defaultDependencies(),
@@ -77,7 +57,6 @@ export async function handleProvider(
 
   const requested = interaction.options.getString('provider') as AgentProviderId | null;
   const project = dependencies.getProjectByChannel(interaction.channelId);
-  const channelName = interaction.channel && 'name' in interaction.channel ? interaction.channel.name : undefined;
   if (!project && dependencies.primaryChannelId === interaction.channelId && dependencies.primaryOwnerId === interaction.user.id) {
     if (!requested) {
       const selected = dependencies.getDefaultProvider();

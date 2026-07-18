@@ -18,6 +18,7 @@ import {
 import { activatePrimaryProvider, capturePrimaryProviderState, getPrimaryChannelId, getPrimaryOwnerId, getProviderRegistry, getSettingsService } from '../services/agentRuntimeService.js';
 import type { PrimaryProviderActivationResult } from '../services/agentRuntimeService.js';
 import type { SettingsService } from '../services/settingsService.js';
+import { optionalPrimary, providerUnavailable, safeProviderCheck } from '../utils/providerUtils.js';
 import { redactErrorMessage } from '../utils/redaction.js';
 
 interface ModelOption {
@@ -89,7 +90,6 @@ export async function handleModel(
   const directValue = pickedModel || customValue;
 
   const project = dependencies.getProjectByChannel(interaction.channelId);
-  const channelName = interaction.channel && 'name' in interaction.channel ? interaction.channel.name : undefined;
   if (!project && dependencies.primaryChannelId === interaction.channelId && dependencies.primaryOwnerId === interaction.user.id) {
     const provider = dependencies.getDefaultProvider?.();
     if (!provider) {
@@ -274,26 +274,5 @@ export async function handleModel(
         .setDescription(`No selection made. Current model remains \`${currentModel}\`.`)],
       components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu)],
     }).catch(() => undefined);
-  }
-}
-
-function optionalPrimary(read: () => string): string | undefined {
-  try { return read(); } catch { return undefined; }
-}
-
-function providerUnavailable(provider: AgentProviderId): string {
-  return `${provider === 'codex' ? 'Codex' : 'Claude'} is unavailable on this host. Try again later or contact the bot owner.`;
-}
-
-async function safeProviderCheck(
-  dependencies: ModelCommandDependencies,
-  provider: AgentProviderId,
-): Promise<{ available: boolean }> {
-  try {
-    const result = await dependencies.checkProvider?.(provider);
-    return { available: result?.available ?? true };
-  } catch (error) {
-    console.error(`[model] Availability check failed for ${provider}:`, redactErrorMessage(error));
-    return { available: false };
   }
 }

@@ -1,9 +1,8 @@
-import {
+﻿import {
   REASONING_EFFORTS,
   type AgentProviderId,
   type AgentTaskSettings,
   type ReasoningEffort,
-  type TaskResult,
   type TaskStatus,
 } from './agents/contracts.js';
 import { validateClaudeTimeout } from './settings/validation.js';
@@ -48,22 +47,8 @@ export interface LegacyProject {
   baseBranch?: string;
 }
 
-export interface ProjectStore {
-  projects: Project[];
-}
-
 export interface LegacyProjectStore {
   projects: LegacyProject[];
-}
-
-export interface ActiveSession {
-  abortController: AbortController;
-  channelId: string;
-  threadId: string;
-  projectName: string;
-  sessionId: string | null;
-  startedAt: number;
-  busy: boolean;
 }
 
 export interface TaskRecord {
@@ -92,12 +77,6 @@ export interface WorktreeRecord {
   baseRef: string;
   createdAt: number;
   removedAt?: number;
-}
-
-export interface StoredTaskResult {
-  taskId: string;
-  result: TaskResult;
-  createdAt: number;
 }
 
 export type TaskControlCardPinState = 'unknown' | 'pinned' | 'not_pinned' | 'failed';

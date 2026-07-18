@@ -27,7 +27,21 @@ jobs:
         run: npm ci
 
       - name: Run tests
-        run: npm test
+        id: tests
+        continue-on-error: true
+        run: npm test > test-errors.txt 2>&1
+
+      - name: Upload test diagnostics
+        if: steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-errors
+          path: test-errors.txt
+
+      - name: Fail failed tests
+        if: steps.tests.outcome == 'failure'
+        run: cat test-errors.txt && exit 1
 
       - name: Build
+        if: steps.tests.outcome == 'success'
         run: npm run build

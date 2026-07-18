@@ -39,7 +39,18 @@ Each provider enforces the tool-isolated boundary differently:
 
 Conversation continuity belongs to Discord Agent's SQLite journal, retrieval, and memory system rather than a privileged provider coding session.
 
+## Transport adapters
+
+The primary conversation logic lives in a transport-neutral `PrimaryConversationService` (`src/primary/primaryConversationService.ts`). Two adapters connect it to external interfaces:
+
+1. **Discord adapter** (`src/primary/primaryAgentService.ts`) — maps Discord `Message` objects to the neutral `PrimaryConversationInput`, renders results as Discord messages, embeds, buttons, select menus, and polls, and uses `awaitMessageComponent` for decision collection.
+
+2. **Terminal REPL** (`src/terminal/repl.ts`) — reads from stdin, writes to stdout, renders results as text with numbered choices, and maps poll decisions to synchronous selection. Runs only in interactive TTY environments.
+
+Both adapters share the same `PrimaryConversationService` instance, memory system, provider registry, task coordinator, and usage admission. No transport-specific logic leaks into the neutral service.
+
 ## Related
 
 - [Provider-neutral runtime](provider-neutral-runtime.md)
 - [Trust model](../security/trust-model.md)
+- [Terminal REPL how-to guide](../../how-to/operations/use-the-terminal-repl.md)

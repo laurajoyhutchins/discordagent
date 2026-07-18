@@ -1,51 +1,71 @@
 # Discord Agent
 
-Discord Agent is a private, local-first Discord workspace for running coding agents against repositories on the machine hosting the bot. It is based on [Nicolai Lolansen's DiscordClaude](https://github.com/NicolaiLolansen/DiscordClaude) and retains the upstream MIT license and attribution.
+Run local coding agents from a private Discord workspace.
 
-Discord Agent provides a provider-neutral runtime with executable Claude, Codex, and OpenCode adapters. Claude uses the Agent SDK, Codex uses the local App Server protocol, and OpenCode uses the local ACP CLI behind the same durable task contract.
+Discord Agent provides a persistent PM-style primary agent, isolated task threads, durable provider sessions, and safe Git worktrees across Claude, Codex, and OpenCode.
 
-## What the runtime provides
+**Status:** Active development. Breaking changes may occur. The project is derived from [DiscordClaude](https://github.com/NicolaiLolansen/DiscordClaude) (MIT).
 
-- **Persistent primary-agent chat** — a private `#agent-chat` channel provides one PM-style point of contact for natural conversation, planning, delegation, and concise reporting.
-- **Natural-language project channels** — each registered project receives a private `#agent` channel.
-- **Task threads** — each new prompt creates a Discord thread representing one durable agent task and one immutable provider session.
-- **Isolated Git worktrees** — each Git-backed task receives its own branch and writable worktree before provider execution begins.
-- **Durable state** — projects, tasks, worktrees, provider sessions, events, results, and recovery checkpoints are stored in SQLite.
-- **Claude, Codex, and OpenCode adapters** — provider-specific transports feed the same durable provider contract and normalized event model.
-- **Streaming and approvals** — responses, plans, commands, file changes, approvals, and user questions are rendered through provider-neutral Discord components.
-- **Continuation and cancellation** — replies continue the same provider session; `/cancel` cancels the task associated with the current thread.
-- **Safe restart recovery** — nonterminal tasks are marked interrupted, their worktrees are preserved, and no provider turn is replayed automatically.
-- **Recurring tasks** — a loop reuses one thread, task, worktree, and provider session without overlapping iterations.
-- **Roborev routing** — optional reviews are posted by the authenticated bot directly to `#roborev`; webhook credentials are not created or stored.
-- **Durable memory and retrieval** — the primary agent uses a SQLite journal, FTS5 retrieval, provenance-controlled memory, and bounded context assembly.
-- **Discord-native decisions** — confirmations, select menus, and native polls collect user choices without turning routine conversation into command syntax.
-- **Quiet usage admission** — provider windows, calibrated task estimates, and active reservations are managed internally; `/usage` and `/agents` expose details on demand, while normal conversation surfaces only material constraints.
+## What it does
 
-## Safety model
+Discord Agent turns a private Discord server into a secure orchestration surface for AI coding agents. A PM-style primary agent in `#agent-chat` discusses priorities, retrieves relevant history, and delegates approved coding tasks into provider-fixed threads. Each task gets:
 
-Discord Agent is intended for a private server with trusted users and repositories.
+- a dedicated Discord thread for streaming output and decisions;
+- one immutable provider session (Claude, Codex, or OpenCode);
+- an isolated Git branch and worktree;
+- durable SQLite state for recovery, journaling, and memory.
 
-- Every command and message is checked against `AUTHORIZED_ROLE_IDS`.
-- Registered paths can be restricted with `PROJECTS_BASE_DIR`.
-- Git-backed tasks run in isolated worktrees rather than the project's primary checkout.
-- Git commands use argument arrays with `shell: false`.
-- Dirty task worktrees are never force-removed.
-- Provider identity cannot change inside an existing task thread.
-- Claude loads user-level settings only. Project and local Claude settings are ignored so repository content cannot weaken global approval policy.
-- Provider credentials, API keys, device codes, and Roborev webhook tokens are never stored in SQLite.
-- Sensitive provider and task content is redacted before SQLite persistence, Discord rendering, and logs.
-- Interrupted work is preserved and requires an explicit user message to resume.
+## Who this is for
 
-## Prerequisites
+Operators who want a shared, auditable, least-privilege workspace where trusted team members can run coding agents against local repositories without sharing terminal access, provider credentials, or API keys.
 
-- Node.js 22 or newer
-- Git
-- A private Discord server where you can install a bot
-- At least one supported provider installed and authenticated on the bot host: Claude Code, Codex CLI, or OpenCode CLI
+## Not intended for
 
-Run each provider you intend to use once locally to complete its host-side setup. Codex device authentication is host-local: run `codex login --device-auth` on the bot host and never send the verification URL or one-time code to Discord. `/codex-auth login` only starts the in-memory flow and provides local-host instructions.
+- Public-facing bots or multi-tenant SaaS hosting.
+- Automated CI/CD pipeline execution.
+- Untrusted Discord members (every command is gated by role authorization).
 
-## Installation
+## Core differentiators
+
+- **PM-style primary agent** — one natural-language point of contact in `#agent-chat` for planning, delegation, and concise reporting. The primary agent has no repository tools and cannot bypass the task coordinator.
+- **Provider-neutral runtime** — Claude, Codex, and OpenCode adapters feed the same durable task contract and normalized event model. Provider switching is a confirmed sibling handoff, not an in-place session conversion.
+- **Isolated Git worktrees** — every Git-backed task runs on its own branch in a separate worktree. Dirty worktrees are never force-removed.
+- **Durable state and recovery** — projects, tasks, sessions, events, and results live in SQLite. Nonterminal tasks become `interrupted` after a restart; no provider turn is replayed automatically.
+- **Discord-native decisions** — buttons, select menus, and native polls collect approvals and input without command syntax.
+- **Quiet usage admission** — provider windows, calibrated task estimates, and active reservations are managed internally. The coordinator only surfaces constraints when capacity is critical.
+- **Least-privilege Discord model** — the bot runs with minimal permissions and a capability registry that provides diagnostics and graceful fallbacks.
+
+## Architecture
+
+```text
+Discord messages / commands
+            │
+            ▼
+      TaskCoordinator
+       │     │      │
+       │     │      └── DiscordTaskRenderer + DiscordInteractionBroker
+       │     └───────── Task/Event/Project repositories → SQLite
+       └─────────────── WorktreeManager → isolated Git worktree
+            │
+            ▼
+      ProviderRegistry
+            │
+            ├── ClaudeProvider   → Claude Agent SDK
+            ├── CodexProvider    → Codex App Server
+            └── OpenCodeProvider → OpenCode ACP
+```
+
+`TaskCoordinator` owns lifecycle ordering. Handlers never call provider SDKs directly.
+
+## Provider support
+
+| Provider | Transport | Task execution | Primary agent | Session continuation | Cancellation |
+|---|---|---|---|---|---|
+| Claude | Agent SDK | Full | Full (tool-disabled) | Yes | Yes |
+| Codex | App Server JSON-RPC | Full | Full (read-only, network-disabled) | Yes | Yes |
+| OpenCode | ACP CLI | Full | Full (deny-all agent, disposable directory) | When ACP advertises capability | Yes |
+
+## Quickstart
 
 ```bash
 git clone https://github.com/laurajoyhutchins/discordagent.git
@@ -54,231 +74,38 @@ npm ci
 cp .env.example .env
 ```
 
-Configure the required values in `.env`:
-
-```env
-DISCORD_TOKEN=your-bot-token
-DISCORD_CLIENT_ID=your-application-id
-DISCORD_GUILD_ID=your-server-id
-AUTHORIZED_ROLE_IDS=your-authorized-role-id
-```
-
-Register commands and start the bot:
+Configure `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, and `AUTHORIZED_ROLE_IDS` in `.env`. Then:
 
 ```bash
-npm run register
-npm run dev
+npm run register     # Register slash commands
+npm run dev          # Start the bot
 ```
 
-On the first start, open the private `#agent-chat` channel and choose an available provider. That selection powers the PM chat and becomes the default for new projects. If Codex is selected, complete `/codex-auth login` first when the setup prompt asks for it. Each provider is independently optional at runtime; use `CLAUDE_ENABLED`, `CODEX_ENABLED`, and `OPENCODE_ENABLED` to match the host installation.
+On first start, open `#agent-chat` and select a provider. Run `/add-project` to register a Git repository, then send a normal message in its `#agent` channel to create a task.
 
-For production-style execution:
+See the [tutorial](docs/tutorials/run-your-first-agent-task.md) for a complete guided walkthrough.
 
-```bash
-npm run build
-npm start
-```
+## Security and trust
 
-## Discord setup and least-privilege permissions
+- Every command is checked against `AUTHORIZED_ROLE_IDS`.
+- Project paths can be restricted with `PROJECTS_BASE_DIR`.
+- Git commands use argument arrays with `shell: false`.
+- Provider credentials, API keys, device codes, and webhook tokens are never stored in SQLite.
+- Sensitive content is redacted before SQLite persistence, Discord rendering, and logs.
+- Claude loads user-level settings only; project/local Claude settings are ignored.
+- The primary agent has no repository tools and cannot bypass `TaskCoordinator`.
+- Interrupted work is preserved and requires explicit user action to resume.
 
-Discord Agent separates bot permission bits, Gateway intents, OAuth scopes, and application features. Use the calculator to print the current values from the installed Discord.js constants:
+## Documentation
 
-```bash
-npm run discord:permissions
-```
-
-The ordinary runtime profile is:
-
-- `View Channel` — read private project/task channels;
-- `Send Messages` — reply and publish task output;
-- `Embed Links` — richer status and result cards (plain-text fallback remains available);
-- `Read Message History` — inspect task-thread context;
-- `Create Public Threads` — create one thread for each new task;
-- `Send Messages in Threads` — publish the control card, output, and decisions.
-
-The temporary/bootstrap profile adds `Manage Channels` for creating project categories/channels, installing their permission overwrites, and deleting project channels. Remove it after setup when project-channel management is no longer needed. The bot must have these permissions at guild level; a channel overwrite cannot grant a permission the bot does not possess.
-
-The configured Gateway intents are `Guilds`, `Guild Members`, `Guild Messages`, and the privileged `Message Content` intent. Enable `Guild Members` and `Message Content` in the Discord Developer Portal before starting the bot.
-
-Optional profiles are represented by the capability registry but are not included in the default runtime invitation: `Pin Messages` for pinned control cards, `Send Polls` for native polls, `View Audit Log` for audit reconciliation, `Manage Webhooks` for future webhook personas, `Create Events` for scheduled events, `Send Voice Messages` for voice messages, `Connect`/`Speak` plus `Guild Voice States` for live voice, and `Set Voice Channel Status` for voice status. Each feature has a graceful fallback and must be enabled deliberately.
-
-Buttons, select menus, modals, and message context commands are Discord Interaction API features; they are not enabled by selecting similarly named bot permissions. Command registration uses the `applications.commands` OAuth scope. Activities require application configuration and an Entry Point command; `Use Embedded Activities`, `Use Application Commands`, and `Use External Apps` are member-behavior permissions, not baseline bot-role requirements. Do not select `Administrator`: it is neither required nor recommended.
-
-After installation, run `/capabilities` in a project or task channel for an authorized ephemeral report of effective permissions, channel overwrites, fallbacks, Gateway intents, and application configuration. The report remains useful when optional permissions are missing.
-
-## Registering a project
-
-Choose the global provider in `#agent-chat` before registering a project. Then run this in the configured guild:
-
-```text
-/add-project name:factory-floor path:/absolute/path/to/factory-floor
-```
-
-The bot creates a category named for the project and a private `#agent` channel. The project inherits the global provider at creation time; use `/provider` in the project channel to override it later. When Roborev is enabled, it also creates `#roborev`.
-
-Send a normal message in `#agent` to create a task. Discord Agent will:
-
-1. select the project's default provider;
-2. create a Discord task thread;
-3. create a dedicated Git branch and worktree;
-4. persist the task and worktree mapping;
-5. start the provider and persist its session identity;
-6. stream normalized events into the thread;
-7. store the result while preserving the thread for later continuation.
-
-## Commands
-
-| Command | Behavior |
+| For | Start here |
 |---|---|
-| `/add-project` | Register a local project and create its channels. |
-| `/list-projects` | List active projects, providers, models, and channels. |
-| `/remove-project` | Soft-archive the project record and delete its Discord channels. Historical tasks remain in SQLite. |
-| `/provider [claude\|codex\|opencode]` | Show or change the global provider in `#agent-chat`, or the project's default provider in a project channel, after an authoritative availability check. In a task thread, proposing another provider creates a confirmed sibling handoff. |
-| `/model [model] [custom] [thinking]` | In `#agent-chat`, set the global PM model and Codex thinking depth; in a project channel, set that project's provider settings. Use `custom` for an exact model ID; `thinking` accepts `default`, `none`, `low`, `medium`, `high`, `xhigh`, or `max`. |
-| `/cancel` | In a task thread, cancel that durable task while preserving its worktree. |
-| `/loop <prompt> [interval]` | Start a recurring task in one thread/session/worktree. |
-| `/stop-loop` | Stop the loop associated with the project or loop thread. |
-| `/agents` | Show active task threads, providers, status, and reserved capacity. |
-| `/usage` | Show provider windows, operating posture, and active reservations. |
-| `/capabilities` | Show effective Discord capabilities and graceful fallbacks in the current channel. |
-| `/codex-auth status\|login\|logout` | Check, establish, or revoke Codex authentication using owner-only ephemeral controls. |
-
-Text commands in `#agent` include `/provider`, `/model`, `/loop`, `/stop-loop`, and `/status`. Ordinary natural-language messages are the default interface.
-
-## Provider behavior
-
-### Claude
-
-Claude executes through `@anthropic-ai/claude-agent-sdk`.
-
-Model precedence is:
-
-1. one-message `/model <name> <prompt>` override;
-2. provider-scoped project model;
-3. `CLAUDE_MODEL` environment value;
-4. Claude SDK default.
-
-Claude continues to respect `~/.claude/settings.json`. Project-level `.claude/settings.json` and `.claude/settings.local.json` are deliberately ignored.
-
-### Codex
-
-In `#agent-chat`, `/model` changes the global PM model and Codex reasoning effort; in a project channel it changes future task turns. The selected effort is stored per provider and sent as App Server `effort` on each new or continued turn; existing task threads keep the provider/session context they started with.
-
-Codex runs through a singleton local App Server process using newline-delimited JSON requests, responses, notifications, and server-initiated approval/input requests. A Codex task persists the returned thread identifier before awaiting turn completion, streams normalized plans/commands/file changes/diffs/usage, and maps Discord decisions back to App Server approval values.
-
-When sign-in is required, the original request is held in memory for up to 30 minutes without creating a thread or worktree. `/codex-auth login` never displays the OpenAI device URL or one-time code in Discord; complete the flow locally on the bot host. Login details are memory-only, expire automatically, and are cleared on completion, cancellation, logout, or shutdown. The bot performs a fresh account read after completion and requires an explicit **Start task** or **Discard** action. API keys and secret tool inputs are never requested through Discord.
-
-### OpenCode
-
-OpenCode runs through the local Agent Client Protocol (ACP) CLI. It uses the same durable task, session, worktree, approval, cancellation, and normalized-event boundaries as the other providers. `OPENCODE_MODEL` configures the default task model, while `OPENCODE_PRIMARY_MODEL` can independently select the restricted PM-chat model.
-
-A provider change inside a completed task thread is a confirmed sibling handoff, not an in-place session conversion. The new task receives a fresh provider session and isolated worktree based on the committed source-task branch. The handoff transfers a bounded structured summary rather than the complete transcript.
-
-## Git worktrees
-
-Task branches use this shape:
-
-```text
-agent/<provider>/<task-slug>-<thread-suffix>
-```
-
-The base branch resolution order is:
-
-1. the project's explicitly configured base branch;
-2. the symbolic remote default such as `origin/main`;
-3. the current local branch.
-
-`WORKTREES_BASE_DIR` controls where task worktrees are placed. Discord Agent refuses unsafe worktree cleanup when uncommitted changes exist and never uses force removal or force reset.
-
-## Persistence and recovery
-
-Operational state is stored in SQLite at `DATABASE_PATH`. By default, development uses `src/data/discordagent.sqlite`; compiled execution uses `dist/data/discordagent.sqlite`.
-
-SQLite stores:
-
-- projects, provider-scoped model settings, and provider-scoped reasoning-effort settings;
-- tasks and immutable provider identities;
-- worktrees and branches;
-- provider session identifiers;
-- normalized task events and terminal results;
-- the complete primary-agent conversation journal and FTS index;
-- durable memory records and revision provenance;
-- provider usage snapshots, task-cost observations, and capacity reservations.
-
-On startup, tasks left in `starting`, `running`, or `waiting_for_user` become `interrupted`. Discord Agent inspects the recorded worktree, writes a recovery event, and posts a concise checkpoint in the original thread when it is still available. **No provider turn is automatically replayed.**
-
-## Migrating from DiscordClaude
-
-Discord Agent performs a one-time import from `src/data/projects.json` when that file exists:
-
-- `claudeChannelId` becomes `agentChannelId`; existing Discord channels remain usable and do not need to be recreated.
-- The legacy project model becomes the Claude-scoped model.
-- The default provider becomes Claude.
-- Roborev channel IDs are retained.
-- Roborev webhook IDs and tokens are discarded.
-- Legacy session IDs may be recorded only as migration metadata; **old provider sessions are not automatically resumed**.
-
-The original JSON file is not the operational database after migration. Project removal is a soft archive so historical task records keep referential integrity.
-
-## Roborev
-
-When enabled, the bot starts `roborev stream`, matches events to registered repository paths, and sends review embeds directly to the project's `#roborev` channel through the Discord bot client. Discord Agent does not create, DM, persist, or use Roborev webhook credentials.
-
-## Environment variables
-
-| Variable | Required | Default | Purpose |
-|---|---:|---|---|
-| `DISCORD_TOKEN` | yes | — | Discord bot token. |
-| `DISCORD_CLIENT_ID` | yes | — | Discord application ID. |
-| `DISCORD_GUILD_ID` | yes | — | Private server ID. |
-| `AUTHORIZED_ROLE_IDS` | yes | — | Comma-separated authorized role IDs. |
-| `NOTIFY_USER_ID` | no | empty | User to mention after task completion. |
-| `AUTHORIZED_USER_ID` | primary/Codex auth | `NOTIFY_USER_ID` | Exact owner allowed to use `#agent-chat` and manage Codex login. |
-| `CLAUDE_ENABLED` | no | `true` | Enable the Claude provider. |
-| `CLAUDE_MODEL` | no | SDK default | Default Claude model. |
-| `CLAUDE_TIMEOUT_MS` | no | `900000` | Claude turn timeout. |
-| `CODEX_ENABLED` | no | `true` | Enable local Codex App Server startup. |
-| `CODEX_CLI_PATH` | no | `codex` | Codex CLI executable used to launch App Server. |
-| `CODEX_MODEL` | no | provider default | Default Codex model. |
-| `OPENCODE_ENABLED` | no | `true` | Enable the OpenCode ACP provider. |
-| `OPENCODE_CLI_PATH` | no | `opencode` | OpenCode CLI executable. |
-| `OPENCODE_TIMEOUT_MS` | no | `900000` | OpenCode turn timeout. |
-| `OPENCODE_MODEL` | no | provider default | Default OpenCode task model. |
-| `OPENCODE_PRIMARY_MODEL` | no | provider/global default | OpenCode-specific PM-chat model. |
-| `PRIMARY_AGENT_MODEL` | no | provider default | Optional model used by the restricted PM-style coordinator. |
-| `PRIMARY_USAGE_RESERVE` | no | `10` | Capacity percentage points preserved for coordination and recovery. |
-| `PROJECTS_BASE_DIR` | no | unrestricted | Root beneath which projects may be registered. |
-| `ALLOW_NON_GIT` | no | `false` | Legacy registration switch. Agent task execution still requires a Git repository for worktree isolation. |
-| `DATABASE_PATH` | no | runtime data directory | SQLite database path. |
-| `WORKTREES_BASE_DIR` | no | beside database | Isolated task worktree directory. |
-| `ROBOREV_CLI_PATH` | no | `roborev` | Roborev executable path. |
-| `USAGE_CHANNEL_ID` | no | empty | Optional detailed usage channel. |
-| `INSTANCE_LOCK_PORT` | no | `47831` | Localhost single-instance lock. |
-
-## Development
-
-```bash
-npm ci
-npm test
-npm run build
-```
-
-Useful commands:
-
-```bash
-npm run test:watch
-npm run test:coverage
-npm run check
-```
-
-The detailed lifecycle and persistence design is in [`docs/architecture/provider-neutral-runtime.md`](docs/architecture/provider-neutral-runtime.md). The approved specification and task plan remain under `docs/superpowers/`.
-
-## Primary-agent and usage behavior
-
-The primary agent is a project owner / PM, not a hidden coding session. It has no repository tools, no project MCP access, and cannot bypass the durable task coordinator. It discusses priorities, retrieves relevant history, proposes bounded work, delegates approved tasks into provider-fixed threads, and summarizes outcomes.
-
-Usage management is intentionally quiet. The coordinator tracks provider-reported windows, active reservations, and historical task classes internally. It only interrupts normal conversation when a task is unusually expensive, cannot be completed reliably, should be narrowed or deferred, or a running turn must be checkpointed. Preserve-mode interruption occurs at most once per turn and retains the provider session, branch, and worktree.
+| Learn with a guided tutorial | [Tutorials](docs/tutorials/run-your-first-agent-task.md) |
+| Accomplish a specific task | [How-to guides](docs/how-to/README.md) |
+| Look up commands, config, or states | [Reference](docs/reference/README.md) |
+| Understand architecture and design | [Explanation](docs/explanation/README.md) |
+| Contribute to the project | [Contributing](CONTRIBUTING.md) |
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE). Copyright and permission notices from DiscordClaude are preserved as required by the upstream license.
+MIT. See [LICENSE](LICENSE). Copyright and permission notices from DiscordClaude are preserved as required by the upstream license.

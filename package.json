@@ -1,7 +1,8 @@
 {
   "name": "discord-agent",
   "version": "1.0.0",
-  "description": "Provider-neutral Discord workspace for durable, isolated coding-agent tasks",
+  "description": "Provider-neutral Discord workspace: run Claude, Codex, and OpenCode coding agents from private Discord with isolated Git worktrees",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -15,7 +16,9 @@
     "check": "npm test && npm run build",
     "smoke:host": "tsx src/smoke/hostPreflight.ts",
     "smoke:discord": "tsx src/smoke/discordConnectivity.ts",
-    "smoke": "npm run smoke:host && npm run smoke:discord"
+    "smoke": "npm run smoke:host && npm run smoke:discord",
+    "docs:links": "node scripts/check-docs-links.mjs",
+    "check:docs": "npm run docs:links"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.2.1",
@@ -31,6 +34,24 @@
     "tsx": "^4.19.0",
     "typescript": "^5.5.0",
     "vitest": "^4.1.10"
+  },
+  "keywords": [
+    "discord",
+    "coding-agent",
+    "claude",
+    "codex",
+    "opencode",
+    "ai",
+    "git-worktree",
+    "typescript"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/laurajoyhutchins/discordagent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/laurajoyhutchins/discordagent/issues"
   },
   "engines": {
     "node": ">=22"

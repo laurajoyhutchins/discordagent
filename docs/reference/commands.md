@@ -2,76 +2,81 @@
 
 ## Slash commands
 
-| Command | Scope | Description |
-|---|---|---|
-| `/add-project` | Any guild channel | Register a project directory and create its Discord channels |
-| `/remove-project` | Project channel | Soft-archive a project and remove its Discord channels |
-| `/list-projects` | Any guild channel | Show registered projects |
-| `/provider` | Project channel or `#agent-chat` | View or set the default Claude, Codex, or OpenCode provider |
-| `/model` | Project channel or `#agent-chat` | View or set the active provider's model; Codex also supports reasoning depth |
-| `/settings` | `#agent-chat` only | View and edit global agent and PM settings |
-| `/project-settings` | Project channel | View and edit project-scoped settings |
-| `/capabilities` | Guild channel | Show effective Discord capabilities and fallbacks |
-| `/agents` | Guild channel | Show active task threads, providers, and status |
-| `/usage` | Guild channel | Show provider usage posture and reservations |
-| `/cancel` | Task thread | Cancel the durable task while preserving its worktree |
-| `/loop` | Project channel | Start periodic task execution |
-| `/stop-loop` | Project channel or loop thread | Stop periodic task execution |
-| `/codex-auth` | `#agent-chat` only | Check, establish, or revoke Codex authentication |
+| Command | Discord contexts | Authorization | Side effects |
+|---|---|---|---|
+| `/add-project` | Any guild channel | `AUTHORIZED_ROLE_IDS` | Creates Discord category, #agent channel, optional #roborev channel; persists project in SQLite |
+| `/list-projects` | Any guild channel | `AUTHORIZED_ROLE_IDS` | None (read-only) |
+| `/remove-project` | Any guild channel | `AUTHORIZED_ROLE_IDS` | Soft-archives project; deletes Discord channels; preserves task records |
+| `/provider` | Any guild channel, task thread | `AUTHORIZED_ROLE_IDS`; task-thread handoff requires confirmation | Changes default provider; in task threads creates sibling handoff |
+| `/model` | Any guild channel, task thread | `AUTHORIZED_ROLE_IDS` | Changes stored model/reasoning setting; does not affect running tasks |
+| `/settings` | `#agent-chat` only | Owner only (`AUTHORIZED_USER_ID`) | Persists global settings; provider/model changes reactivate PM |
+| `/project-settings` | Project channel | `AUTHORIZED_ROLE_IDS` | Persists project settings |
+| `/capabilities` | Any guild channel | `AUTHORIZED_ROLE_IDS` | None (read-only Discord permissions report) |
+| `/agents` | Any guild channel | `AUTHORIZED_ROLE_IDS` | None (read-only status report) |
+| `/usage` | Any guild channel | `AUTHORIZED_ROLE_IDS` | None (read-only usage report) |
+| `/cancel` | Task thread | `AUTHORIZED_ROLE_IDS` | Cancels the task; preserves worktree; persists terminal status |
+| `/loop` | Project channel | `AUTHORIZED_ROLE_IDS` | Creates recurring task in one thread/session/worktree |
+| `/stop-loop` | Project channel, loop thread | `AUTHORIZED_ROLE_IDS` | Stops the running loop |
+| `/codex-auth` | `#agent-chat` only | Owner only | Manages in-memory Codex authentication state |
 
-## Text commands
+### `/add-project`
 
-These work when typed as messages in a project channel or task thread where noted.
+**Parameters:**
+- `name` (string, required) — project name, used for Discord category
+- `path` (string, required) — absolute filesystem path to the Git repository
+- `roborev` (boolean, optional) — enable Roborev integration; auto-detected if omitted
 
-| Command | Scope | Description |
-|---|---|---|
-| `/provider claude\|codex\|opencode` | Project channel | Set the project's default provider |
-| `/provider claude\|codex\|opencode` | Task thread | Request a confirmed sibling handoff to a fresh provider session |
-| `/model [name]` | Project channel | View or set the project's model for its current provider |
-| `/model <name> <prompt>` | Project channel or task thread | Use a one-turn model override without changing stored settings |
-| `/loop [interval] <prompt>` | Project channel | Start periodic task execution |
-| `/stop-loop` | Project channel or loop thread | Stop periodic task execution |
-| `/status` | Project channel or loop thread | Show loop status |
-
-## Command details
-
-### `/settings`
-
-Opens an owner-only ephemeral panel with controls for:
-
-- default provider;
-- Claude, Codex, and OpenCode model overrides;
-- PM model;
-- Claude timeout;
-- usage reserve;
-- provider-supported reasoning effort.
-
-Changing the default provider or PM model reconfigures the PM service transactionally. A failed activation rolls back the persisted setting.
-
-### `/project-settings`
-
-Opens an authorized ephemeral panel for:
-
-- default provider;
-- Claude, Codex, and OpenCode model overrides;
-- Codex reasoning effort;
-- base branch;
-- Claude MCP profile;
-- channel-managed Roborev state.
-
-Existing task threads keep their immutable provider and task-settings snapshot.
-
-### `/capabilities`
-
-Reports effective Discord permission state, Gateway intents, and fallback behavior for the current channel. The report uses plain text so it remains available without `Embed Links`.
+**Failure behavior:** Rolls back Discord channel creation if path validation fails. Does not create incomplete channel sets.
 
 ### `/provider`
 
-In a project channel, this changes the provider used by new tasks. In `#agent-chat`, the configured owner changes the global PM/default provider. In a task thread, a provider change is never in-place: after confirmation, Discord Agent creates a sibling task with a new provider session and worktree.
+**Parameters:**
+- `provider` (choice: Claude, Codex, OpenCode, optional) — if omitted, displays current provider
+
+**Context-dependent behavior:**
+- In `#agent-chat`: changes the global/default provider for the PM and new projects
+- In a project channel: changes the project's default provider for new tasks
+- In a task thread: creates a confirmed sibling handoff to a new provider session
 
 ### `/model`
 
-In a project channel, this changes the model for the project's current provider. In `#agent-chat`, it changes PM/global settings. `thinking` is supported only for Codex; Claude and OpenCode retain provider-managed reasoning behavior.
+**Parameters:**
+- `model` (string, optional) — provider-scoped model alias or exact ID
+- `custom` (string, optional) — set a custom model name directly
+- `thinking` (choice, optional) — Codex reasoning effort: `__default__`, `none`, `low`, `medium`, `high`, `xhigh`, `max`
+
+Existing task threads keep their immutable task-settings snapshot.
+
+### `/cancel`
+
+No parameters. Cancels the task associated with the current thread. The worktree is preserved. The task status transitions to `cancelled`.
+
+### `/loop`
+
+**Parameters:**
+- `prompt` (string, required) — the prompt to run repeatedly
+- `interval` (string, optional) — interval between runs (e.g. `5m`, `1h`, `30s`); default `10m`
+
+### `/codex-auth`
+
+**Subcommands:**
+- `status` — check Codex authentication state
+- `login` — start private device-code sign-in flow
+- `logout` — log out Codex after confirmation
+
+## Text commands
+
+These work when typed as messages in a project channel or task thread.
+
+| Command | Context | Behavior |
+|---|---|---|
+| `/provider claude\|codex\|opencode` | Project channel | Set the project's default provider |
+| `/provider claude\|codex\|opencode` | Task thread | Request a sibling handoff |
+| `/model [name]` | Project channel | View or set the project's model |
+| `/model <name> <prompt>` | Project channel or task thread | One-turn model override without changing stored settings |
+| `/loop [interval] <prompt>` | Project channel | Start periodic task execution |
+| `/stop-loop` | Project channel or loop thread | Stop periodic task execution |
+| `/status` | Project channel or loop thread | Show loop status |
 
 ## Message-based task creation
 
@@ -81,4 +86,13 @@ Any non-command message in a project's `#agent` channel creates a new task. Repl
 /model gpt-5-codex Implement the authentication flow
 ```
 
-This uses `gpt-5-codex` for that turn only without changing the stored project or global model.
+This uses `gpt-5-codex` for that turn only without changing stored settings.
+
+## Authorization summary
+
+| Level | Check | Scope |
+|---|---|---|
+| Global commands (`/settings`, `/codex-auth`) | `AUTHORIZED_USER_ID` exact match | `#agent-chat` only |
+| Project commands | `AUTHORIZED_ROLE_IDS` membership | Any guild channel |
+| Task operations (`/cancel`, continuation) | Channel access + role check | Task thread only |
+| Provider onboarding buttons | Owner + correct channel + current message | `#agent-chat` only |

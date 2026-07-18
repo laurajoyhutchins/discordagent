@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { OpenCodeAcpConnection, OpenCodeAcpHandlers } from './acpTransport.js';
 import { OpenCodePrimaryModel, openCodePrimaryEnvironment } from './opencodePrimaryModel.js';
@@ -63,6 +64,25 @@ describe('OpenCodePrimaryModel', () => {
     expect(conn.close).toHaveBeenCalledOnce();
   });
 
+  it('creates and removes an empty temporary workspace by default', async () => {
+    let workspace = '';
+    const conn = connection({
+      newSession: vi.fn(async cwd => {
+        workspace = cwd;
+        expect(existsSync(cwd)).toBe(true);
+        return { sessionId: 'pm-session-1', configOptions: [] } as never;
+      }),
+    });
+    const model = new OpenCodePrimaryModel({
+      createConnection: vi.fn(async () => conn),
+    });
+
+    await model.respond({ context: '', message: 'Hello' });
+
+    expect(workspace).toMatch(/discordagent-opencode-pm-/);
+    expect(existsSync(workspace)).toBe(false);
+  });
+
   it('applies an advertised PM model before prompting', async () => {
     const conn = connection();
     const model = new OpenCodePrimaryModel({
@@ -102,7 +122,21 @@ describe('OpenCodePrimaryModel', () => {
 
     expect(env.KEEP_ME).toBe('yes');
     expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT!)).toEqual({
-      permission: { '*': 'deny' },
+      permission: 'deny',
+      default_agent: 'discord-agent-primary',
+      agent: {
+        'discord-agent-primary': {
+          description: 'Tool-isolated Discord Agent PM coordinator',
+          mode: 'primary',
+          permission: { '*': 'deny' },
+          tools: { '*': false },
+        },
+      },
+      instructions: [],
+      plugin: [],
+      autoupdate: false,
+      share: 'disabled',
+      snapshot: false,
     });
   });
 });

@@ -21,8 +21,8 @@ function setup() {
   const settings = {
     get: (key: string) => values.get(key),
     set: (key: string, value: string) => { values.set(key, value); },
-    getDefaultProvider: () => values.get('default_provider') as 'claude' | 'codex' | undefined,
-    setDefaultProvider: (provider: 'claude' | 'codex') => { values.set('default_provider', provider); },
+    getDefaultProvider: () => values.get('default_provider') as AgentProviderId | undefined,
+    setDefaultProvider: (selected: AgentProviderId) => { values.set('default_provider', selected); },
   };
   const registry = new ProviderRegistry();
   registry.register(provider('codex'));
@@ -53,7 +53,7 @@ describe('provider onboarding', () => {
     }));
   });
 
-  it('does not show task-only OpenCode in PM onboarding choices', async () => {
+  it('shows every available PM-capable provider in onboarding choices', async () => {
     const context = setup();
     const service = createProviderOnboardingService({
       ownerId: 'owner', settings: context.settings as never, providers: context.registry, channel: context.channel as never,
@@ -63,8 +63,11 @@ describe('provider onboarding', () => {
 
     const payload = context.channel.send.mock.calls[0][0] as unknown as { components: Array<{ toJSON(): { components: Array<{ custom_id?: string }> } }> };
     const customIds = payload.components.flatMap(row => row.toJSON().components.map(component => component.custom_id));
-    expect(customIds).toEqual(expect.arrayContaining(['provider_setup:claude', 'provider_setup:codex']));
-    expect(customIds).not.toContain('provider_setup:opencode');
+    expect(customIds).toEqual(expect.arrayContaining([
+      'provider_setup:claude',
+      'provider_setup:codex',
+      'provider_setup:opencode',
+    ]));
   });
 
   it('persists an owner-selected provider and removes the setup controls', async () => {

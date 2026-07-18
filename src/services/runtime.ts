@@ -46,6 +46,7 @@ import { clearUsageAdmissionService, setUsageAdmissionService } from './usageAdm
 import { createPendingTaskService, type PendingTaskService } from './pendingTaskService.js';
 import { createProviderOnboardingService, type ProviderOnboardingService } from './providerOnboarding.js';
 import { OpenCodeAcpTransport } from '../agents/opencode/acpTransport.js';
+import { OpenCodePrimaryModel } from '../agents/opencode/opencodePrimaryModel.js';
 import { OpenCodeProvider } from '../agents/opencode/opencodeProvider.js';
 
 export interface RuntimeOptions {
@@ -238,6 +239,13 @@ export async function startRuntime(
             model: config.primaryAgentModel || config.defaultCodexModel,
           });
         }
+        if (provider === 'opencode' && providers.list().includes('opencode')) {
+          return new OpenCodePrimaryModel({
+            cliPath: config.openCodeCliPath,
+            timeoutMs: config.openCodeTimeoutMs,
+            model: config.openCodePrimaryModel || config.primaryAgentModel || config.defaultOpenCodeModel,
+          });
+        }
         return undefined;
       };
       const activatePrimaryProvider = async (provider: AgentProviderId): Promise<void> => {
@@ -257,7 +265,7 @@ export async function startRuntime(
         ownerId: config.authorizedUserId,
         settings,
         providers,
-        pmProviderIds: providers.list().filter(provider => provider !== 'opencode'),
+        pmProviderIds: providers.list(),
         channel: primaryChannel,
         onSelected: activatePrimaryProvider,
       });

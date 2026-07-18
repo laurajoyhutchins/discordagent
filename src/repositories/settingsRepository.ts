@@ -1,4 +1,4 @@
-import type { AgentProviderId } from '../agents/contracts.js';
+import { isAgentProviderId, type AgentProviderId } from '../agents/contracts.js';
 import type { DatabaseHandle } from '../db/database.js';
 
 const DEFAULT_PROVIDER_KEY = 'default_provider';
@@ -28,7 +28,7 @@ export function createSettingsRepository(db: DatabaseHandle): SettingsRepository
     },
     getDefaultProvider(): AgentProviderId | undefined {
       const value = this.get(DEFAULT_PROVIDER_KEY);
-      return value === 'claude' || value === 'codex' ? value : undefined;
+      return isAgentProviderId(value) ? value : undefined;
     },
     setDefaultProvider(provider: AgentProviderId): void {
       this.set(DEFAULT_PROVIDER_KEY, provider);

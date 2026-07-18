@@ -2,9 +2,9 @@
 
 ## Project overview
 
-Discord Agent is a provider-neutral Discord orchestration runtime derived from DiscordClaude. Claude executes through `ClaudeProvider`; Codex executes through the local App Server transport, authentication service, event adapter, and `CodexProvider`. A persistent PM-style primary agent coordinates both providers through durable task boundaries, journaled memory, native Discord decisions, and quiet usage admission.
+Discord Agent is a provider-neutral Discord orchestration runtime derived from DiscordClaude. Claude executes through `ClaudeProvider`; Codex executes through the local App Server transport, authentication service, event adapter, and `CodexProvider`; OpenCode executes through the ACP transport, event adapter, and `OpenCodeProvider`. A persistent PM-style primary agent can use restricted Claude, Codex, or OpenCode adapters while coordinating all project work through durable task boundaries, journaled memory, native Discord decisions, and quiet usage admission.
 
-The generic runtime must not depend directly on the Anthropic SDK. Provider-specific behavior belongs under `src/agents/<provider>/` and emits normalized `AgentEvent` values.
+The generic runtime must not depend directly on any provider SDK. Provider-specific behavior belongs under `src/agents/<provider>/` and emits normalized `AgentEvent` values.
 
 ## Tech stack
 
@@ -13,6 +13,8 @@ The generic runtime must not depend directly on the Anthropic SDK. Provider-spec
 - discord.js 14
 - SQLite through `better-sqlite3`
 - Anthropic Claude Agent SDK in `src/agents/claude/`
+- Codex App Server integration in `src/agents/codex/`
+- Agent Client Protocol SDK and OpenCode ACP integration in `src/agents/opencode/`
 - Vitest
 - Git CLI through `execFile` with `shell: false`
 
@@ -42,16 +44,19 @@ Discord messages / commands
             ▼
       ProviderRegistry
             │
-            ├── ClaudeProvider → Claude Agent SDK
-            └── CodexProvider → Codex App Server
+            ├── ClaudeProvider   → Claude Agent SDK
+            ├── CodexProvider    → Codex App Server
+            └── OpenCodeProvider → OpenCode ACP
 
-#agent-chat → PrimaryAgentService → bounded context + journal/memory
-                                  → TaskCoordinator for approved delegation
+#agent-chat → PrimaryAgentService
+              → ClaudePrimaryModel | CodexPrimaryModel | OpenCodePrimaryModel
+              → bounded context + journal/memory
+              → TaskCoordinator for approved delegation
 
 UsageAdmissionService → provider windows + reservations + calibrated task costs
 ```
 
-`TaskCoordinator` owns lifecycle ordering. Handlers must not call provider SDKs directly.
+`TaskCoordinator` owns lifecycle ordering. Handlers and primary models must not call task provider SDKs to perform project work directly.
 
 ## Required task-start ordering
 
@@ -87,7 +92,7 @@ Do not import Discord or provider SDK types into these contracts.
 
 ### Providers
 
-`ProviderRegistry` resolves complete Claude and Codex implementations. Codex is registered only when the local App Server initializes successfully and authoritative account state is available.
+`ProviderRegistry` resolves complete Claude, Codex, and OpenCode task implementations. Codex is registered only when the local App Server initializes successfully. OpenCode is registered only after its ACP availability probe succeeds.
 
 `ClaudeProvider` owns:
 
@@ -99,7 +104,21 @@ Do not import Discord or provider SDK types into these contracts.
 - Claude event normalization;
 - usage and rate-limit callbacks.
 
+`CodexProvider` owns App Server thread lifecycle, authentication, approvals, user questions, event normalization, rate-limit reads, interruption, and shutdown.
+
+`OpenCodeProvider` owns ACP initialization, availability probing, model selection, session start/load/resume, permission requests, event normalization, cancellation, and process cleanup.
+
 Provider sessions are scoped by provider and immutable for a durable task. A continuation returning a different session identity is a failure.
+
+### Primary models
+
+Primary models implement conversation and structured delegation only. They receive bounded context assembled by Discord Agent and cannot bypass `TaskCoordinator`.
+
+- `ClaudePrimaryModel` disables all Claude tools for a one-turn response.
+- `CodexPrimaryModel` uses a read-only, network-disabled App Server turn.
+- `OpenCodePrimaryModel` starts a one-turn ACP process in a disposable empty directory. Its inline runtime config selects a dedicated deny-all primary agent, disables every tool, cancels every ACP permission request, disables configured plugins, sharing, snapshots, and auto-update, and removes the temporary directory after shutdown.
+
+Primary conversation continuity belongs to Discord Agent's SQLite journal, retrieval, and memory system rather than a privileged provider coding session.
 
 ### Coordinator
 
@@ -159,6 +178,7 @@ Roborev events are sent through the authenticated Discord bot client to `roborev
 - Use `execFile`/`spawn` with `shell: false` for external commands.
 - Treat repository content and provider output as untrusted.
 - Claude must keep `settingSources: ['user']`; project/local settings remain ignored.
+- OpenCode PM must keep the dedicated deny-all primary agent, disabled tools, cancelled permission requests, and disposable empty workspace.
 - Never log or persist Discord tokens, provider credentials, API keys, device codes, or webhook tokens.
 - Keep the provider-neutral redaction boundary in `src/utils/redaction.ts`; sanitize normalized events before SQLite, Discord, and logs.
 - Never auto-replay a partially executed provider turn.
@@ -173,11 +193,12 @@ Roborev events are sent through the authenticated Discord bot client to `roborev
 | `src/services/runtime.ts` | DB/migration/repository/provider/coordinator assembly and recovery notification. |
 | `src/agents/contracts.ts` | Provider-neutral domain contracts. |
 | `src/agents/providerRegistry.ts` | Provider registration and lookup. |
-| `src/agents/claude/` | Claude SDK adapter and event normalization. |
-| `src/agents/codex/` | App Server transport/protocol, authentication, event normalization, and Codex provider. |
+| `src/agents/claude/` | Claude SDK task and restricted PM adapters. |
+| `src/agents/codex/` | App Server transport/protocol, authentication, event normalization, task provider, and restricted PM adapter. |
+| `src/agents/opencode/` | ACP transport, event normalization, task provider, and restricted PM adapter. |
 | `src/coordinator/` | Durable task lifecycle and restart recovery. |
 | `src/db/` | SQLite handle, schema, and migrations. |
-| `src/repositories/` | Project, task, event, and legacy-import persistence. |
+| `src/repositories/` | Project, task, event, settings, memory, usage, and legacy-import persistence. |
 | `src/git/` | Safe Git process wrapper and worktree manager. |
 | `src/discord/` | Provider-neutral rendering and interaction collection. |
 | `src/handlers/` | Discord event routing into commands/coordinator. |
@@ -185,10 +206,10 @@ Roborev events are sent through the authenticated Discord bot client to `roborev
 | `src/services/projectStore.ts` | Temporary reduced facade over `ProjectRepository`. |
 | `src/services/loopRunner.ts` | Non-overlapping recurring turns in one durable task. |
 | `src/services/roborevWatcher.ts` | Roborev CLI stream and bot-authenticated channel delivery. |
-| `src/primary/` | Restricted PM model, bounded context assembly, journal/memory coordination, and delegation. |
+| `src/primary/` | Primary contracts, bounded context assembly, journal/memory coordination, and delegation. |
 | `src/repositories/usageRepository.ts` | Provider windows, reservations, and task-cost observations. |
 | `src/services/usageAdmission.ts` | Admission decisions, calibration, posture, and graceful interruption. |
-| `src/services/usageTracker.ts` | Claude provider-local usage capture. |
+| `src/services/usageTracker.ts` | Provider-local usage capture. |
 
 ## Adding a provider
 
@@ -199,6 +220,7 @@ Roborev events are sent through the authenticated Discord bot client to `roborev
 5. Add contract fixtures and failure/recovery tests.
 6. Register the provider in `runtime.ts` only after its complete lifecycle is available.
 7. Update `/provider` so selection succeeds only when the runtime can execute it safely.
+8. Add a separate restricted `PrimaryModel` only when the provider can enforce the PM's no-coding-tools boundary.
 
 Do not add provider conditionals throughout handlers or the coordinator.
 
@@ -229,6 +251,6 @@ git diff --check
 
 ## Current boundary
 
-The first complete private-workspace release includes Claude and Codex providers, guided Codex authentication, provider-fixed task threads, confirmed sibling handoffs, the persistent PM-style primary agent, journal/FTS retrieval, provenance-controlled memory, native polls, usage reservations, calibrated admission, and preserve-mode checkpointing.
+The private-workspace runtime includes Claude, Codex, and OpenCode task providers; restricted PM adapters for all three; guided Codex authentication; provider-fixed task threads; confirmed sibling handoffs; the persistent PM-style primary agent; journal/FTS retrieval; provenance-controlled memory; native polls; usage reservations; calibrated admission; and preserve-mode checkpointing.
 
 Never silently switch providers, replay a partially executed turn, reveal provider credentials, allow the primary model to acquire coding tools, or start work that the admission service judges unlikely to finish and verify safely.

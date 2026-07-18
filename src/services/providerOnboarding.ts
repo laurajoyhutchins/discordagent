@@ -36,7 +36,7 @@ export function createProviderOnboardingService(input: {
       if (existing) return;
     }
 
-    const providers = (input.pmProviderIds ?? input.providers.list().filter(provider => provider !== 'opencode'))
+    const providers = (input.pmProviderIds ?? input.providers.list())
       .filter(provider => input.providers.list().includes(provider));
     const components = providers.length > 0
       ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -48,7 +48,7 @@ export function createProviderOnboardingService(input: {
       : [];
     const content = providers.length > 0
       ? 'Provider setup required: choose the provider for the PM chat and new projects. You can change project providers later.'
-      : 'Provider setup required, but no provider is currently available. Install or configure Claude or Codex on the bot host, then restart the bot.';
+      : 'Provider setup required, but no provider is currently available. Install or configure Claude, Codex, or OpenCode on the bot host, then restart the bot.';
     const message = await input.channel.send({ content, ...(components.length ? { components } : {}) });
     input.settings.set(SETUP_MESSAGE_KEY, message.id);
   }
@@ -65,9 +65,9 @@ export function createProviderOnboardingService(input: {
       await interaction.reply({ content: 'That provider is no longer available. Restart the bot and choose an available provider.', ephemeral: true });
       return true;
     }
-    const pmProviders = input.pmProviderIds ?? input.providers.list().filter(candidate => candidate !== 'opencode');
+    const pmProviders = input.pmProviderIds ?? input.providers.list();
     if (!pmProviders.includes(provider)) {
-      await interaction.reply({ content: `${providerLabel(provider)} is available for project task channels only, not the PM chat.`, ephemeral: true });
+      await interaction.reply({ content: `${providerLabel(provider)} is not available for the PM chat on this host.`, ephemeral: true });
       return true;
     }
 

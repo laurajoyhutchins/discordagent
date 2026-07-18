@@ -1,73 +1,81 @@
 # Settings Precedence
 
-Agent settings flow through four levels, each overriding the one below it. Immutable task snapshots ensure consistency across provider turns.
+Agent settings flow through five levels. Each higher-priority level overrides the ones below it, while immutable task snapshots keep provider execution consistent across continuations.
 
 ## Precedence order
 
 | Priority | Level | Source | Scope |
 |---|---|---|---|
-| 1 (highest) | Turn override | `/model` one-shot prefix in message, `/continue` options | One provider turn |
-| 2 | Task snapshot | Persisted at task creation | Entire task lifetime |
-| 3 | Project settings | `/project-settings`, `/model`, `/provider` in project | One project |
-| 4 | Global settings | `/settings` in `#agent-chat` | All projects |
-| 5 (lowest) | Host defaults | Environment variables, config file | Global fallback |
+| 1 (highest) | Turn override | One-shot `/model <name> <prompt>` or continuation options | One provider turn |
+| 2 | Task snapshot | Persisted at task creation | Entire durable task |
+| 3 | Project settings | `/project-settings`, `/model`, `/provider` in a project channel | One project |
+| 4 | Global settings | `/settings` and PM commands in `#agent-chat` | All projects / PM |
+| 5 (lowest) | Host defaults | Environment variables and provider defaults | Host fallback |
 
-## How settings are resolved
+## How task settings are resolved
 
-When a task starts, the coordinator calls `SettingsService.resolveTaskSettings()` which merges:
+When a task starts, `SettingsService.resolveTaskSettings()` merges:
 
-1. Host defaults from configuration
-2. Global settings from the `runtime_settings` table
-3. Project settings from the `projects` table
-4. Any one-message override from the user's message
+1. host/provider defaults;
+2. global provider settings from `runtime_settings`;
+3. project settings from `projects` and `project_settings`;
+4. explicit one-message overrides.
 
-The resolved settings are persisted as a JSON snapshot on the task record. This snapshot is immutable for the task's lifetime. Continuations read the stored snapshot and layer only explicit turn overrides on top — the snapshot itself is never modified.
+The resolved settings are persisted as `tasks.settings_json`. Continuations read that immutable snapshot and layer only explicit turn overrides on top.
 
-## Settings scopes
-
-### Global settings (`/settings`)
+## Global settings (`/settings`)
 
 Applied in `#agent-chat` by the configured owner:
 
-- `defaultProvider` — default for new projects
-- `claudeModel` / `codexModel` — provider-specific model overrides
-- `primaryAgentModel` — model used by the PM agent
-- `claudeTimeoutMs` — maximum execution time for Claude tasks
-- `usageReserve` — capacity reserved for PM operations
-- `reasoningEfforts` — default reasoning depth per provider
+- `defaultProvider` — Claude, Codex, or OpenCode provider used by the PM and inherited by new projects;
+- `claudeModel`, `codexModel`, `openCodeModel` — provider-specific model overrides;
+- `primaryAgentModel` — PM-specific model override;
+- `claudeTimeoutMs` — maximum Claude execution time;
+- `usageReserve` — capacity reserved for coordination and recovery;
+- `reasoningEfforts` — provider-scoped reasoning settings where supported.
 
-### Project settings (`/project-settings`, `/model`, `/provider`)
+Changing the default provider or PM model activates the new PM model transactionally. Failed activation restores both the stored settings and the prior PM service.
 
-Applied per project:
+## Project settings
 
-- `defaultProvider` — provider for new tasks in this project
-- `claudeModel` / `codexModel` — project-level model overrides
-- `reasoningEfforts` — per-provider reasoning depth
-- `baseBranch` — Git branch used as the worktree base
-- `mcpProfile` — named MCP tool profile
-- `roborevEnabled` / `roborevChannelId` — code review integration
-- `roborevChannelId` — channel for automated review posts
+Applied by `/project-settings`, `/model`, and `/provider` in a project channel:
 
-### Task snapshot
+- `defaultProvider` — provider for new tasks;
+- `claudeModel`, `codexModel`, `openCodeModel` — provider-scoped model overrides;
+- `reasoningEfforts.codex` — Codex reasoning depth;
+- `baseBranch` — Git base for future worktrees;
+- `mcpProfile` — host-allowlisted Claude MCP profile.
 
-Persisted at task creation and immutable thereafter:
+Roborev channel identity and enablement remain owned by the channel lifecycle rather than the general settings service.
 
-- `model` — resolved model identifier
-- `reasoningEffort` — resolved reasoning depth
-- `timeoutMs` — execution timeout
-- `mcpProfile` — MCP profile name
-- `approvalProfile` — approval behavior profile
+## PM model resolution
+
+The PM model uses this order:
+
+1. persisted `primaryAgentModel`;
+2. persisted/provider-scoped global model;
+3. provider-specific host PM setting (`OPENCODE_PRIMARY_MODEL` for OpenCode), then `PRIMARY_AGENT_MODEL`;
+4. provider task default (`CLAUDE_MODEL`, `CODEX_MODEL`, or `OPENCODE_MODEL`);
+5. provider-native default.
+
+## Task snapshot
+
+Persisted at task creation:
+
+- `model`;
+- `reasoningEffort`;
+- `timeoutMs`;
+- `mcpProfile`;
+- `approvalProfile`.
 
 ## Provider-specific validation
 
-Settings are validated against each provider's supported capabilities:
+| Setting | Claude | Codex | OpenCode |
+|---|---:|---:|---:|
+| `model` | Yes | Yes | Yes |
+| `reasoningEffort` | No | Yes | No |
+| `timeoutMs` | Yes | No | No |
+| `mcpProfile` | Yes | No | No |
+| `approvalProfile` | Task contract only | Task contract only | Task contract only |
 
-| Setting | Claude | Codex |
-|---|---|---|
-| `model` | Yes | Yes |
-| `reasoningEffort` | No | Yes |
-| `timeoutMs` | Yes | No |
-| `mcpProfile` | Yes | No |
-| `approvalProfile` | Yes | No |
-
-Setting an unsupported value for a provider throws `UnsupportedAgentSettingError` before any provider turn begins.
+Unsupported settings fail before a provider turn begins with `UnsupportedAgentSettingError`.

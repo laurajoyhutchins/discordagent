@@ -15,7 +15,11 @@ vi.mock('../utils/permissions.js', () => ({
   isAuthorized: () => true,
 }));
 
-const { handleInteraction, routeSettingsComponents } = await import('./interactionHandler.js');
+const {
+  handleInteraction,
+  routeSettingsComponents,
+  routeTaskControlComponents,
+} = await import('./interactionHandler.js');
 
 function interaction(kind: 'button' | 'select' | 'modal') {
   return {
@@ -45,6 +49,22 @@ describe('settings component routing', () => {
   });
 });
 
+describe('task control component routing', () => {
+  it('routes buttons through the task-control boundary', async () => {
+    const handler = vi.fn(async () => true);
+
+    await expect(routeTaskControlComponents(interaction('button'), handler)).resolves.toBe(true);
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('ignores non-button interactions', async () => {
+    const handler = vi.fn(async () => true);
+
+    await expect(routeTaskControlComponents(interaction('select'), handler)).resolves.toBe(false);
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
 describe('slash command routing', () => {
   beforeEach(() => {
     mockHandleRoborev.mockClear();
@@ -55,6 +75,7 @@ describe('slash command routing', () => {
       isButton: () => false,
       isStringSelectMenu: () => false,
       isModalSubmit: () => false,
+      isMessageContextMenuCommand: () => false,
       isChatInputCommand: () => true,
       commandName: 'roborev',
       user: { id: 'user-1' },

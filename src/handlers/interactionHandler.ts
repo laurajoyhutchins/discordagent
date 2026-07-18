@@ -131,6 +131,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
       case 'model':
         await handleModel(interaction);
         break;
+      case 'roborev':
+        await handleRoborev(interaction);
+        break;
       default:
         await interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
     }

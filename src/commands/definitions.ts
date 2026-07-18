@@ -1,14 +1,6 @@
-import {
-  ApplicationCommandType,
-  ContextMenuCommandBuilder,
-  SlashCommandBuilder,
-} from 'discord.js';
+import { SlashCommandBuilder } from 'discord.js';
 
 export const commands = [
-  new ContextMenuCommandBuilder()
-    .setName('Turn into task')
-    .setType(ApplicationCommandType.Message),
-
   new SlashCommandBuilder()
     .setName('add-project')
     .setDescription('Register a project for agent orchestration')
@@ -71,6 +63,7 @@ export const commands = [
     .setName('project-settings')
     .setDescription('View and edit settings for the current project channel'),
 
+
   new SlashCommandBuilder()
     .setName('provider')
     .setDescription('Show or change the default agent provider globally or for this project')
@@ -85,22 +78,14 @@ export const commands = [
         )
     ),
 
+
+
   new SlashCommandBuilder()
     .setName('codex-auth')
     .setDescription('Manage local Codex authentication')
     .addSubcommand(command => command.setName('status').setDescription('Check Codex authentication state'))
     .addSubcommand(command => command.setName('login').setDescription('Start private device-code sign-in'))
     .addSubcommand(command => command.setName('logout').setDescription('Log out Codex after confirmation')),
-
-  new SlashCommandBuilder()
-    .setName('roborev')
-    .setDescription('Enable or disable RoboRev code review integration for a project')
-    .addStringOption(opt =>
-      opt.setName('project').setDescription('Project name').setRequired(true)
-    )
-    .addBooleanOption(opt =>
-      opt.setName('enable').setDescription('Enable or disable RoboRev').setRequired(true)
-    ),
 
   new SlashCommandBuilder()
     .setName('model')
@@ -126,5 +111,15 @@ export const commands = [
           { name: 'Extra high', value: 'xhigh' },
           { name: 'Maximum', value: 'max' },
         )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('roborev')
+    .setDescription('Enable or disable RoboRev code review integration for a project')
+    .addStringOption(opt =>
+      opt.setName('project').setDescription('Project name').setRequired(true)
+    )
+    .addBooleanOption(opt =>
+      opt.setName('enable').setDescription('Enable or disable RoboRev').setRequired(true)
     ),
 ];

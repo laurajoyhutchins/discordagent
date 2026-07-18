@@ -1,0 +1,31 @@
+import { describe, expect, it } from 'vitest';
+import type { TaskControlCardView } from './taskControlCard.js';
+import { renderTaskControlCard } from './taskControlCard.js';
+import { commands } from '../commands/definitions.js';
+
+const runningTask: TaskControlCardView = {
+  taskId: 'task-1',
+  objective: 'Polish the operator experience',
+  projectName: 'discord-agent',
+  provider: 'codex',
+  status: 'running',
+  sessionState: 'active',
+};
+
+describe('calm operator experience', () => {
+  it('registers contextual help as a first-class Discord command', () => {
+    const help = commands.map(command => command.toJSON()).find(command => command.name === 'help');
+
+    expect(help).toBeDefined();
+    expect(help?.description).toMatch(/context|here|guidance/i);
+  });
+
+  it('renders human-facing task and provider labels instead of raw enum values', () => {
+    const payload = renderTaskControlCard(runningTask, { embeds: false });
+
+    expect(payload.content).toContain('State: Running');
+    expect(payload.content).toContain('Provider: Codex');
+    expect(payload.content).toContain('Session: Active');
+    expect(payload.content).not.toContain('waiting_for_user');
+  });
+});

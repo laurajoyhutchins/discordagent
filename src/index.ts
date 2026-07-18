@@ -1,6 +1,6 @@
 import { createServer } from 'node:net';
 import { Client, GatewayIntentBits, Partials, REST, Routes, type TextChannel } from 'discord.js';
-import { config } from './config.js';
+import { config, isTerminalReplEnabled } from './config.js';
 import { handleInteraction } from './handlers/interactionHandler.js';
 import { handleMessage } from './handlers/messageHandler.js';
 import { handleThreadDelete } from './handlers/threadDeleteHandler.js';
@@ -12,6 +12,7 @@ import { PROCESS_GATEWAY_INTENTS } from './discord/capabilities/registry.js';
 import { getAllProjects } from './services/projectStore.js';
 import { createRoborevReviewSource, buildReviewEmbed } from './integrations/roborev/index.js';
 import type { Disposable, ReviewNotification } from './integrations/reviewSource.js';
+import { Repl } from './terminal/repl.js';
 
 // ── Single-instance lock ─────────────────────────────────────────────
 // Multiple bot processes sharing one token cause duplicate message
@@ -37,6 +38,8 @@ lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
 
 let runtime: RuntimeServices | null = null;
 let reviewSourceDisposable: Disposable | undefined;
+let repl: Repl | undefined;
+let shuttingDown = false;
 
 async function handleReviewNotification(
   notification: ReviewNotification,
@@ -94,6 +97,34 @@ client.once('clientReady', async () => {
         console.error('[roborev] Failed to start review source:', redactErrorMessage(err));
         return undefined;
       });
+  }
+
+  // Start the terminal REPL if enabled
+  if (isTerminalReplEnabled() && runtime.primaryAgent && runtime.conversationService) {
+    if (!runtime.providers || !runtime.settingsService) {
+      console.warn('[repl] Runtime is not fully initialized for the terminal REPL');
+    } else {
+      const ownerId = runtime.primaryAgent.ownerId;
+      if (!ownerId) {
+        console.warn('[repl] No primary agent owner configured; terminal REPL requires AUTHORIZED_USER_ID');
+      } else {
+        repl = new Repl({
+          conversationService: runtime.conversationService,
+          ownerId,
+          projects: runtime.projects,
+          tasks: runtime.tasks,
+          providers: runtime.providers,
+          settings: runtime.settingsService,
+          onShutdown: () => {
+            // /exit was entered — just stop the REPL, leave the bot running
+          },
+        });
+        repl.start().catch((err: unknown) => {
+          console.error('[repl] Failed to start terminal REPL:', redactErrorMessage(err));
+        });
+        console.log(`Primary provider: ${runtime.primaryAgent.ownerId}`);
+      }
+    }
   }
 });
 
@@ -164,7 +195,10 @@ setInterval(async () => {
 }, HEARTBEAT_CHECK_INTERVAL_MS);
 
 async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log('Shutting down...');
+  if (repl) await repl.stop();
   stopAllLoops();
   if (reviewSourceDisposable) await reviewSourceDisposable.dispose();
   if (runtime) await stopRuntime(runtime);

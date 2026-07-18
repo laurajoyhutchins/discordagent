@@ -39,6 +39,11 @@ function loadUserMcpServers(): HostMcpServers | undefined {
   return undefined;
 }
 
+export function isTerminalReplEnabled(): boolean {
+  if (process.env.TERMINAL_REPL_ENABLED === 'false') return false;
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
 export const config = {
   discordToken: required('DISCORD_TOKEN'),
   clientId: required('DISCORD_CLIENT_ID'),

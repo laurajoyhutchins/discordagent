@@ -44,6 +44,8 @@ import { ClaudePrimaryModel } from '../agents/claude/claudePrimaryModel.js';
 import type { PrimaryModel } from '../primary/primaryModel.js';
 import { createContextAssembler } from '../primary/contextAssembler.js';
 import { createPrimaryAgentService, type PrimaryAgentService } from '../primary/primaryAgentService.js';
+import { createPrimaryConversationService, type PrimaryConversationService } from '../primary/primaryConversationService.js';
+import type { PrimaryTaskProposal } from '../primary/primaryModel.js';
 import { ensurePrimaryAgentChannel } from './channelManager.js';
 import { clearPrimaryAgentService, setPrimaryAgentService } from './primaryAgentServiceRegistry.js';
 import { createUsageRepository } from '../repositories/usageRepository.js';
@@ -89,6 +91,7 @@ export interface RuntimeServices {
   messages: MessageRepository;
   memories: MemoryRepository;
   primaryAgent?: PrimaryAgentService;
+  conversationService?: PrimaryConversationService;
   usage: UsageAdmissionService;
   pendingTasks: PendingTaskService;
   providerOnboarding?: ProviderOnboardingService;
@@ -323,6 +326,7 @@ export async function startRuntime(
     setAgentRuntimeServices({ providers, tasks, pendingTasks, settingsService, ...(codexAuth ? { codexAuth } : {}) });
     setUsageAdmissionService(usage);
     let primaryAgent: PrimaryAgentService | undefined;
+    let conversationService: PrimaryConversationService | undefined;
     let primaryProviderActivator: ((provider: AgentProviderId) => Promise<PrimaryProviderActivationResult>) | undefined;
     const selectedProvider = settings.getDefaultProvider();
     if (!options.disablePrimaryAgent && config.authorizedUserId) {
@@ -375,15 +379,31 @@ export async function startRuntime(
         }
         return undefined;
       };
+      const fetchProjectChannel = async (id: string): Promise<import('discord.js').TextChannel | null> => {
+        const channel = await client.channels.fetch(id).catch(() => null);
+        return channel?.isTextBased() && !channel.isDMBased() && !channel.isThread() ? channel as import('discord.js').TextChannel : null;
+      };
+      const sharedLaunchTask = async (proposal: PrimaryTaskProposal): Promise<void> => {
+        const project = projects.findByName(proposal.projectName);
+        if (!project) throw new Error(`Project "${proposal.projectName}" is not registered`);
+        const channel = await fetchProjectChannel(project.agentChannelId);
+        if (!channel) throw new Error(`Project channel for "${proposal.projectName}" is unavailable`);
+        const seed = await channel.send(`Delegated by the primary agent: ${proposal.objective}`);
+        await coordinator.startFromMessage({ projectName: project.name, prompt: proposal.objective, message: seed, provider: proposal.provider ?? project.defaultProvider });
+      };
       const activatePrimaryProvider = async (provider: AgentProviderId): Promise<PrimaryProviderActivationResult> => {
         const wasActive = primaryAgent !== undefined;
         const model = createPrimaryModel(provider);
         if (!model) throw new Error(`Provider ${provider} is not available for the PM chat on this host.`);
+        conversationService = createPrimaryConversationService({
+          context, messages, memories, projects, coordinator, model,
+          launchTask: sharedLaunchTask,
+        });
         primaryAgent = createPrimaryAgentService({
           channelId: primaryChannel.id, ownerId: config.authorizedUserId!,
-          model,
-          context, messages, memories, projects, coordinator,
-          fetchProjectChannel: async id => { const channel = await client.channels.fetch(id).catch(() => null); return channel?.isTextBased() && !channel.isDMBased() && !channel.isThread() ? channel as import('discord.js').TextChannel : null; },
+          conversationService,
+          model, context, messages, memories, projects, coordinator,
+          fetchProjectChannel,
         });
         setPrimaryAgentService(primaryAgent);
         return wasActive ? 'reconfigured' : 'activated';
@@ -465,7 +485,7 @@ export async function startRuntime(
     }
     await notifyRecoveredTasks(client, recoveredTasks, events, tasks, rendererFactory);
 
-    return { database, projects, settings, settingsService, tasks, events, messages, memories, worktrees, providers, coordinator, renderers: runtimeRenderers, usage, pendingTasks, ...(providerOnboarding ? { providerOnboarding } : {}), ...(usagePoll ? { usagePoll } : {}), ...(usageUnsubscribe ? { usageUnsubscribe } : {}), ...(primaryAgent ? { primaryAgent } : {}), ...(codexTransport ? { codexTransport } : {}), ...(codexAuth ? { codexAuth } : {}) };
+    return { database, projects, settings, settingsService, tasks, events, messages, memories, worktrees, providers, coordinator, renderers: runtimeRenderers, usage, pendingTasks, ...(providerOnboarding ? { providerOnboarding } : {}), ...(usagePoll ? { usagePoll } : {}), ...(usageUnsubscribe ? { usageUnsubscribe } : {}), ...(primaryAgent ? { primaryAgent } : {}), ...(conversationService ? { conversationService } : {}), ...(codexTransport ? { codexTransport } : {}), ...(codexAuth ? { codexAuth } : {}) };
   } catch (error) {
     clearTaskCoordinator();
     clearAgentRuntimeServices();

@@ -213,21 +213,23 @@ export class Repl {
       if (cmdResult.projectChanged !== undefined) {
         this.currentProject = cmdResult.projectChanged;
       }
+
+      let outputText = cmdResult.text;
+
       if (cmdResult.providerChanged !== undefined) {
         const providerId = cmdResult.providerChanged as AgentProviderId;
         if (this.deps.activatePrimaryProvider) {
           try {
             await this.deps.activatePrimaryProvider(providerId);
             this.deps.settings.updateGlobal({ defaultProvider: providerId });
-            this.writeLine(cmdResult.text);
           } catch (error) {
-            this.writeLine(`agent> Failed to activate ${providerId}: ${sanitizeTerminalError(error)}`);
+            outputText = `agent> Failed to activate ${providerId}: ${sanitizeTerminalError(error)}`;
           }
         } else {
           this.deps.settings.updateGlobal({ defaultProvider: providerId });
-          this.writeLine(cmdResult.text);
         }
       }
+
       if (cmdResult.modelChanged !== undefined && this.deps.activatePrimaryProvider) {
         const globalSetting = this.deps.settings.global();
         const provider = globalSetting.defaultProvider as AgentProviderId | undefined;
@@ -235,12 +237,13 @@ export class Repl {
           try {
             await this.deps.activatePrimaryProvider(provider);
           } catch (error) {
-            this.writeLine(`agent> Model change will apply next time: ${sanitizeTerminalError(error)}`);
+            outputText = `agent> Model setting saved but activation failed; it will apply after restart: ${sanitizeTerminalError(error)}`;
           }
         }
       }
-      if (cmdResult.text) {
-        this.writeLine(cmdResult.text);
+
+      if (outputText) {
+        this.writeLine(outputText);
       }
       return;
     }
@@ -270,7 +273,7 @@ export class Repl {
     if (result.kind === 'task-proposal') {
       this.writeLine(`agent> ${result.text}`);
       this.writeLine('');
-      this.writeLine(`Proposed task`);
+      this.writeLine('Proposed task');
       this.writeLine(`  Project:   ${result.proposal.projectName}`);
       this.writeLine(`  Objective: ${result.proposal.objective}`);
       if (result.proposal.rationale) {
@@ -359,7 +362,7 @@ export class Repl {
       return;
     }
 
-    this.writeLine(`Invalid choice. Enter 1 to start, 2 to cancel.`);
+    this.writeLine('Invalid choice. Enter 1 to start, 2 to cancel.');
     this.writeLine('');
     this.writeLine('  [1] Start task');
     this.writeLine('  [2] Cancel');

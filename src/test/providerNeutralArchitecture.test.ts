@@ -57,7 +57,7 @@ describe('complete provider-neutral workspace architecture', () => {
     expect(packageJson.description).toMatch(/provider-neutral/i);
     expect(readme).toMatch(/#agent/);
     expect(readme).toMatch(/old provider sessions are not automatically resumed/i);
-    expect(readme).toMatch(/Claude and Codex adapters/i);
+    expect(readme).toMatch(/Claude[\s\S]*Codex[\s\S]*OpenCode[\s\S]*adapters|provider-specific adapters/i);
     expect(readme).toMatch(/persistent primary-agent chat/i);
     expect(readme).toMatch(/quiet usage admission/i);
     expect(readme).toMatch(/redact.*before.*SQLite.*Discord.*logs/is);

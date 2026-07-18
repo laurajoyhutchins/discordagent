@@ -15,11 +15,8 @@ vi.mock('../utils/permissions.js', () => ({
   isAuthorized: () => true,
 }));
 
-const {
-  handleInteraction,
-  routeSettingsComponents,
-  routeTaskControlComponents,
-} = await import('./interactionHandler.js');
+const { routeSettingsComponents, routeTaskControlComponents } = await import('./interactionHandler.js');
+const { handleInteraction } = await import('./interactionHandler.js');
 
 function interaction(kind: 'button' | 'select' | 'modal') {
   return {

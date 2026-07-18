@@ -60,6 +60,7 @@ export const config = {
   openCodeEnabled: process.env.OPENCODE_ENABLED !== 'false',
   openCodeTimeoutMs: parseInt(process.env.OPENCODE_TIMEOUT_MS ?? '900000', 10),
   defaultOpenCodeModel: process.env.OPENCODE_MODEL ?? '',
+  openCodePrimaryModel: process.env.OPENCODE_PRIMARY_MODEL ?? '',
   authorizedUserId: process.env.AUTHORIZED_USER_ID ?? process.env.NOTIFY_USER_ID ?? '',
   primaryAgentModel: process.env.PRIMARY_AGENT_MODEL ?? '',
   primaryUsageReserve: parseFloat(process.env.PRIMARY_USAGE_RESERVE ?? '10'),

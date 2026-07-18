@@ -45,6 +45,7 @@ export type OpenCodeAcpProcessFactory = (
 
 export interface OpenCodeAcpTransportOptions {
   cliPath?: string;
+  env?: NodeJS.ProcessEnv;
   process?: OpenCodeAcpProcess;
   spawnProcess?: OpenCodeAcpProcessFactory;
   handlers?: Partial<OpenCodeAcpHandlers>;
@@ -95,7 +96,7 @@ export class OpenCodeAcpTransport implements OpenCodeAcpConnection {
       this.process = spawnProcess(invocation.command, invocation.args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: false,
-        env: process.env,
+        env: options.env ?? process.env,
       });
     }
 

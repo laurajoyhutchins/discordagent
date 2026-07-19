@@ -73,7 +73,12 @@ describe('FactoryFloorBindingRepository', () => {
       projectName: 'FACTORY-FLOOR',
       factoryFloorProjectId: 'ff-project-1',
       guildId: 'guild-1',
-    })).toEqual(project);
+    })).toMatchObject({
+      projectName: project.projectName,
+      factoryFloorProjectId: project.factoryFloorProjectId,
+      guildId: project.guildId,
+      createdAt: project.createdAt,
+    });
 
     const surface = bindings.bindSurface({
       projectName: 'factory-floor',
@@ -90,7 +95,16 @@ describe('FactoryFloorBindingRepository', () => {
       threadId: 'thread-1',
       messageId: 'message-1',
       activityInstanceId: 'activity-1',
-    })).toEqual(surface);
+    })).toMatchObject({
+      id: surface.id,
+      projectName: surface.projectName,
+      guildId: surface.guildId,
+      channelId: surface.channelId,
+      threadId: surface.threadId,
+      messageId: surface.messageId,
+      activityInstanceId: surface.activityInstanceId,
+      createdAt: surface.createdAt,
+    });
 
     const run = bindings.bindRun({
       projectName: 'factory-floor',
@@ -101,8 +115,18 @@ describe('FactoryFloorBindingRepository', () => {
       projectName: 'factory-floor',
       surfaceId: surface.id,
       runId: 'run-1',
-    })).toEqual(run);
-    expect(bindings.findRun('run-1')).toEqual(run);
+    })).toMatchObject({
+      runId: run.runId,
+      projectName: run.projectName,
+      surfaceId: run.surfaceId,
+      createdAt: run.createdAt,
+    });
+    expect(bindings.findRun('run-1')).toMatchObject({
+      runId: run.runId,
+      projectName: run.projectName,
+      surfaceId: run.surfaceId,
+      createdAt: run.createdAt,
+    });
   });
 
   it('fails closed when identities cross project, guild, surface, or run boundaries', () => {

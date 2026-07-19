@@ -9,9 +9,9 @@ Discord Agent reads host configuration from environment variables when the proce
 | Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
 | `DISCORD_TOKEN` | string | — | Discord bot token | Yes |
-| `DISCORD_CLIENT_ID` | string | — | Discord application ID used for command registration and connectivity checks | No |
-| `DISCORD_GUILD_ID` | string | — | Private Discord server ID | No |
-| `AUTHORIZED_ROLE_IDS` | comma-separated Discord role IDs | — | Roles allowed to use project and task functionality | No |
+| `DISCORD_CLIENT_ID` | string | — | Discord application ID used for command registration, connectivity checks, and trusted Activity launch binding | No |
+| `DISCORD_GUILD_ID` | string | — | Private Discord server ID and trusted Activity guild boundary | No |
+| `AUTHORIZED_ROLE_IDS` | comma-separated Discord role IDs | — | Roles allowed to use project, task, and Activity launch functionality | No |
 
 ### Owner identity
 
@@ -86,11 +86,11 @@ The deterministic host preflight does not make a paid model call. It reports aut
 
 ### Factory Floor Activity adapter
 
-The Factory Floor adapter is disabled unless `FACTORY_FLOOR_ENABLED=true`. Disabled or absent configuration does not affect Discord Agent startup or direct Claude, Codex, and OpenCode tasks.
+The Factory Floor adapter is disabled unless `FACTORY_FLOOR_ENABLED=true`. Disabled or absent configuration does not affect Discord Agent startup or direct Claude, Codex, and OpenCode tasks. Valid enabled configuration also reconciles the single global `factory-floor` Activity Entry Point after normal guild commands are registered.
 
 | Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `FACTORY_FLOOR_ENABLED` | boolean | `false` | Enable Factory Floor adapter composition | No |
+| `FACTORY_FLOOR_ENABLED` | boolean | `false` | Enable Factory Floor adapter composition and global Activity Entry Point reconciliation | No |
 | `FACTORY_FLOOR_BASE_URL` | HTTP(S) origin | — | Factory Floor control-plane origin, without credentials, path, query, or fragment | Potentially |
 | `FACTORY_FLOOR_AGENT_TO_FACTORY_KEY` | string | — | Current HMAC key used only for Discord Agent-to-Factory Floor service requests | Yes |
 | `FACTORY_FLOOR_FACTORY_TO_AGENT_KEY` | string | — | Current HMAC key used only for Factory Floor-to-Discord Agent callbacks | Yes |
@@ -99,12 +99,13 @@ The Factory Floor adapter is disabled unless `FACTORY_FLOOR_ENABLED=true`. Disab
 | `FACTORY_FLOOR_OPERATOR_TOKEN` | string | empty | Optional least-privileged operator API token; never substitutes for service authentication | Yes |
 | `FACTORY_FLOOR_REQUEST_TIMEOUT_MS` | positive integer milliseconds | `15000` | Per-request timeout for Factory Floor clients | No |
 | `FACTORY_FLOOR_MAX_RETRIES` | integer `0`–`3` | `1` | Retry count for explicitly retryable read requests | No |
+| `FACTORY_FLOOR_LAUNCH_TTL_MS` | integer `30000`–`600000` milliseconds | `120000` | Lifetime of a one-time trusted Activity launch registration | No |
 
 Current and previous keys within one direction must be different, and no key value may appear in both directions. Operator tokens, service-authentication keys, Activity session tokens, Discord OAuth credentials, and the Discord bot token are separate credential classes and must not reuse values.
 
 Service authentication signs the protocol version, directional key identifier, timestamp, nonce, uppercase method, request path, and SHA-256 digest of the exact body bytes. The receiver enforces bounded clock skew, constant-time signature comparison, key-rotation overlap, and replay-nonce consumption.
 
-Discord Agent SQLite stores only local project/surface/run linkage and bounded replay nonces. It does not store HMAC keys, signatures, operator tokens, Activity session tokens, Factory Floor events, approvals, artifacts, or runtime state.
+Discord Agent SQLite stores local project/surface/run linkage, bounded replay nonces, and short-lived one-time launch registrations. It does not store HMAC keys, signatures, operator tokens, Activity session tokens, Factory Floor events, approvals, artifacts, or runtime state. Launch registrations are bound to the configured application and guild, current Discord principal and surface, and server-resolved project/run context; browser-selected authority is never persisted.
 
 ### Storage
 

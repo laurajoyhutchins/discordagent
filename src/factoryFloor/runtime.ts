@@ -38,6 +38,7 @@ export interface FactoryFloorRuntimeServices {
 export interface InitializeFactoryFloorRuntimeOptions {
   readonly env?: Record<string, string | undefined>;
   readonly applicationId?: string;
+  readonly guildId?: string;
   readonly fetchFn?: typeof fetch;
   readonly logger?: (message: string) => void;
 }
@@ -68,6 +69,10 @@ export function initializeFactoryFloorRuntime(
     if (!applicationId) {
       throw new Error('DISCORD_CLIENT_ID is required for Factory Floor Activity launches');
     }
+    const guildId = (options.guildId ?? env.DISCORD_GUILD_ID)?.trim();
+    if (!guildId) {
+      throw new Error('DISCORD_GUILD_ID is required for Factory Floor Activity launches');
+    }
     const requestOptions = {
       baseUrl: config.baseUrl,
       timeoutMs: config.requestTimeoutMs,
@@ -83,6 +88,7 @@ export function initializeFactoryFloorRuntime(
       launches,
       activityLaunch: createFactoryFloorActivityLaunchService({
         expectedApplicationId: applicationId,
+        expectedGuildId: guildId,
         findProjectByChannelId: channelId => {
           const project = projects.findByChannelId(channelId);
           return project?.agentChannelId === channelId ? project : undefined;

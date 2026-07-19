@@ -123,7 +123,7 @@ describe('buildReviewText', () => {
     expect(text.length).toBeLessThanOrEqual(2_000);
   });
 
-  it('truncates oversized review bodies to the Discord message limit', () => {
+  it('truncates oversized bodies without dropping attribution or verdict metadata', () => {
     const text = buildReviewText(completedNotification({
       details: {
         verdict: 'C',
@@ -134,7 +134,10 @@ describe('buildReviewText', () => {
     }));
 
     expect(text.length).toBeLessThanOrEqual(2_000);
-    expect(text.endsWith('…')).toBe(true);
+    expect(text).toContain('…');
+    expect(text).toContain('Commit: `abcdef12`');
+    expect(text).toContain('Agent: reviewer');
+    expect(text).toContain('Verdict: ⚠️ C');
   });
 });
 

@@ -62,6 +62,9 @@ export const FACTORY_FLOOR_BINDINGS_MIGRATION = {
       ON factory_floor_run_bindings(local_project_id, retired_at, updated_at)`,
     `CREATE INDEX factory_floor_run_surface_idx
       ON factory_floor_run_bindings(surface_id)`,
+    `CREATE UNIQUE INDEX factory_floor_run_active_surface_idx
+      ON factory_floor_run_bindings(surface_id)
+      WHERE retired_at IS NULL`,
 
     `CREATE TABLE factory_floor_service_nonces (
       key_id TEXT NOT NULL,

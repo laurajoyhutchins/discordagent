@@ -44,19 +44,23 @@ export function buildReviewText(notification: ReviewNotification): string {
   const config = VERDICT_CONFIG[verdict] ?? UNKNOWN_VERDICT;
   const jobId = notification.details?.jobId as number | undefined;
   const body = notification.details?.body as string | undefined;
-  const details = body
-    ?? [
-      `Verdict: **${config.label}** (${verdict || 'unknown'})`,
-      ...(jobId ? [`Run \`roborev show ${jobId}\` for details.`] : []),
-    ].join('\n');
-
-  return truncateDiscordMessage([
-    `${config.emoji} **Review: ${sha} — ${config.label}**`,
-    details,
+  const title = `${config.emoji} **Review: ${sha} — ${config.label}**`;
+  const metadata = [
     `Commit: \`${sha}\``,
     `Agent: ${agent}`,
     `Verdict: ${config.emoji} ${verdict || '?'}`,
-  ].join('\n'));
+  ].join('\n');
+  const defaultDetails = [
+    `Verdict: **${config.label}** (${verdict || 'unknown'})`,
+    ...(jobId ? [`Run \`roborev show ${jobId}\` for details.`] : []),
+  ].join('\n');
+  const detailBudget = Math.max(
+    1,
+    DISCORD_MESSAGE_LIMIT - title.length - metadata.length - 2,
+  );
+  const details = truncateText(body ?? defaultDetails, detailBudget);
+
+  return [title, details, metadata].join('\n');
 }
 
 function buildStartedEmbed(notification: ReviewNotification): EmbedBuilder {
@@ -112,10 +116,12 @@ function buildCompletedEmbed(notification: ReviewNotification): EmbedBuilder {
   return embed;
 }
 
+function truncateText(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
 function truncateDiscordMessage(text: string): string {
-  return text.length <= DISCORD_MESSAGE_LIMIT
-    ? text
-    : `${text.slice(0, DISCORD_MESSAGE_LIMIT - 1)}…`;
+  return truncateText(text, DISCORD_MESSAGE_LIMIT);
 }
 
 export function anyProjectHasRoborev(

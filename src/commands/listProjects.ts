@@ -1,6 +1,10 @@
 import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { providerLabel } from '../agents/providerLabels.js';
-import { formatEmptyState, operatorEmbed } from '../discord/presentation.js';
+import {
+  formatEmptyState,
+  operatorEmbed,
+  operatorReplyPayload,
+} from '../discord/presentation.js';
 import { getAllProjects } from '../services/projectStore.js';
 import { getLoop, formatDuration } from '../services/loopRunner.js';
 
@@ -18,24 +22,34 @@ export async function handleListProjects(interaction: ChatInputCommandInteractio
     return;
   }
 
-  const embed = operatorEmbed({
-    title: 'Projects',
-    description: `${projects.length} registered ${projects.length === 1 ? 'workspace' : 'workspaces'}. Open a project channel and describe an outcome to create a durable task.`,
-    footer: 'Project defaults apply to new tasks; existing task providers and sessions remain unchanged.',
-  });
-  for (const project of projects) {
+  const summary = `${projects.length} registered ${projects.length === 1 ? 'workspace' : 'workspaces'}. Open a project channel and describe an outcome to create a durable task.`;
+  const entries = projects.map(project => {
     const loop = getLoop(project.agentChannelId);
     const status = loop
       ? `Looping every ${formatDuration(loop.intervalMs)} · iteration ${loop.iteration}`
       : 'Ready for work';
-    let value = [
+    const lines = [
       `**Channel:** <#${project.agentChannelId}>`,
       `**Provider:** ${providerLabel(project.defaultProvider)}`,
       `**Status:** ${status}`,
       `**Path:** \`${project.workingDirectory}\``,
-    ].join('\n');
-    if (project.roborevChannelId) value += `\n**Reviews:** <#${project.roborevChannelId}>`;
-    embed.addFields({ name: project.name, value });
-  }
-  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      ...(project.roborevChannelId ? [`**Reviews:** <#${project.roborevChannelId}>`] : []),
+    ];
+    return { name: project.name, lines };
+  });
+
+  const embed = operatorEmbed({
+    title: 'Projects',
+    description: summary,
+    footer: 'Project defaults apply to new tasks; existing task providers and sessions remain unchanged.',
+  }).addFields(entries.map(entry => ({ name: entry.name, value: entry.lines.join('\n') })));
+  const fallback = [
+    '**Projects**',
+    summary,
+    '',
+    ...entries.flatMap(entry => [`**${entry.name}**`, ...entry.lines, '']),
+  ].join('\n').trim();
+  const payload = await operatorReplyPayload(interaction, { embed, fallback });
+
+  await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
 }

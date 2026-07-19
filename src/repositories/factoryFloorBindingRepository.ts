@@ -284,6 +284,7 @@ export function createFactoryFloorBindingRepository(
         ) {
           throw new FactoryFloorBindingConflictError('project_binding_conflict');
         }
+        if (existingLocal.retired_at === null) return mapProject(existingLocal);
         const now = Date.now();
         db.raw.prepare(`
           UPDATE factory_floor_project_bindings
@@ -368,6 +369,13 @@ export function createFactoryFloorBindingRepository(
           existing.activity_instance_id,
           activityInstanceId,
         );
+        const unchanged =
+          existing.retired_at === null &&
+          existing.thread_id === nextThreadId &&
+          existing.message_id === nextMessageId &&
+          existing.activity_instance_id === nextActivityInstanceId;
+        if (unchanged) return mapSurface(existing);
+
         const now = Date.now();
         db.raw.prepare(`
           UPDATE factory_floor_surface_bindings
@@ -454,6 +462,7 @@ export function createFactoryFloorBindingRepository(
         ) {
           throw new FactoryFloorBindingConflictError('run_binding_conflict');
         }
+        if (existing.retired_at === null) return mapRun(existing);
         const now = Date.now();
         db.raw.prepare(`
           UPDATE factory_floor_run_bindings

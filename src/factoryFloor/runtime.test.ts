@@ -64,7 +64,7 @@ describe('Factory Floor runtime composition', () => {
     expect(logger.mock.calls.flat().join(' ')).not.toContain('user:secret');
   });
 
-  it('constructs local bindings and clients without making a startup request', () => {
+  it('constructs local bindings, nonce storage, and clients without a startup request', async () => {
     const fetchFn = vi.fn<typeof fetch>();
 
     const runtime = initializeFactoryFloorRuntime(database(), {
@@ -74,10 +74,14 @@ describe('Factory Floor runtime composition', () => {
 
     expect(runtime).toBeDefined();
     expect(runtime?.bindings).toBeDefined();
+    expect(runtime?.nonceStore).toBeDefined();
     expect(runtime?.serviceClient).toBeDefined();
     expect(runtime?.operatorClient).toBeUndefined();
     expect(getFactoryFloorRuntime()).toBe(runtime);
     expect(fetchFn).not.toHaveBeenCalled();
+
+    expect(await runtime!.nonceStore.consumeNonce('ff-ff-to-agent-v1', 'nonce-1', 1_000)).toBe(true);
+    expect(await runtime!.nonceStore.consumeNonce('ff-ff-to-agent-v1', 'nonce-1', 1_001)).toBe(false);
   });
 
   it('constructs the least-privileged operator client only when configured', () => {

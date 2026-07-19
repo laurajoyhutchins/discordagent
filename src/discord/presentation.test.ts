@@ -1,14 +1,13 @@
 import { PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { describe, expect, it } from 'vitest';
-import * as presentation from './presentation.js';
-
-const {
+import {
   formatEmptyState,
   operatorEmbed,
+  operatorReplyPayload,
   sessionStateLabel,
   taskStatusLabel,
   taskStatusTone,
-} = presentation;
+} from './presentation.js';
 
 function interactionWithPermissions(bits: bigint) {
   const member = { permissions: new PermissionsBitField(bits) };
@@ -44,29 +43,22 @@ describe('operator presentation helpers', () => {
   });
 
   it('uses readable plain text when Embed Links is unavailable', async () => {
-    const operatorReplyPayload = (presentation as unknown as {
-      operatorReplyPayload(interaction: unknown, message: { embed: ReturnType<typeof operatorEmbed>; fallback: string }): Promise<unknown>;
-    }).operatorReplyPayload;
     const embed = operatorEmbed({ title: 'Status' });
 
     await expect(operatorReplyPayload(
-      interactionWithPermissions(PermissionFlagsBits.SendMessages),
+      interactionWithPermissions(PermissionFlagsBits.SendMessages) as never,
       { embed, fallback: '**Status**\nReadable fallback.' },
     )).resolves.toEqual({ content: '**Status**\nReadable fallback.' });
   });
 
   it('uses the rich card when Embed Links is available', async () => {
-    const operatorReplyPayload = (presentation as unknown as {
-      operatorReplyPayload(interaction: unknown, message: { embed: ReturnType<typeof operatorEmbed>; fallback: string }): Promise<{ embeds?: unknown[]; content?: string }>;
-    }).operatorReplyPayload;
     const embed = operatorEmbed({ title: 'Status' });
 
     const payload = await operatorReplyPayload(
-      interactionWithPermissions(PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks),
+      interactionWithPermissions(PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks) as never,
       { embed, fallback: 'Fallback' },
     );
 
-    expect(payload.embeds).toEqual([embed]);
-    expect(payload.content).toBeUndefined();
+    expect(payload).toEqual({ embeds: [embed] });
   });
 });

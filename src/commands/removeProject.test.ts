@@ -29,18 +29,21 @@ function interaction() {
 describe('removeProject', () => {
   it('terminalizes active scheduled loops before archiving and deleting Discord channels', async () => {
     const command = interaction();
+    const getProject = vi.fn(() => project);
     const terminalizeLoopsByProject = vi.fn(() => [{ id: 'loop-1' }]);
     const removeProject = vi.fn(() => project);
     const deleteProjectChannels = vi.fn(async () => undefined);
     const notifyRoborevConfigurationChanged = vi.fn();
 
     await handleRemoveProject(command, {
+      getProject,
       terminalizeLoopsByProject,
       removeProject,
       deleteProjectChannels,
       notifyRoborevConfigurationChanged,
     });
 
+    expect(getProject).toHaveBeenCalledWith('factory-floor');
     expect(terminalizeLoopsByProject).toHaveBeenCalledWith(
       'factory-floor',
       'Project archived',
@@ -63,10 +66,12 @@ describe('removeProject', () => {
 
   it('does not terminalize loops when the project does not exist', async () => {
     const command = interaction();
+    const getProject = vi.fn(() => undefined);
     const terminalizeLoopsByProject = vi.fn();
     const removeProject = vi.fn(() => undefined);
 
     await handleRemoveProject(command, {
+      getProject,
       terminalizeLoopsByProject,
       removeProject,
       deleteProjectChannels: vi.fn(async () => undefined),
@@ -74,6 +79,7 @@ describe('removeProject', () => {
     });
 
     expect(terminalizeLoopsByProject).not.toHaveBeenCalled();
+    expect(removeProject).not.toHaveBeenCalled();
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringMatching(/not found/i),
     }));

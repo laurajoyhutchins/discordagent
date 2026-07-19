@@ -301,9 +301,8 @@ export function createFactoryFloorActivityLaunchService(
       }
 
       const createdAt = now();
-      const stateId = generateStateId();
       const registration: CreateFactoryFloorLaunchInput = {
-        stateId,
+        stateId: generateStateId(),
         interactionId: request.interactionId,
         applicationId: request.applicationId,
         installationType: 'guild',
@@ -320,14 +319,14 @@ export function createFactoryFloorActivityLaunchService(
         createdAt,
         expiresAt: createdAt + launchTtlMs,
       };
-      dependencies.launches.create(registration);
+      const stored = dependencies.launches.create(registration);
 
       return {
         ok: true,
-        stateId,
-        contextKind,
-        projectName: project.name,
-        ...(runId ? { runId } : {}),
+        stateId: stored.stateId,
+        contextKind: stored.contextKind,
+        projectName: stored.projectName,
+        ...(stored.runId ? { runId: stored.runId } : {}),
       };
     },
 

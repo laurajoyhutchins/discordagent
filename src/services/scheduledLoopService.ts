@@ -139,7 +139,7 @@ export function createScheduledLoopService(
     }
 
     runtime.executing = true;
-    let result: ScheduledLoopExecutionResult | void;
+    let result: ScheduledLoopExecutionResult | void = undefined;
     try {
       result = await options.executeIteration(acquired, runtime.project, runtime.thread);
     } catch (error) {
@@ -164,7 +164,7 @@ export function createScheduledLoopService(
     }
 
     if (options.presentWaiting) {
-      let waitingResult: ScheduledLoopExecutionResult | void;
+      let waitingResult: ScheduledLoopExecutionResult | void = undefined;
       try {
         waitingResult = await options.presentWaiting(waiting, runtime.project, runtime.thread);
       } catch (error) {

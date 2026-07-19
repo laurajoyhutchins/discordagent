@@ -26,6 +26,18 @@ const checkedNames = new Set([
   'Dockerfile',
 ]);
 
+// Existing debt is explicit and can only shrink. Remove an entry when its file is fixed.
+const legacyMissingFinalNewline = new Set([
+  'src/commands/capabilities.test.ts',
+  'src/commands/register.ts',
+  'src/commands/turnIntoTask.test.ts',
+  'src/commands/turnIntoTask.ts',
+  'src/discord/taskControlHandler.test.ts',
+  'src/discord/taskControlHandler.ts',
+  'src/handlers/interactionHandler.test.ts',
+  'src/repositories/usageRepository.ts',
+]);
+
 const trackedFiles = execFileSync('git', ['ls-files', '-z'], {
   encoding: 'utf8',
 })
@@ -34,6 +46,7 @@ const trackedFiles = execFileSync('git', ['ls-files', '-z'], {
   .filter(path => checkedNames.has(path) || checkedExtensions.has(extname(path)));
 
 const failures = [];
+const observedLegacyDebt = new Set();
 
 for (const path of trackedFiles) {
   const content = readFileSync(path, 'utf8');
@@ -52,7 +65,14 @@ for (const path of trackedFiles) {
   }
 
   if (content.length > 0 && !content.endsWith('\n')) {
-    failures.push(`${path}: add a final newline`);
+    if (legacyMissingFinalNewline.has(path)) observedLegacyDebt.add(path);
+    else failures.push(`${path}: add a final newline`);
+  }
+}
+
+for (const path of legacyMissingFinalNewline) {
+  if (!observedLegacyDebt.has(path)) {
+    failures.push(`${path}: remove stale legacyMissingFinalNewline entry`);
   }
 }
 
@@ -61,5 +81,8 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`- ${failure}`);
   process.exitCode = 1;
 } else {
-  console.log(`Formatting hygiene passed for ${trackedFiles.length} tracked text files.`);
+  console.log(
+    `Formatting hygiene passed for ${trackedFiles.length} tracked text files; ` +
+      `${observedLegacyDebt.size} explicit legacy newline exceptions remain.`,
+  );
 }

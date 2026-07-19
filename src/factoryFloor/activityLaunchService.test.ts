@@ -4,10 +4,15 @@ import type {
   FactoryFloorRunBinding,
   FactoryFloorSurfaceBinding,
 } from '../repositories/factoryFloorBindingRepository.js';
+import type {
+  CreateFactoryFloorLaunchInput,
+  FactoryFloorLaunchRecord,
+} from '../repositories/factoryFloorLaunchRepository.js';
 import type { Project } from '../types.js';
 import {
   createFactoryFloorActivityLaunchService,
   type FactoryFloorActivityLaunchDependencies,
+  type FactoryFloorActivityLaunchFailureCode,
   type TrustedActivityLaunchRequest,
 } from './activityLaunchService.js';
 
@@ -60,7 +65,10 @@ function request(overrides: Partial<TrustedActivityLaunchRequest> = {}): Trusted
 }
 
 function dependencies(overrides: Partial<FactoryFloorActivityLaunchDependencies> = {}) {
-  const create = vi.fn((input: Record<string, unknown>) => input);
+  const create = vi.fn((input: CreateFactoryFloorLaunchInput): FactoryFloorLaunchRecord => ({
+    ...input,
+    createdAt: input.createdAt ?? 1_000,
+  }));
   const deps: FactoryFloorActivityLaunchDependencies = {
     expectedApplicationId: 'application-1',
     expectedGuildId: 'guild-1',
@@ -82,6 +90,59 @@ function dependencies(overrides: Partial<FactoryFloorActivityLaunchDependencies>
   return { deps, create };
 }
 
+const unavailableCases: Array<{
+  label: string;
+  overrides: Partial<FactoryFloorActivityLaunchDependencies>;
+  code: FactoryFloorActivityLaunchFailureCode;
+  thread: boolean;
+}> = [
+  {
+    label: 'unregistered project channel',
+    overrides: { findProjectByChannelId: () => undefined },
+    code: 'project_unavailable',
+    thread: false,
+  },
+  {
+    label: 'unbound project',
+    overrides: {
+      bindings: {
+        findProjectByName: () => undefined,
+        findSurfaceByThread: () => undefined,
+        findActiveRunBySurface: () => undefined,
+        listActiveRunsByProject: () => [],
+      },
+    },
+    code: 'project_unbound',
+    thread: false,
+  },
+  {
+    label: 'unbound task thread',
+    overrides: {
+      bindings: {
+        findProjectByName: () => projectBinding,
+        findSurfaceByThread: () => undefined,
+        findActiveRunBySurface: () => undefined,
+        listActiveRunsByProject: () => [],
+      },
+    },
+    code: 'surface_unbound',
+    thread: true,
+  },
+  {
+    label: 'task thread without active run',
+    overrides: {
+      bindings: {
+        findProjectByName: () => projectBinding,
+        findSurfaceByThread: () => threadSurface,
+        findActiveRunBySurface: () => undefined,
+        listActiveRunsByProject: () => [],
+      },
+    },
+    code: 'run_unavailable',
+    thread: true,
+  },
+];
+
 describe('Factory Floor trusted Activity launch resolution', () => {
   it.each([
     ['unauthorized principal', request({ authorized: false }), 'not_authorized'],
@@ -89,7 +150,7 @@ describe('Factory Floor trusted Activity launch resolution', () => {
     ['non-guild installation', request({ installationType: 'user' }), 'installation_mismatch'],
     ['wrong installation owner', request({ installationOwnerId: 'guild-other' }), 'installation_mismatch'],
     ['wrong guild', request({ guildId: 'guild-other', installationOwnerId: 'guild-other' }), 'guild_mismatch'],
-  ])('fails closed for %s', async (_label, input, code) => {
+  ] as const)('fails closed for %s', async (_label, input, code) => {
     const { deps, create } = dependencies();
     const service = createFactoryFloorActivityLaunchService(deps);
 
@@ -186,37 +247,12 @@ describe('Factory Floor trusted Activity launch resolution', () => {
     }));
   });
 
-  it.each([
-    ['unregistered project channel', { findProjectByChannelId: () => undefined }, 'project_unavailable'],
-    ['unbound project', { bindings: {
-      findProjectByName: () => undefined,
-      findSurfaceByThread: () => undefined,
-      findActiveRunBySurface: () => undefined,
-      listActiveRunsByProject: () => [],
-    } }, 'project_unbound'],
-    ['unbound task thread', { bindings: {
-      findProjectByName: () => projectBinding,
-      findSurfaceByThread: () => undefined,
-      findActiveRunBySurface: () => undefined,
-      listActiveRunsByProject: () => [],
-    } }, 'surface_unbound'],
-    ['task thread without active run', { bindings: {
-      findProjectByName: () => projectBinding,
-      findSurfaceByThread: () => threadSurface,
-      findActiveRunBySurface: () => undefined,
-      listActiveRunsByProject: () => [],
-    } }, 'run_unavailable'],
-  ])('fails with actionable state for %s', async (_label, override, code) => {
-    const { deps, create } = dependencies(override as Partial<FactoryFloorActivityLaunchDependencies>);
+  it.each(unavailableCases)('fails with actionable state for $label', async ({ overrides, code, thread }) => {
+    const { deps, create } = dependencies(overrides);
     const service = createFactoryFloorActivityLaunchService(deps);
-    const input = code === 'surface_unbound' || code === 'run_unavailable'
-      ? request({ threadId: 'thread-1' })
-      : request();
 
-    await expect(service.prepare(input)).resolves.toEqual(expect.objectContaining({
-      ok: false,
-      code,
-    }));
+    await expect(service.prepare(request(thread ? { threadId: 'thread-1' } : {})))
+      .resolves.toEqual(expect.objectContaining({ ok: false, code }));
     expect(create).not.toHaveBeenCalled();
   });
 

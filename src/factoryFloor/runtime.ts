@@ -4,7 +4,17 @@ import {
   createFactoryFloorNonceStore,
   type FactoryFloorBindingRepository,
 } from '../repositories/factoryFloorBindingRepository.js';
+import {
+  createFactoryFloorLaunchRepository,
+  type FactoryFloorLaunchRepository,
+} from '../repositories/factoryFloorLaunchRepository.js';
+import { createProjectRepository } from '../repositories/projectRepository.js';
 import { redactErrorMessage } from '../utils/redaction.js';
+import {
+  createFactoryFloorActivityLaunchBindingLookup,
+  createFactoryFloorActivityLaunchService,
+  type FactoryFloorActivityLaunchService,
+} from './activityLaunchService.js';
 import {
   FactoryFloorOperatorClient,
   FactoryFloorServiceClient,
@@ -18,6 +28,8 @@ import type { ServiceAuthNonceStore } from './serviceAuth.js';
 export interface FactoryFloorRuntimeServices {
   readonly config: FactoryFloorIntegrationConfig;
   readonly bindings: FactoryFloorBindingRepository;
+  readonly launches: FactoryFloorLaunchRepository;
+  readonly activityLaunch: FactoryFloorActivityLaunchService;
   readonly nonceStore: ServiceAuthNonceStore;
   readonly serviceClient: FactoryFloorServiceClient;
   readonly operatorClient?: FactoryFloorOperatorClient;
@@ -25,6 +37,7 @@ export interface FactoryFloorRuntimeServices {
 
 export interface InitializeFactoryFloorRuntimeOptions {
   readonly env?: Record<string, string | undefined>;
+  readonly applicationId?: string;
   readonly fetchFn?: typeof fetch;
   readonly logger?: (message: string) => void;
 }
@@ -37,10 +50,11 @@ export function initializeFactoryFloorRuntime(
 ): FactoryFloorRuntimeServices | undefined {
   clearFactoryFloorRuntime();
   const logger = options.logger ?? (message => console.warn(message));
+  const env = options.env ?? process.env;
 
   let config: FactoryFloorIntegrationConfig | undefined;
   try {
-    config = factoryFloorConfigFromEnv(options.env ?? process.env);
+    config = factoryFloorConfigFromEnv(env);
   } catch (error) {
     logger(
       `[factoryFloor] Adapter disabled because configuration is invalid: ${redactErrorMessage(error)}`,
@@ -50,15 +64,33 @@ export function initializeFactoryFloorRuntime(
   if (!config) return undefined;
 
   try {
+    const applicationId = (options.applicationId ?? env.DISCORD_CLIENT_ID)?.trim();
+    if (!applicationId) {
+      throw new Error('DISCORD_CLIENT_ID is required for Factory Floor Activity launches');
+    }
     const requestOptions = {
       baseUrl: config.baseUrl,
       timeoutMs: config.requestTimeoutMs,
       maxRetries: config.maxRetries,
       ...(options.fetchFn ? { fetchFn: options.fetchFn } : {}),
     };
+    const bindings = createFactoryFloorBindingRepository(database);
+    const launches = createFactoryFloorLaunchRepository(database);
+    const projects = createProjectRepository(database);
     const runtime: FactoryFloorRuntimeServices = {
       config,
-      bindings: createFactoryFloorBindingRepository(database),
+      bindings,
+      launches,
+      activityLaunch: createFactoryFloorActivityLaunchService({
+        expectedApplicationId: applicationId,
+        findProjectByChannelId: channelId => {
+          const project = projects.findByChannelId(channelId);
+          return project?.agentChannelId === channelId ? project : undefined;
+        },
+        bindings: createFactoryFloorActivityLaunchBindingLookup(database),
+        launches,
+        launchTtlMs: config.launchTtlMs,
+      }),
       nonceStore: createFactoryFloorNonceStore(database),
       serviceClient: new FactoryFloorServiceClient({
         ...requestOptions,

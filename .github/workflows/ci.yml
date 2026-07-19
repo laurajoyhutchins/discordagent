@@ -69,6 +69,7 @@ jobs:
       - name: Write agent CI handoff
         if: always()
         env:
+          AGENT_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           AGENT_CI_JOB_STATUS: ${{ job.status }}
         run: node scripts/write-agent-ci-summary.mjs --manifest .github/agent-ci-manifest.json --output .agent-ci/static/agent-ci-summary.json --job static --artifact static-quality-logs >> "$GITHUB_STEP_SUMMARY"
 
@@ -114,6 +115,7 @@ jobs:
       - name: Write agent CI handoff
         if: always()
         env:
+          AGENT_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           AGENT_CI_JOB_STATUS: ${{ job.status }}
         run: node scripts/write-agent-ci-summary.mjs --manifest .github/agent-ci-manifest.json --output .agent-ci/test/agent-ci-summary.json --job test --artifact test-and-coverage >> "$GITHUB_STEP_SUMMARY"
 
@@ -156,6 +158,7 @@ jobs:
       - name: Write agent CI handoff
         if: always()
         env:
+          AGENT_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           AGENT_CI_JOB_STATUS: ${{ job.status }}
         run: node scripts/write-agent-ci-summary.mjs --manifest .github/agent-ci-manifest.json --output .agent-ci/docs/agent-ci-summary.json --job docs --artifact documentation-logs >> "$GITHUB_STEP_SUMMARY"
 

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "stages": [
+    { "name": "format", "command": "npm run format:check", "logs": ["format.log"] },
+    { "name": "lint", "command": "npm run lint", "logs": ["lint.log"] },
+    { "name": "typecheck", "command": "npm run typecheck", "logs": ["typecheck.log"] },
+    { "name": "build", "command": "npm run build", "logs": ["build.log"] },
+    { "name": "whitespace", "command": "git diff --check <base>...HEAD", "logs": ["whitespace.log"] },
+    { "name": "test", "command": "npm run test:ci", "logs": ["test.log"] },
+    { "name": "docs", "command": "npm run check:docs", "logs": ["docs.log"] }
+  ]
+}

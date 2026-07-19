@@ -8,6 +8,7 @@ Authoritative descriptions of Discord Agent commands, configuration, and capabil
 | [Configuration](configuration.md) | Environment variables, defaults, scope, restart requirements |
 | [Provider support](provider-support.md) | Capability matrix per provider (Claude, Codex, OpenCode) |
 | [Discord capabilities](discord-capabilities.md) | Bot permissions, Gateway intents, OAuth scopes, optional features, fallbacks |
+| [Discord Activity launch](discord-activity-launch.md) | Primary Entry Point registration, trusted context, one-time state, platform contract |
 | [Task and project states](task-and-project-states.md) | State values, transitions, persistence behavior |
 | [Filesystem layout](filesystem-layout.md) | Runtime directory structure and file purposes |
 | [Compatibility](compatibility.md) | Node, Git, provider CLI versions |

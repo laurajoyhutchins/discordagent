@@ -114,13 +114,26 @@ describe('FactoryFloorLaunchRepository', () => {
     expect(launches.findByStateId('state-opaque-1')).toEqual(record);
   });
 
-  it('makes an exact interaction retry idempotent and rejects conflicting reuse', () => {
+  it('returns the original state and expiry for an exact interaction retry', () => {
     const { launches, surface } = setup();
-    const input = launchInput(surface.id);
 
-    const first = launches.create(input);
-    const second = launches.create(input);
+    const first = launches.create(launchInput(surface.id));
+    const second = launches.create(launchInput(surface.id, {
+      stateId: 'state-opaque-retry-candidate',
+      createdAt: 2_000,
+      expiresAt: 122_000,
+    }));
+
     expect(second).toEqual(first);
+    expect(second.stateId).toBe('state-opaque-1');
+    expect(second.createdAt).toBe(1_000);
+    expect(second.expiresAt).toBe(121_000);
+    expect(launches.findByStateId('state-opaque-retry-candidate')).toBeUndefined();
+  });
+
+  it('rejects conflicting reuse of an interaction ID', () => {
+    const { launches, surface } = setup();
+    launches.create(launchInput(surface.id));
 
     expect(() => launches.create(launchInput(surface.id, {
       stateId: 'state-opaque-2',

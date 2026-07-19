@@ -40,6 +40,7 @@ export interface InitializeFactoryFloorRuntimeOptions {
   readonly applicationId?: string;
   readonly guildId?: string;
   readonly fetchFn?: typeof fetch;
+  readonly now?: () => number;
   readonly logger?: (message: string) => void;
 }
 
@@ -52,6 +53,7 @@ export function initializeFactoryFloorRuntime(
   clearFactoryFloorRuntime();
   const logger = options.logger ?? (message => console.warn(message));
   const env = options.env ?? process.env;
+  const now = options.now ?? Date.now;
 
   let config: FactoryFloorIntegrationConfig | undefined;
   try {
@@ -81,6 +83,10 @@ export function initializeFactoryFloorRuntime(
     };
     const bindings = createFactoryFloorBindingRepository(database);
     const launches = createFactoryFloorLaunchRepository(database);
+    const cleanedLaunches = launches.cleanup(now());
+    if (cleanedLaunches > 0) {
+      logger(`[factoryFloor] Cleaned ${cleanedLaunches} terminal or expired Activity launch registration(s).`);
+    }
     const projects = createProjectRepository(database);
     const runtime: FactoryFloorRuntimeServices = {
       config,
@@ -95,6 +101,7 @@ export function initializeFactoryFloorRuntime(
         },
         bindings: createFactoryFloorActivityLaunchBindingLookup(database),
         launches,
+        now,
         launchTtlMs: config.launchTtlMs,
       }),
       nonceStore: createFactoryFloorNonceStore(database),

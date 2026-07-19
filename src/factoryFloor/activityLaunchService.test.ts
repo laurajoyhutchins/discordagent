@@ -63,6 +63,7 @@ function dependencies(overrides: Partial<FactoryFloorActivityLaunchDependencies>
   const create = vi.fn((input: Record<string, unknown>) => input);
   const deps: FactoryFloorActivityLaunchDependencies = {
     expectedApplicationId: 'application-1',
+    expectedGuildId: 'guild-1',
     findProjectByChannelId: channelId => channelId === 'agent-1' ? project : undefined,
     bindings: {
       findProjectByName: name => name === project.name ? projectBinding : undefined,
@@ -72,7 +73,7 @@ function dependencies(overrides: Partial<FactoryFloorActivityLaunchDependencies>
       findActiveRunBySurface: surfaceId => surfaceId === threadSurface.id ? threadRun : undefined,
       listActiveRunsByProject: () => [],
     },
-    launches: { create },
+    launches: { create, invalidate: vi.fn() },
     now: () => 1_000,
     generateStateId: () => 'opaque-state-1',
     launchTtlMs: 120_000,
@@ -85,9 +86,9 @@ describe('Factory Floor trusted Activity launch resolution', () => {
   it.each([
     ['unauthorized principal', request({ authorized: false }), 'not_authorized'],
     ['wrong application', request({ applicationId: 'application-other' }), 'application_mismatch'],
-    ['non-guild installation', request({ installationType: 'user' as 'guild' }), 'installation_mismatch'],
+    ['non-guild installation', request({ installationType: 'user' }), 'installation_mismatch'],
     ['wrong installation owner', request({ installationOwnerId: 'guild-other' }), 'installation_mismatch'],
-    ['wrong guild', request({ guildId: 'guild-other' }), 'guild_mismatch'],
+    ['wrong guild', request({ guildId: 'guild-other', installationOwnerId: 'guild-other' }), 'guild_mismatch'],
   ])('fails closed for %s', async (_label, input, code) => {
     const { deps, create } = dependencies();
     const service = createFactoryFloorActivityLaunchService(deps);

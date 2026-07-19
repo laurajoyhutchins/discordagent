@@ -1,6 +1,7 @@
 import type { DatabaseHandle } from '../db/database.js';
 import {
   createFactoryFloorBindingRepository,
+  createFactoryFloorNonceStore,
   type FactoryFloorBindingRepository,
 } from '../repositories/factoryFloorBindingRepository.js';
 import { redactErrorMessage } from '../utils/redaction.js';
@@ -12,10 +13,12 @@ import {
   factoryFloorConfigFromEnv,
   type FactoryFloorIntegrationConfig,
 } from './config.js';
+import type { ServiceAuthNonceStore } from './serviceAuth.js';
 
 export interface FactoryFloorRuntimeServices {
   readonly config: FactoryFloorIntegrationConfig;
   readonly bindings: FactoryFloorBindingRepository;
+  readonly nonceStore: ServiceAuthNonceStore;
   readonly serviceClient: FactoryFloorServiceClient;
   readonly operatorClient?: FactoryFloorOperatorClient;
 }
@@ -56,6 +59,7 @@ export function initializeFactoryFloorRuntime(
     const runtime: FactoryFloorRuntimeServices = {
       config,
       bindings: createFactoryFloorBindingRepository(database),
+      nonceStore: createFactoryFloorNonceStore(database),
       serviceClient: new FactoryFloorServiceClient({
         ...requestOptions,
         keys: config.serviceAuthKeys,

@@ -31,8 +31,9 @@ describe('task control card rendering', () => {
     const embed = payload.embeds?.[0].toJSON();
     const serialized = JSON.stringify(payload);
 
-    expect(embed).toMatchObject({ title: expect.stringMatching(/task/i) });
+    expect(embed).toMatchObject({ title: 'Task · Running' });
     expect(serialized).toContain('factory-floor');
+    expect(serialized).toContain('Claude');
     expect(serialized).toContain('claude-sonnet');
     expect(serialized).toContain('agent/claude/factory-floor-123');
     expect(serialized).toContain('[REDACTED]');
@@ -41,7 +42,7 @@ describe('task control card rendering', () => {
     expect(serialized).not.toContain('sessionId');
   });
 
-  it('renders a readable plain-text fallback when embeds are unavailable', () => {
+  it('preserves the stable plain-text fallback when embeds are unavailable', () => {
     const payload = renderTaskControlCard({ ...view, phase: undefined }, { embeds: false });
     const text = payload.content;
 

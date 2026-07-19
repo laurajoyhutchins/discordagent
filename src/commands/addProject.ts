@@ -2,6 +2,8 @@ import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { existsSync, statSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import type { AgentProviderId } from '../agents/contracts.js';
+import { providerLabel } from '../agents/providerLabels.js';
+import { operatorEmbed, operatorReplyPayload } from '../discord/presentation.js';
 import { addProject, getDefaultProvider, getProject } from '../services/projectStore.js';
 import { createProjectChannels, deleteProjectChannels } from '../services/channelManager.js';
 import { config } from '../config.js';
@@ -120,20 +122,41 @@ export async function handleAddProject(interaction: ChatInputCommandInteraction)
     });
     if (channels.roborevChannelId) notifyRoborevConfigurationChanged();
 
-    let replyMsg = `Project **${name}** created!\n` +
-      `- <#${channels.agentChannelId}> — talk to the project agent here`;
+    const provider = providerLabel(defaultProvider);
+    const reviews = channels.roborevChannelId
+      ? `<#${channels.roborevChannelId}>`
+      : `Not enabled · use \`/roborev project:${name} enable:true\` later`;
+    const description = `**${name}** is registered. Open the project channel and describe an outcome to create an isolated durable task.`;
+    const embed = operatorEmbed({
+      title: 'Project ready',
+      description,
+      tone: isGitRepo ? 'success' : 'attention',
+      footer: 'New tasks inherit the project provider and settings; existing tasks remain immutable.',
+    }).addFields(
+      { name: 'Project channel', value: `<#${channels.agentChannelId}>`, inline: true },
+      { name: 'Provider', value: provider, inline: true },
+      { name: 'Reviews', value: reviews },
+    );
+    const fallbackLines = [
+      '**Project ready**',
+      description,
+      '',
+      `**Project channel:** <#${channels.agentChannelId}>`,
+      `**Provider:** ${provider}`,
+      `**Reviews:** ${reviews}`,
+    ];
 
     if (!isGitRepo) {
-      replyMsg += `\n\n⚠️ **Warning:** This non-Git project was registered, but agent tasks cannot start until the directory is initialized as a Git repository. Run \`git init && git add -A && git commit -m "initial"\` before sending a task.`;
+      const nextStep = 'This non-Git project is registered, but tasks cannot start until the directory is initialized as a Git repository and has an initial commit.';
+      embed.addFields({ name: 'Before tasks can start', value: nextStep });
+      fallbackLines.push('', '**Before tasks can start**', nextStep);
     }
 
-    if (channels.roborevChannelId) {
-      replyMsg += `\n- <#${channels.roborevChannelId}> — code reviews appear here`;
-    } else {
-      replyMsg += `\n\n💡 RoboRev not enabled. To add it later, use \`/roborev project:${name} enable:true\`.`;
-    }
-
-    await interaction.editReply(replyMsg);
+    const payload = await operatorReplyPayload(interaction, {
+      embed,
+      fallback: fallbackLines.join('\n'),
+    });
+    await interaction.editReply(payload);
 
   } catch (err) {
     if (channels && !getProject(name)) {

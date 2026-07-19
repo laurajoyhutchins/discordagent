@@ -1,3 +1,6 @@
+import { Routes } from 'discord.js';
+import type { SettingsRepository } from '../repositories/settingsRepository.js';
+
 export interface FactoryFloorEntryPointCommand {
   readonly name: string;
   readonly description: string;
@@ -34,6 +37,13 @@ export interface ActivityCommandOwnershipStore {
   setOwnedCommandId(commandId: string | undefined): void;
 }
 
+export interface DiscordActivityCommandRestClient {
+  get(route: string): Promise<unknown>;
+  post(route: string, options: { body: unknown }): Promise<unknown>;
+  patch(route: string, options: { body: unknown }): Promise<unknown>;
+  delete(route: string): Promise<unknown>;
+}
+
 export type ActivityEntryPointReconciliationResult =
   | { readonly action: 'none'; readonly commandId?: string }
   | { readonly action: 'created' | 'updated' | 'deleted'; readonly commandId: string };
@@ -45,6 +55,7 @@ export interface ReconcileFactoryFloorEntryPointOptions {
 }
 
 const PRIMARY_ENTRY_POINT = 4;
+const OWNED_COMMAND_SETTING = 'factory_floor_entry_point_command_id';
 
 export function desiredFactoryFloorEntryPoint(): FactoryFloorEntryPointCommand {
   return {
@@ -54,6 +65,63 @@ export function desiredFactoryFloorEntryPoint(): FactoryFloorEntryPointCommand {
     handler: 1,
     integration_types: [0],
     contexts: [0],
+  };
+}
+
+export function createDiscordActivityCommandApi(
+  rest: DiscordActivityCommandRestClient,
+  applicationId: string,
+): ActivityCommandApi {
+  const normalizedApplicationId = applicationId.trim();
+  if (!normalizedApplicationId) throw new Error('discord_application_id_required');
+
+  return {
+    async listGlobalCommands() {
+      const response = await rest.get(Routes.applicationCommands(normalizedApplicationId));
+      if (!Array.isArray(response)) {
+        throw new Error('Discord global command response was not an array');
+      }
+      return response as RemoteActivityCommand[];
+    },
+
+    async createGlobalCommand(command) {
+      const response = await rest.post(
+        Routes.applicationCommands(normalizedApplicationId),
+        { body: command },
+      ) as { id?: unknown };
+      if (typeof response?.id !== 'string' || !response.id) {
+        throw new Error('Discord did not return an Activity Entry Point command ID');
+      }
+      return { id: response.id };
+    },
+
+    async editGlobalCommand(commandId, command) {
+      const response = await rest.patch(
+        Routes.applicationCommand(normalizedApplicationId, commandId),
+        { body: command },
+      ) as { id?: unknown };
+      if (typeof response?.id !== 'string' || !response.id) {
+        throw new Error('Discord did not return the updated Activity Entry Point command ID');
+      }
+      return { id: response.id };
+    },
+
+    async deleteGlobalCommand(commandId) {
+      await rest.delete(Routes.applicationCommand(normalizedApplicationId, commandId));
+    },
+  };
+}
+
+export function createActivityCommandOwnershipStore(
+  settings: Pick<SettingsRepository, 'get' | 'set'>,
+): ActivityCommandOwnershipStore {
+  return {
+    getOwnedCommandId() {
+      return settings.get(OWNED_COMMAND_SETTING) || undefined;
+    },
+    setOwnedCommandId(commandId) {
+      settings.set(OWNED_COMMAND_SETTING, commandId ?? '');
+    },
   };
 }
 

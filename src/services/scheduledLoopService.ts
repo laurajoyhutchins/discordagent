@@ -144,6 +144,13 @@ export function createScheduledLoopService(
       result = await options.executeIteration(acquired, runtime.project, runtime.thread);
     } catch (error) {
       logger(`[loop] Iteration ${acquired.iteration} for ${acquired.id} failed: ${redactErrorMessage(error)}`);
+      if (acquired.iteration === 1) {
+        const reason = 'Initial scheduled-loop iteration failed before a durable continuation was established';
+        options.repository.terminalizeById(loopId, reason, now());
+        detach(loopId);
+        logger(`[loop] Terminalized ${loopId}: ${reason}`);
+        return;
+      }
     } finally {
       runtime.executing = false;
     }

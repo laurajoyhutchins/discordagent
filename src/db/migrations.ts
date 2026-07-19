@@ -1,5 +1,6 @@
 import type { DatabaseHandle } from './database.js';
 import { FACTORY_FLOOR_BINDINGS_MIGRATION } from './factoryFloorBindingsMigration.js';
+import { LOOP_SCHEMA_MIGRATION } from './loopSchemaMigration.js';
 import { SCHEMA_MIGRATIONS } from './schema.js';
 
 export interface Migration {
@@ -16,11 +17,6 @@ export interface Migration {
   disableForeignKeys?: boolean;
 }
 
-const DEFAULT_MIGRATIONS: readonly Migration[] = [
-  ...SCHEMA_MIGRATIONS,
-  FACTORY_FLOOR_BINDINGS_MIGRATION,
-];
-
 const BOOTSTRAP_SQL = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -28,6 +24,12 @@ const BOOTSTRAP_SQL = `
     applied_at INTEGER NOT NULL
   )
 `;
+
+const DEFAULT_MIGRATIONS: readonly Migration[] = [
+  ...SCHEMA_MIGRATIONS,
+  LOOP_SCHEMA_MIGRATION,
+  FACTORY_FLOOR_BINDINGS_MIGRATION,
+];
 
 function validateMigrations(migrations: readonly Migration[]): void {
   const seen = new Set<number>();

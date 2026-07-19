@@ -16,10 +16,7 @@ const outputPath = readOption('--output');
 const job = readOption('--job');
 const artifact = readOption('--artifact');
 
-const ansiEscapePattern = new RegExp(
-  `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`,
-  'g',
-);
+const ansiEscapePattern = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
 const normalizeLine = (line) => line.replace(ansiEscapePattern, '').trim();
 
 const actionablePatterns = [
@@ -34,9 +31,7 @@ const noisePattern =
 export const findActionableError = (text) => {
   const lines = text.split(/\r?\n/).map(normalizeLine).filter(Boolean);
   const match = lines.find(
-    (line) =>
-      actionablePatterns.some((pattern) => pattern.test(line)) &&
-      !noisePattern.test(line),
+    (line) => actionablePatterns.some((pattern) => pattern.test(line)) && !noisePattern.test(line),
   );
   return match ? match.slice(0, 500) : null;
 };
@@ -86,10 +81,7 @@ export const buildSummary = ({ manifest, environment, jobStatus, artifactName })
       result: failed && index === stages.length - 1 ? 'failed' : 'passed',
     })),
     artifacts: artifactName ? [artifactName] : [],
-    runUrl:
-      repository && runId
-        ? `${serverUrl}/${repository}/actions/runs/${runId}`
-        : null,
+    runUrl: repository && runId ? `${serverUrl}/${repository}/actions/runs/${runId}` : null,
   };
 };
 
@@ -131,9 +123,7 @@ const run = () => {
   }
 };
 
-const isMain =
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   run();
 }

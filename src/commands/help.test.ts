@@ -71,9 +71,10 @@ describe('contextual help presentation', () => {
       reply,
     } as never);
 
-    expect(responseText(reply)).toMatch(/review notifications/i);
-    expect(responseText(reply)).toContain('<#agent-1>');
-    expect(responseText(reply)).not.toMatch(/send a task in ordinary language/i);
+    const response = responseText(reply);
+    expect(response).toMatch(/review notifications/i);
+    expect(response).toContain('<#agent-1>');
+    expect(response).not.toMatch(/send a task in ordinary language/i);
   });
 
   it('does not mistake a thread beneath the RoboRev channel for a durable task thread', async () => {
@@ -86,7 +87,8 @@ describe('contextual help presentation', () => {
       reply,
     } as never);
 
-    expect(responseText(reply)).toMatch(/review notifications/i);
-    expect(responseText(reply)).not.toMatch(/reply here to continue the existing task/i);
+    const response = responseText(reply);
+    expect(response).toMatch(/review notifications/i);
+    expect(response).not.toMatch(/reply here to continue the existing task/i);
   });
 });

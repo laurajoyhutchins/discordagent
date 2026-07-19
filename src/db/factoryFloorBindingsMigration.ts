@@ -66,6 +66,21 @@ export const FACTORY_FLOOR_BINDINGS_MIGRATION = {
       ON factory_floor_run_bindings(surface_id)
       WHERE retired_at IS NULL`,
 
+    `CREATE TRIGGER factory_floor_retire_archived_project_bindings
+      AFTER UPDATE OF archived_at ON projects
+      WHEN NEW.archived_at IS NOT NULL AND OLD.archived_at IS NULL
+      BEGIN
+        UPDATE factory_floor_run_bindings
+        SET retired_at = NEW.archived_at, updated_at = NEW.archived_at
+        WHERE local_project_id = NEW.id AND retired_at IS NULL;
+        UPDATE factory_floor_surface_bindings
+        SET retired_at = NEW.archived_at, updated_at = NEW.archived_at
+        WHERE local_project_id = NEW.id AND retired_at IS NULL;
+        UPDATE factory_floor_project_bindings
+        SET retired_at = NEW.archived_at, updated_at = NEW.archived_at
+        WHERE local_project_id = NEW.id AND retired_at IS NULL;
+      END`,
+
     `CREATE TABLE factory_floor_service_nonces (
       key_id TEXT NOT NULL,
       nonce TEXT NOT NULL,

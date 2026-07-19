@@ -5,23 +5,29 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  verify:
+  static:
+    name: Static quality
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       - name: Use Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -29,23 +35,29 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Run tests
+      - name: Check formatting hygiene
         shell: bash
         run: |
           set -o pipefail
-          npm test 2>&1 | tee test.log
+          npm run format:check 2>&1 | tee format.log
+
+      - name: Check source policies
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee lint.log
+
+      - name: Type-check
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee typecheck.log
 
       - name: Build
         shell: bash
         run: |
           set -o pipefail
           npm run build 2>&1 | tee build.log
-
-      - name: Check documentation links
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run check:docs 2>&1 | tee docs.log
 
       - name: Check pull request whitespace
         if: github.event_name == 'pull_request'
@@ -54,15 +66,123 @@ jobs:
           set -o pipefail
           git diff --check "${{ github.event.pull_request.base.sha }}"...HEAD 2>&1 | tee whitespace.log
 
-      - name: Upload verification logs
+      - name: Upload static-analysis logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: verification-logs
+          name: static-quality-logs
           path: |
-            test.log
+            format.log
+            lint.log
+            typecheck.log
             build.log
-            docs.log
             whitespace.log
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 14
+
+  test:
+    name: Tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run deterministic tests with coverage
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:ci 2>&1 | tee test.log
+
+      - name: Upload test and coverage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-and-coverage
+          path: |
+            test.log
+            coverage/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Check documentation links
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check:docs 2>&1 | tee docs.log
+
+      - name: Upload documentation logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: documentation-logs
+          path: docs.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  gate:
+    name: CI gate
+    if: always()
+    needs:
+      - static
+      - test
+      - docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Require every deterministic gate
+        env:
+          STATIC_RESULT: ${{ needs.static.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          DOCS_RESULT: ${{ needs.docs.result }}
+        run: |
+          printf 'Static quality: %s\nTests and coverage: %s\nDocumentation: %s\n' \
+            "$STATIC_RESULT" "$TEST_RESULT" "$DOCS_RESULT"
+          test "$STATIC_RESULT" = success
+          test "$TEST_RESULT" = success
+          test "$DOCS_RESULT" = success
+
+  verify:
+    name: verify
+    if: always()
+    needs:
+      - gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Preserve required-check compatibility
+        env:
+          GATE_RESULT: ${{ needs.gate.result }}
+        run: |
+          printf 'CI gate: %s\n' "$GATE_RESULT"
+          test "$GATE_RESULT" = success

@@ -17,14 +17,22 @@ npm ci
 ## Development commands
 
 ```bash
-npm test              # Run all tests
+npm test              # Run deterministic tests without coverage
+npm run test:coverage # Run tests and write coverage evidence
+npm run typecheck     # Type-check without emitting dist files
+npm run lint          # Enforce repository source policies
+npm run format:check  # Check tracked text-file formatting hygiene
 npm run build         # Compile TypeScript
-npm run check         # Test + build
+npm run check         # Type-check, test, and build
+npm run check:ci      # Reproduce every deterministic CI check locally
 npm run dev           # Start bot in development mode
 npm run register      # Register slash commands in your guild
 npm run smoke:host    # Host environment preflight
 npm run smoke:discord # Discord connectivity check
+npm run smoke:agent   # Credentialed provider round trip without Discord
 ```
+
+Run `npm run check:ci` before opening or updating a substantial pull request. Credentialed smoke commands remain opt-in and are not merge gates because provider availability, quota, and Discord connectivity are external conditions.
 
 ## Documentation classification
 
@@ -59,10 +67,13 @@ Issues are planning and coordination records, not a second source of runtime or 
 ## Pull request expectations
 
 - Update documentation when changing behavior that users or operators encounter.
-- Run `npm test` and `npm run build` before opening or updating a PR.
+- Run `npm run check:ci` before opening or updating a substantial PR.
+- Add a reproducing regression test for bug fixes.
 - Keep PRs focused. Separate documentation PRs from behavioral changes unless they are directly coupled.
 - Respect the provider-neutral boundary: do not add provider conditionals to handlers or the coordinator.
 - Do not commit secrets, generated SQLite databases, provider credentials, worktrees, or user-specific paths.
+
+GitHub Actions reports independently named **Static quality**, **Tests and coverage**, and **Documentation** jobs. The stable **CI gate** check passes only when all deterministic jobs pass. Superseded runs for the same pull request are cancelled automatically.
 
 ## Development guides
 

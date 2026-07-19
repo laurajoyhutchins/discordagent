@@ -1,5 +1,5 @@
 export const FACTORY_FLOOR_BINDINGS_MIGRATION = {
-  version: 10,
+  version: 11,
   name: 'add Factory Floor adapter bindings',
   statements: [
     `CREATE TABLE factory_floor_project_bindings (

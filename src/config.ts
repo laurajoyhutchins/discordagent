@@ -3,10 +3,16 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { HostMcpServers } from './agents/contracts.js';
+import { resolveProviderHostConfiguration } from './agents/providerConfiguration.js';
 import { resolveApplicationPaths } from './utils/applicationPaths.js';
 
 const applicationPaths = resolveApplicationPaths();
 if (applicationPaths.notice) console.warn(`[config] ${applicationPaths.notice}`);
+
+const providerHosts = resolveProviderHostConfiguration();
+const claudeHost = providerHosts[0]!;
+const codexHost = providerHosts[1]!;
+const openCodeHost = providerHosts[2]!;
 
 function required(key: string): string {
   const value = process.env[key];
@@ -56,12 +62,12 @@ export const config = {
   mcpServers: loadUserMcpServers(),
   usageChannelId: process.env.USAGE_CHANNEL_ID ?? '',
   defaultModel: process.env.CLAUDE_MODEL ?? '',
-  claudeEnabled: process.env.CLAUDE_ENABLED !== 'false',
+  claudeEnabled: claudeHost.enabled,
   defaultCodexModel: process.env.CODEX_MODEL ?? '',
-  codexCliPath: process.env.CODEX_CLI_PATH ?? 'codex',
-  codexEnabled: process.env.CODEX_ENABLED !== 'false',
-  openCodeCliPath: process.env.OPENCODE_CLI_PATH ?? 'opencode',
-  openCodeEnabled: process.env.OPENCODE_ENABLED !== 'false',
+  codexCliPath: codexHost.command,
+  codexEnabled: codexHost.enabled,
+  openCodeCliPath: openCodeHost.command,
+  openCodeEnabled: openCodeHost.enabled,
   openCodeTimeoutMs: parseInt(process.env.OPENCODE_TIMEOUT_MS ?? '900000', 10),
   defaultOpenCodeModel: process.env.OPENCODE_MODEL ?? '',
   openCodePrimaryModel: process.env.OPENCODE_PRIMARY_MODEL ?? '',

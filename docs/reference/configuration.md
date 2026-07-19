@@ -70,10 +70,14 @@ Codex credentials and device-authentication state are managed by the Codex CLI o
 
 | Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `DATABASE_PATH` | path | runtime data directory | SQLite database file | Yes |
+| `DATABASE_PATH` | path | `<repository>/data/discordagent.sqlite` | SQLite database file | Yes |
 | `WORKTREES_BASE_DIR` | path | `discordagent-worktrees` beside `DATABASE_PATH` | Managed directory containing isolated task worktrees | Yes |
 
-Development normally stores the database at `src/data/discordagent.sqlite`; compiled execution normally stores it at `dist/data/discordagent.sqlite`. A custom `DATABASE_PATH` changes the default worktree parent accordingly.
+Fresh installations use the same repository-root `data/` directory under `npm run dev`, compiled `npm start`, and `npm run smoke:host`. The database, legacy `projects.json` import file, and default managed-worktree directory all derive from that selected data root.
+
+For compatibility, a sole historical `src/data` or `dist/data` installation is reused in place without moving or copying state. Startup and host preflight report that compatibility selection. If more than one default data root contains a database, legacy project file, or managed-worktree directory, Discord Agent fails closed instead of choosing silently. Set `DATABASE_PATH` to the intended database before restarting; `WORKTREES_BASE_DIR` may be set separately when its location should not remain beside that database.
+
+Explicit non-empty `DATABASE_PATH` and `WORKTREES_BASE_DIR` values always take precedence. Relative explicit paths retain their existing process-working-directory semantics; absolute paths are recommended for service-manager deployments.
 
 ### Integrations and operations
 
@@ -111,4 +115,4 @@ The SQLite database is created automatically on first run. Migrations are versio
 
 ## Source of truth
 
-Runtime behavior in `src/config.ts` is authoritative. This reference and `.env.example` must agree with it. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.
+Runtime behavior in `src/config.ts` and the shared resolver in `src/utils/applicationPaths.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.

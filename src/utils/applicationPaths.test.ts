@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { findPackageRoot, resolveApplicationPaths } from './applicationPaths.js';
 
@@ -17,7 +17,7 @@ function createPackageRoot(): string {
 
 function createStateFile(root: string, relativePath: string): string {
   const path = join(root, relativePath);
-  mkdirSync(join(path, '..'), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, 'state');
   return path;
 }
@@ -44,6 +44,22 @@ describe('application paths', () => {
       databasePath: join(root, 'data', 'discordagent.sqlite'),
       legacyProjectsPath: join(root, 'data', 'projects.json'),
       worktreesBaseDir: join(root, 'data', 'discordagent-worktrees'),
+      selection: 'stable-default',
+    });
+  });
+
+  it('preserves an explicit worktree path with the stable default database', () => {
+    const root = createPackageRoot();
+    const worktreesBaseDir = join(root, 'operator-worktrees');
+
+    expect(resolveApplicationPaths({
+      packageRoot: root,
+      env: { WORKTREES_BASE_DIR: worktreesBaseDir },
+    })).toEqual({
+      dataRoot: join(root, 'data'),
+      databasePath: join(root, 'data', 'discordagent.sqlite'),
+      legacyProjectsPath: join(root, 'data', 'projects.json'),
+      worktreesBaseDir,
       selection: 'stable-default',
     });
   });

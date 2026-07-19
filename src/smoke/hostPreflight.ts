@@ -3,12 +3,18 @@ import { accessSync, constants, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import type { AgentProviderId } from '../agents/contracts.js';
+import {
+  resolveProviderHostConfiguration,
+  resolveRequiredProviderIds,
+} from '../agents/providerConfiguration.js';
 import { buildProcessInvocation } from '../utils/processInvocation.js';
 import { openDatabase } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import { resolveApplicationPaths } from '../utils/applicationPaths.js';
 
 export type PreflightStatus = 'pass' | 'warn' | 'fail';
+export type ProviderAuthenticationStatus = 'authenticated' | 'unauthenticated' | 'unknown';
 
 export interface PreflightCheck {
   readonly name: string;
@@ -19,6 +25,7 @@ export interface PreflightCheck {
 export interface CommandResult {
   readonly ok: boolean;
   readonly detail: string;
+  readonly authentication?: ProviderAuthenticationStatus;
 }
 
 export interface HostPreflightDependencies {
@@ -82,7 +89,11 @@ export function createHostPreflightDependencies(): HostPreflightDependencies {
         const detail = (result.stderr || result.stdout || `exit status ${String(result.status)}`).trim();
         return { ok: false, detail };
       }
-      return { ok: true, detail: (result.stdout || result.stderr || 'available').trim().split('\n')[0]! };
+      return {
+        ok: true,
+        detail: (result.stdout || result.stderr || 'available').trim().split('\n')[0]!,
+        authentication: 'unknown',
+      };
     },
     ensureWritableDirectory(path) {
       try {
@@ -107,6 +118,95 @@ export function createHostPreflightDependencies(): HostPreflightDependencies {
       }
     },
   };
+}
+
+function evaluateProviders(
+  env: NodeJS.ProcessEnv,
+  dependencies: HostPreflightDependencies,
+  checks: PreflightCheck[],
+): void {
+  let requiredProviders = new Set<AgentProviderId>();
+  try {
+    const resolved = resolveRequiredProviderIds(env);
+    requiredProviders = new Set(resolved);
+    checks.push(pass(
+      'Required providers',
+      resolved.length > 0 ? resolved.join(', ') : 'None explicitly required.',
+    ));
+  } catch (error) {
+    checks.push(fail('Required providers', error instanceof Error ? error.message : String(error)));
+  }
+
+  const providers = resolveProviderHostConfiguration(env);
+  const availableProviders: string[] = [];
+  const enabledProviders = providers.filter(provider => provider.enabled);
+
+  for (const provider of providers) {
+    const name = `${provider.displayName} provider`;
+    const required = requiredProviders.has(provider.id);
+
+    if (!provider.enabled) {
+      checks.push(required
+        ? fail(
+          name,
+          `Required provider is disabled by ${provider.enabledEnv}=false. `
+          + `Enable it or remove it from REQUIRED_PROVIDERS.`,
+        )
+        : pass(name, `Disabled by ${provider.enabledEnv}=false.`));
+      continue;
+    }
+
+    const result = dependencies.runCommand(provider.command, provider.versionArgs);
+    const authentication = result.authentication ?? 'unknown';
+    const available = result.ok && authentication !== 'unauthenticated';
+
+    if (available) {
+      availableProviders.push(provider.displayName);
+      checks.push(pass(
+        name,
+        authentication === 'authenticated'
+          ? `${result.detail}; authenticated.`
+          : `${result.detail}; authentication not verified by smoke:host.`,
+      ));
+      continue;
+    }
+
+    const unavailableDetail = authentication === 'unauthenticated'
+      ? `${result.detail}; authentication required.`
+      : result.detail;
+    checks.push(required
+      ? fail(
+        name,
+        `Required provider unavailable: ${unavailableDetail} `
+        + `Install or authenticate ${provider.displayName}, or disable it with `
+        + `${provider.enabledEnv}=false only after removing it from REQUIRED_PROVIDERS.`,
+      )
+      : warn(
+        name,
+        `${unavailableDetail} Install or authenticate ${provider.displayName}, `
+        + `or disable it with ${provider.enabledEnv}=false.`,
+      ));
+  }
+
+  if (availableProviders.length === 0) {
+    checks.push(fail(
+      'Provider readiness',
+      'No enabled provider is available. Install or authenticate at least one enabled provider, '
+      + 'or enable a provider that is already installed.',
+    ));
+  } else if (availableProviders.length === enabledProviders.length) {
+    checks.push(pass(
+      'Provider readiness',
+      `${enabledProviders.length} enabled provider${enabledProviders.length === 1 ? '' : 's'} `
+      + `are available: ${availableProviders.join(', ')}.`,
+    ));
+  } else {
+    checks.push(pass(
+      'Provider readiness',
+      `${availableProviders.length} of ${enabledProviders.length} enabled providers available: `
+      + `${availableProviders.join(', ')}.`,
+    ));
+  }
 }
 
 export function evaluateHostPreflight(
@@ -174,20 +274,18 @@ export function evaluateHostPreflight(
     checks.push(fail('Application data', error instanceof Error ? error.message : String(error)));
   }
 
-  for (const [name, command, args, required] of [
-    ['Git CLI', 'git', ['--version'], true],
-    ['Claude CLI', 'claude', ['--version'], false],
-    ['Codex CLI', env.CODEX_CLI_PATH?.trim() || 'codex', ['--version'], env.CODEX_ENABLED !== 'false'],
-    ['OpenCode CLI', env.OPENCODE_CLI_PATH?.trim() || 'opencode', ['--version'], env.OPENCODE_ENABLED !== 'false'],
-    ['Roborev CLI', env.ROBOREV_CLI_PATH?.trim() || 'roborev', ['version'], false],
-  ] as const) {
-    const result = dependencies.runCommand(command, args);
-    checks.push(result.ok
-      ? pass(name, result.detail)
-      : required
-        ? fail(name, result.detail)
-        : warn(name, `${result.detail} (optional)`));
-  }
+  const git = dependencies.runCommand('git', ['--version']);
+  checks.push(git.ok ? pass('Git CLI', git.detail) : fail('Git CLI', git.detail));
+
+  evaluateProviders(env, dependencies, checks);
+
+  const roborev = dependencies.runCommand(
+    env.ROBOREV_CLI_PATH?.trim() || 'roborev',
+    ['version'],
+  );
+  checks.push(roborev.ok
+    ? pass('Roborev CLI', roborev.detail)
+    : warn('Roborev CLI', `${roborev.detail} (optional)`));
 
   const database = dependencies.verifyDatabase();
   checks.push(database.ok

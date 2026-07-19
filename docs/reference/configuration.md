@@ -59,6 +59,24 @@ Codex credentials and device-authentication state are managed by the Codex CLI o
 | `OPENCODE_MODEL` | string | provider default | Host default OpenCode task model | No |
 | `OPENCODE_PRIMARY_MODEL` | string | provider/global default | OpenCode-specific model for PM-style primary-agent turns | No |
 
+### Provider readiness
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `REQUIRED_PROVIDERS` | comma-separated provider IDs | empty | Require specific providers to pass `smoke:host`; valid IDs are `claude`, `codex`, and `opencode` | No |
+
+`npm run smoke:host` reports `READY` when at least one enabled provider executable is available and all explicitly required providers are available. Additional enabled but unavailable providers are warnings with install, authenticate, or disable guidance. Disabled providers are reported without being probed.
+
+Set `REQUIRED_PROVIDERS` for a deployment that depends on a particular provider:
+
+```bash
+REQUIRED_PROVIDERS=codex npm run smoke:host
+```
+
+Multiple requirements use commas, such as `claude,codex`. Requiring a disabled or unavailable provider makes preflight fail even when another provider is available. Unknown provider IDs are configuration failures.
+
+The deterministic host preflight does not make a paid model call. It reports authentication when a provider probe can determine it; otherwise it states that authentication was not verified. Use `npm run smoke:agent -- --provider <provider>` for the live authenticated round trip.
+
 ### Primary agent and usage admission
 
 | Variable | Type | Default | Purpose | Sensitive |
@@ -115,4 +133,4 @@ The SQLite database is created automatically on first run. Migrations are versio
 
 ## Source of truth
 
-Runtime behavior in `src/config.ts` and the shared resolver in `src/utils/applicationPaths.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.
+Runtime behavior in `src/config.ts`, provider host defaults in `src/agents/providerConfiguration.ts`, and application paths in `src/utils/applicationPaths.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.

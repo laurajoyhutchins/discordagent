@@ -54,7 +54,7 @@
 
 - **Driver:** `better-sqlite3` ^12.4.1
 - **Migrations:** Versioned, transactional, recorded in `schema_migrations`
-- **Current schema version:** 10
+- **Current schema version:** 11
 
 ## Operating system
 

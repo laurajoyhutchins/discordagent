@@ -170,3 +170,19 @@ jobs:
           test "$STATIC_RESULT" = success
           test "$TEST_RESULT" = success
           test "$DOCS_RESULT" = success
+
+  verify:
+    name: verify
+    if: always()
+    needs:
+      - gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Preserve required-check compatibility
+        env:
+          GATE_RESULT: ${{ needs.gate.result }}
+        run: |
+          printf 'CI gate: %s\n' "$GATE_RESULT"
+          test "$GATE_RESULT" = success

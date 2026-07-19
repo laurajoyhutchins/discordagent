@@ -21,6 +21,7 @@ export function deliverRoborevNotification(
   };
   const fallback: MessageCreateOptions = {
     content: buildReviewText(notification),
+    allowedMentions: { parse: [] },
   };
 
   return deliverPresentation({

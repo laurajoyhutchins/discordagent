@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+import { resolveApplicationPaths } from '../utils/applicationPaths.js';
 
 export interface DatabaseHandle {
   readonly raw: Database.Database;
@@ -9,8 +9,7 @@ export interface DatabaseHandle {
 }
 
 function defaultDatabasePath(): string {
-  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-  return process.env.DATABASE_PATH ?? join(moduleDirectory, '..', 'data', 'discordagent.sqlite');
+  return resolveApplicationPaths().databasePath;
 }
 
 export function openDatabase(path: string = defaultDatabasePath()): DatabaseHandle {

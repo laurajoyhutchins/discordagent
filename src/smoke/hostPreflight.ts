@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { buildProcessInvocation } from '../utils/processInvocation.js';
 import { openDatabase } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
+import { resolveApplicationPaths } from '../utils/applicationPaths.js';
 
 export type PreflightStatus = 'pass' | 'warn' | 'fail';
 
@@ -154,17 +155,24 @@ export function evaluateHostPreflight(
       : fail('Project path boundary', result.detail));
   }
 
-  const databasePath = env.DATABASE_PATH?.trim() || resolve('src/data/discordagent.sqlite');
-  const databaseDirectory = dependencies.ensureWritableDirectory(dirname(databasePath));
-  checks.push(databaseDirectory.ok
-    ? pass('Database directory', databaseDirectory.detail)
-    : fail('Database directory', databaseDirectory.detail));
+  try {
+    const applicationPaths = resolveApplicationPaths({ env });
+    checks.push(applicationPaths.notice
+      ? warn('Application data', applicationPaths.notice)
+      : pass('Application data', applicationPaths.dataRoot));
 
-  const worktreesPath = env.WORKTREES_BASE_DIR?.trim() || resolve(dirname(databasePath), 'discordagent-worktrees');
-  const worktreesDirectory = dependencies.ensureWritableDirectory(worktreesPath);
-  checks.push(worktreesDirectory.ok
-    ? pass('Worktree directory', worktreesDirectory.detail)
-    : fail('Worktree directory', worktreesDirectory.detail));
+    const databaseDirectory = dependencies.ensureWritableDirectory(dirname(applicationPaths.databasePath));
+    checks.push(databaseDirectory.ok
+      ? pass('Database directory', databaseDirectory.detail)
+      : fail('Database directory', databaseDirectory.detail));
+
+    const worktreesDirectory = dependencies.ensureWritableDirectory(applicationPaths.worktreesBaseDir);
+    checks.push(worktreesDirectory.ok
+      ? pass('Worktree directory', worktreesDirectory.detail)
+      : fail('Worktree directory', worktreesDirectory.detail));
+  } catch (error) {
+    checks.push(fail('Application data', error instanceof Error ? error.message : String(error)));
+  }
 
   for (const [name, command, args, required] of [
     ['Git CLI', 'git', ['--version'], true],

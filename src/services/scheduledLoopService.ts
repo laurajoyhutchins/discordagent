@@ -1,5 +1,6 @@
 import type { AnyThreadChannel } from 'discord.js';
 import type {
+  CreateScheduledLoopInput,
   LoopRepository,
   ScheduledLoopRecord,
 } from '../repositories/loopRepository.js';
@@ -19,6 +20,11 @@ export interface ScheduledLoopServiceOptions {
     project: Project,
     thread: AnyThreadChannel,
   ) => Promise<ScheduledLoopExecutionResult | void>;
+  readonly presentWaiting?: (
+    loop: ScheduledLoopRecord,
+    project: Project,
+    thread: AnyThreadChannel,
+  ) => Promise<ScheduledLoopExecutionResult | void>;
   readonly schedule?: (
     callback: () => Promise<void>,
     delayMs: number,
@@ -29,6 +35,11 @@ export interface ScheduledLoopServiceOptions {
 }
 
 export interface ScheduledLoopService {
+  createAndStart(
+    input: CreateScheduledLoopInput,
+    project: Project,
+    thread: AnyThreadChannel,
+  ): Promise<ScheduledLoopRecord>;
   start(
     loop: ScheduledLoopRecord,
     project: Project,
@@ -65,16 +76,12 @@ export function createScheduledLoopService(
   const now = options.now ?? Date.now;
   const logger = options.logger ?? (message => console.warn(message));
   const runtimes = new Map<string, RuntimeLoop>();
-  const runtimeByChannel = new Map<string, string>();
-  const runtimeByThread = new Map<string, string>();
 
   function detach(loopId: string): void {
     const runtime = runtimes.get(loopId);
     if (!runtime) return;
     if (runtime.timer !== undefined) clearSchedule(runtime.timer);
     runtimes.delete(loopId);
-    runtimeByChannel.delete(runtime.channelId);
-    runtimeByThread.delete(runtime.threadId);
   }
 
   function register(
@@ -93,8 +100,6 @@ export function createScheduledLoopService(
       executing: false,
     };
     runtimes.set(loop.id, runtime);
-    runtimeByChannel.set(loop.channelId, loop.id);
-    runtimeByThread.set(loop.threadId, loop.id);
     return runtime;
   }
 
@@ -106,6 +111,17 @@ export function createScheduledLoopService(
       if (firedTimer !== undefined) clearSchedule(firedTimer);
       await runNow(runtime.id);
     }, Math.max(0, delayMs));
+  }
+
+  function terminalizeFromResult(
+    loopId: string,
+    result: ScheduledLoopExecutionResult | void,
+  ): boolean {
+    if (!result?.terminalReason) return false;
+    options.repository.terminalizeById(loopId, result.terminalReason, now());
+    detach(loopId);
+    logger(`[loop] Terminalized ${loopId}: ${result.terminalReason}`);
+    return true;
   }
 
   async function runNow(loopId: string): Promise<void> {
@@ -132,12 +148,7 @@ export function createScheduledLoopService(
       runtime.executing = false;
     }
 
-    if (result?.terminalReason) {
-      options.repository.terminalizeById(loopId, result.terminalReason, now());
-      detach(loopId);
-      logger(`[loop] Terminalized ${loopId}: ${result.terminalReason}`);
-      return;
-    }
+    if (terminalizeFromResult(loopId, result)) return;
 
     const current = options.repository.findById(loopId);
     if (!current || current.status !== 'running') {
@@ -151,7 +162,23 @@ export function createScheduledLoopService(
       detach(loopId);
       return;
     }
-    scheduleRuntime(runtime, acquired.intervalMs);
+
+    if (options.presentWaiting) {
+      let waitingResult: ScheduledLoopExecutionResult | void;
+      try {
+        waitingResult = await options.presentWaiting(waiting, runtime.project, runtime.thread);
+      } catch (error) {
+        logger(`[loop] Waiting presentation for ${loopId} failed: ${redactErrorMessage(error)}`);
+      }
+      if (terminalizeFromResult(loopId, waitingResult)) return;
+    }
+
+    const latest = options.repository.findById(loopId);
+    if (!latest || latest.status !== 'active') {
+      detach(loopId);
+      return;
+    }
+    scheduleRuntime(runtime, Math.max(0, nextRunAt - now()));
   }
 
   async function reconcileOne(loop: ScheduledLoopRecord): Promise<void> {
@@ -194,7 +221,13 @@ export function createScheduledLoopService(
     scheduleRuntime(runtime, Math.max(0, dueAt - now()));
   }
 
-  return {
+  const service: ScheduledLoopService = {
+    async createAndStart(input, project, thread): Promise<ScheduledLoopRecord> {
+      const loop = options.repository.create(input);
+      await service.start(loop, project, thread);
+      return options.repository.findById(loop.id) ?? loop;
+    },
+
     async start(loop, project, thread): Promise<void> {
       register(loop, project, thread);
       await runNow(loop.id);
@@ -248,4 +281,6 @@ export function createScheduledLoopService(
       return runtimes.size;
     },
   };
+
+  return service;
 }

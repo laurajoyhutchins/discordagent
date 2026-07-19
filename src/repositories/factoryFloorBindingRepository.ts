@@ -67,6 +67,12 @@ export interface FactoryFloorBindingRepository {
   findProjectByFactoryFloorId(factoryFloorProjectId: string): FactoryFloorProjectBinding | undefined;
   bindSurface(input: BindSurfaceInput): FactoryFloorSurfaceBinding;
   findSurfaceById(id: string): FactoryFloorSurfaceBinding | undefined;
+  findSurfaceByThread(
+    guildId: string,
+    channelId: string,
+    threadId: string,
+  ): FactoryFloorSurfaceBinding | undefined;
+  findSurfaceByMessage(messageId: string): FactoryFloorSurfaceBinding | undefined;
   findSurfaceByActivityInstance(activityInstanceId: string): FactoryFloorSurfaceBinding | undefined;
   bindRun(input: BindRunInput): FactoryFloorRunBinding;
   findRun(runId: string): FactoryFloorRunBinding | undefined;
@@ -125,6 +131,16 @@ function optional(value: string | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
+function reconciledIdentity(
+  current: string | null,
+  incoming: string | null,
+): string | null {
+  if (current !== null && incoming !== null && current !== incoming) {
+    throw new FactoryFloorBindingConflictError('surface_binding_conflict');
+  }
+  return incoming ?? current;
+}
+
 function mapProject(row: ProjectBindingRow): FactoryFloorProjectBinding {
   return {
     projectName: row.project_name,
@@ -171,6 +187,9 @@ export function createFactoryFloorBindingRepository(
     SELECT id, name FROM projects
     WHERE name = ? COLLATE NOCASE AND archived_at IS NULL
   `);
+  const selectAnyLocalProject = db.raw.prepare(`
+    SELECT id, name FROM projects WHERE name = ? COLLATE NOCASE
+  `);
   const selectProjectByLocal = db.raw.prepare(`
     SELECT binding.*, project.name AS project_name
     FROM factory_floor_project_bindings binding
@@ -213,6 +232,10 @@ export function createFactoryFloorBindingRepository(
     JOIN projects project ON project.id = binding.local_project_id
     WHERE binding.run_id = ?
   `);
+  const selectActiveSurfaceRun = db.raw.prepare(`
+    SELECT run_id FROM factory_floor_run_bindings
+    WHERE surface_id = ? AND retired_at IS NULL
+  `);
 
   function localProject(projectName: string): LocalProjectRow {
     const row = selectLocalProject.get(required(projectName, 'project_name')) as
@@ -222,11 +245,21 @@ export function createFactoryFloorBindingRepository(
     return row;
   }
 
+  function projectIsActive(projectName: string): boolean {
+    return Boolean(selectLocalProject.get(projectName) as LocalProjectRow | undefined);
+  }
+
   function activeProject(projectName: string): ProjectBindingRow {
     const project = localProject(projectName);
     const row = selectProjectByLocal.get(project.id) as ProjectBindingRow | undefined;
     if (!row || row.retired_at !== null) throw new Error('factory_floor_project_not_bound');
     return row;
+  }
+
+  function activeSurface(row: SurfaceBindingRow | undefined): FactoryFloorSurfaceBinding | undefined {
+    return row && row.retired_at === null && projectIsActive(row.project_name)
+      ? mapSurface(row)
+      : undefined;
   }
 
   return {
@@ -285,7 +318,9 @@ export function createFactoryFloorBindingRepository(
       const row = selectProjectByFactory.get(factoryFloorProjectId.trim()) as
         | ProjectBindingRow
         | undefined;
-      return row && row.retired_at === null ? mapProject(row) : undefined;
+      return row && row.retired_at === null && projectIsActive(row.project_name)
+        ? mapProject(row)
+        : undefined;
     },
 
     bindSurface(input) {
@@ -323,19 +358,29 @@ export function createFactoryFloorBindingRepository(
         if (
           existing.local_project_id !== projectBinding.local_project_id ||
           existing.guild_id !== guildId ||
-          existing.channel_id !== channelId ||
-          existing.thread_id !== threadId ||
-          existing.message_id !== messageId ||
-          existing.activity_instance_id !== activityInstanceId
+          existing.channel_id !== channelId
         ) {
           throw new FactoryFloorBindingConflictError('surface_binding_conflict');
         }
+        const nextThreadId = reconciledIdentity(existing.thread_id, threadId);
+        const nextMessageId = reconciledIdentity(existing.message_id, messageId);
+        const nextActivityInstanceId = reconciledIdentity(
+          existing.activity_instance_id,
+          activityInstanceId,
+        );
         const now = Date.now();
         db.raw.prepare(`
           UPDATE factory_floor_surface_bindings
-          SET retired_at = NULL, updated_at = ?
+          SET thread_id = ?, message_id = ?, activity_instance_id = ?,
+              retired_at = NULL, updated_at = ?
           WHERE id = ?
-        `).run(now, existing.id);
+        `).run(
+          nextThreadId,
+          nextMessageId,
+          nextActivityInstanceId,
+          now,
+          existing.id,
+        );
         return mapSurface(selectSurfaceById.get(existing.id) as SurfaceBindingRow);
       }
 
@@ -361,15 +406,27 @@ export function createFactoryFloorBindingRepository(
     },
 
     findSurfaceById(id) {
-      const row = selectSurfaceById.get(id.trim()) as SurfaceBindingRow | undefined;
-      return row && row.retired_at === null ? mapSurface(row) : undefined;
+      return activeSurface(selectSurfaceById.get(id.trim()) as SurfaceBindingRow | undefined);
+    },
+
+    findSurfaceByThread(guildId, channelId, threadId) {
+      return activeSurface(selectSurfaceByThread.get(
+        guildId.trim(),
+        channelId.trim(),
+        threadId.trim(),
+      ) as SurfaceBindingRow | undefined);
+    },
+
+    findSurfaceByMessage(messageId) {
+      return activeSurface(
+        selectSurfaceByMessage.get(messageId.trim()) as SurfaceBindingRow | undefined,
+      );
     },
 
     findSurfaceByActivityInstance(activityInstanceId) {
-      const row = selectSurfaceByActivity.get(activityInstanceId.trim()) as
-        | SurfaceBindingRow
-        | undefined;
-      return row && row.retired_at === null ? mapSurface(row) : undefined;
+      return activeSurface(
+        selectSurfaceByActivity.get(activityInstanceId.trim()) as SurfaceBindingRow | undefined,
+      );
     },
 
     bindRun(input) {
@@ -380,6 +437,13 @@ export function createFactoryFloorBindingRepository(
       if (!surface || surface.retired_at !== null) throw new Error('surface_not_found');
       if (surface.local_project_id !== projectBinding.local_project_id) {
         throw new FactoryFloorBindingConflictError('run_project_mismatch');
+      }
+
+      const activeSurfaceRun = selectActiveSurfaceRun.get(surfaceId) as
+        | { run_id: string }
+        | undefined;
+      if (activeSurfaceRun && activeSurfaceRun.run_id !== runId) {
+        throw new FactoryFloorBindingConflictError('surface_already_bound_to_run');
       }
 
       const existing = selectRun.get(runId) as RunBindingRow | undefined;
@@ -399,14 +463,6 @@ export function createFactoryFloorBindingRepository(
         return mapRun(selectRun.get(runId) as RunBindingRow);
       }
 
-      const activeSurfaceRun = db.raw.prepare(`
-        SELECT run_id FROM factory_floor_run_bindings
-        WHERE surface_id = ? AND retired_at IS NULL
-      `).get(surfaceId) as { run_id: string } | undefined;
-      if (activeSurfaceRun) {
-        throw new FactoryFloorBindingConflictError('surface_already_bound_to_run');
-      }
-
       const now = Date.now();
       db.raw.prepare(`
         INSERT INTO factory_floor_run_bindings (
@@ -418,11 +474,15 @@ export function createFactoryFloorBindingRepository(
 
     findRun(runId) {
       const row = selectRun.get(runId.trim()) as RunBindingRow | undefined;
-      return row && row.retired_at === null ? mapRun(row) : undefined;
+      return row && row.retired_at === null && projectIsActive(row.project_name)
+        ? mapRun(row)
+        : undefined;
     },
 
     retireProject(projectName) {
-      const project = selectLocalProject.get(projectName.trim()) as LocalProjectRow | undefined;
+      const project = selectAnyLocalProject.get(projectName.trim()) as
+        | LocalProjectRow
+        | undefined;
       if (!project) return false;
       const now = Date.now();
       return db.raw.transaction(() => {
@@ -446,18 +506,19 @@ export function createFactoryFloorBindingRepository(
     },
 
     retireSurface(id) {
+      const normalizedId = id.trim();
       const now = Date.now();
       return db.raw.transaction(() => {
         const result = db.raw.prepare(`
           UPDATE factory_floor_surface_bindings
           SET retired_at = ?, updated_at = ?
           WHERE id = ? AND retired_at IS NULL
-        `).run(now, now, id.trim());
+        `).run(now, now, normalizedId);
         db.raw.prepare(`
           UPDATE factory_floor_run_bindings
           SET retired_at = ?, updated_at = ?
           WHERE surface_id = ? AND retired_at IS NULL
-        `).run(now, now, id.trim());
+        `).run(now, now, normalizedId);
         return result.changes === 1;
       })();
     },

@@ -40,7 +40,7 @@ Run through pull-request CI and confirm failure before runtime implementation.
 
 Add explicit options, skip guild/channel and recovery rendering, construct and activate the selected primary provider, preserve the shared delegator, and reject task launch.
 
-- [ ] **Step 4: Run focused and full verification**
+- [x] **Step 4: Run focused and full verification**
 
 Run `npm test`, `npm run build`, `npm run check:docs`, and `git diff --check` through CI.
 
@@ -66,7 +66,7 @@ Create a temporary database/worktree directory, initialize only requested provid
 
 Check target availability, call the production activation boundary, send a second turn through the same conversation service, and verify four journal entries.
 
-- [ ] **Step 4: Verify compilation and tests**
+- [x] **Step 4: Verify compilation and tests**
 
 Use pull-request CI for `npm test` and `npm run build`.
 
@@ -87,6 +87,6 @@ Document one-provider and switch-provider commands, the verification boundary, a
 
 Add it to the Operations section of the how-to index.
 
-- [ ] **Step 3: Verify links**
+- [x] **Step 3: Verify links**
 
 Run `npm run check:docs` through CI.

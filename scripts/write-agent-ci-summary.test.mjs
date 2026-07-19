@@ -27,6 +27,15 @@ test('findActionableError ignores zero-error summaries', () => {
   );
 });
 
+test('findActionableError ignores failure words in file paths', () => {
+  assert.equal(
+    findActionableError(
+      '- contracts/schemas/failure-descriptor.schema.json\n[warn] Code style issues found in 3 files.',
+    ),
+    '[warn] Code style issues found in 3 files.',
+  );
+});
+
 test('writes a failed handoff for the last started stage', () => {
   withTemp((directory) => {
     const manifest = join(directory, 'manifest.json');

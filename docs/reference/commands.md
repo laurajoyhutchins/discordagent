@@ -14,7 +14,7 @@ Open a message's context menu and choose **Apps → Turn into task**. The select
 
 | Command | Valid Discord context | Authorization | Side effects |
 |---|---|---|---|
-| `/help` | Any guild channel | `AUTHORIZED_ROLE_IDS` | Read-only contextual guidance for the primary channel, project channel, task thread, or general workspace |
+| `/help` | Any guild channel | `AUTHORIZED_ROLE_IDS` | Read-only contextual guidance for the primary channel, project channel, task thread, review channel, or general workspace |
 | `/add-project` | Guild channel | `AUTHORIZED_ROLE_IDS` | Creates a project category and `#agent` channel, optionally creates `#roborev`, and persists the project |
 | `/list-projects` | Guild channel | `AUTHORIZED_ROLE_IDS` | Read-only project listing |
 | `/remove-project` | Guild channel | `AUTHORIZED_ROLE_IDS` | Archives the project and deletes its Discord category and channels; preserves historical records and worktrees |
@@ -35,14 +35,15 @@ Open a message's context menu and choose **Apps → Turn into task**. The select
 
 ### `/help`
 
-No parameters. Discord Agent detects the current context and returns a private guidance card:
+No parameters. Discord Agent detects the current context and returns private guidance:
 
 - in `#agent-chat`, it explains natural PM conversation and global controls;
 - in a project channel, it explains how ordinary messages create isolated durable tasks;
 - in a task thread, it explains continuation, inspection, cancellation, one-turn model overrides, and sibling provider handoffs;
+- in a RoboRev channel or a thread beneath it, it explains that review delivery is separate from task execution and points back to the project's `#agent` channel;
 - elsewhere, it points to project discovery and registration commands.
 
-The command is read-only and does not inspect or expose provider-session identifiers.
+The command is read-only and does not inspect or expose provider-session identifiers. When **Embed Links** is unavailable, it returns the same guidance as readable plain text.
 
 ### `/add-project`
 
@@ -56,7 +57,7 @@ The path must exist and resolve on the bot host. Discord does not expand `~`, sh
 
 Provider availability, path validation, and duplicate-name validation occur before channel creation. If later persistence fails after channels are created, Discord Agent attempts compensating channel cleanup rather than leaving a partial project installation.
 
-When RoboRev is enabled, the project receives a `#roborev` channel and the review-source lifecycle is notified after the project is persisted.
+When RoboRev is enabled, the project receives a `#roborev` channel and the review-source lifecycle is notified after the project is persisted. Project-ready and project-listing responses fall back to readable plain text when **Embed Links** is unavailable.
 
 ### `/remove-project`
 

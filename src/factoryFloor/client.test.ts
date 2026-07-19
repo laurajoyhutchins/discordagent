@@ -118,7 +118,7 @@ describe('FactoryFloorServiceClient', () => {
         text: async () => {
           throw new Error('stream failed with opaque-session-token');
         },
-      }) as Response,
+      }) as unknown as Response,
     });
 
     await expect(client.refreshActivitySession('opaque-session-token')).rejects.toMatchObject({

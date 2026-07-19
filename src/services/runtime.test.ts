@@ -148,7 +148,6 @@ describe('runtime startup', () => {
       conversationId: 'headless:primary',
       userId: 'owner',
       text: 'first turn',
-      createdAt: 1,
     });
     expect(first).toEqual({ kind: 'reply', text: 'claude ready' });
 
@@ -157,7 +156,6 @@ describe('runtime startup', () => {
       conversationId: 'headless:primary',
       userId: 'owner',
       text: 'second turn',
-      createdAt: 2,
     });
     expect(second).toEqual({ kind: 'reply', text: 'codex ready' });
     expect(runtime.messages.recent('headless:primary').map(entry => entry.role)).toEqual([

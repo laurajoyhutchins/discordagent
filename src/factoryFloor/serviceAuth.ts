@@ -102,7 +102,7 @@ export function signServiceRequest(
   path: string,
   body: ServiceAuthBody,
   now = Date.now(),
-  nonce = randomUUID(),
+  nonce: string = randomUUID(),
 ): SignedServiceRequest {
   const timestamp = String(now);
   const keyId = serviceAuthKeyId(direction);

@@ -1,10 +1,30 @@
 # Verify agent plumbing without Discord
 
-Use the headless live-agent smoke test to verify the primary-agent runtime and a configured provider without opening a Discord gateway connection.
+Use host preflight and the headless live-agent smoke test to verify the runtime without opening a Discord gateway connection.
 
-The command uses a temporary SQLite database and worktree directory. It initializes the production provider adapter, primary model, context assembler, conversation service, provider activation boundary, and durable message journal. Temporary state is deleted when the command exits.
+## Run deterministic host preflight
+
+Start with:
+
+```bash
+npm run smoke:host
+```
+
+The host reports `READY` when its required Discord configuration, filesystem, Git, and SQLite checks pass and at least one enabled provider executable is available. Other enabled but unavailable providers are warnings rather than host-wide failures. Disable an intentionally absent provider with its `*_ENABLED=false` setting.
+
+Require a particular provider for a deployment or one invocation with:
+
+```bash
+REQUIRED_PROVIDERS=codex npm run smoke:host
+```
+
+Valid provider IDs are `claude`, `codex`, and `opencode`; multiple IDs are comma-separated. A required provider fails preflight when disabled, unavailable, or reported unauthenticated.
+
+Host preflight does not make a paid model call. Executable probes may not verify authentication, so use the live smoke test below before relying on a provider in production.
 
 ## Run one provider round trip
+
+The headless live-agent command uses a temporary SQLite database and worktree directory. It initializes the production provider adapter, primary model, context assembler, conversation service, provider activation boundary, and durable message journal. Temporary state is deleted when the command exits.
 
 Choose a provider that is installed and authenticated on the host:
 
@@ -42,9 +62,9 @@ npm run smoke:agent -- \
 
 Use a low-cost prompt that should not produce a task proposal or require external tools.
 
-## What this verifies
+## What the live smoke test verifies
 
-The smoke test verifies:
+The live smoke test verifies:
 
 - provider discovery and availability;
 - construction of the real primary model adapter;
@@ -55,9 +75,9 @@ The smoke test verifies:
 - optional live provider reconfiguration;
 - runtime shutdown and temporary-state cleanup.
 
-## What this does not verify
+## What the live smoke test does not verify
 
-The smoke test does not verify:
+The live smoke test does not verify:
 
 - Discord gateway authentication or event delivery;
 - guild roles, channel permissions, or command registration;
@@ -68,4 +88,4 @@ Use `npm run smoke:discord` for Discord REST configuration checks. A minimal man
 
 ## Failure behavior
 
-The command exits nonzero and prints `NOT READY` when the selected provider is unavailable, authentication is missing, a model turn fails, the response is empty, provider switching fails, or the durable journal does not contain the expected user and assistant entries.
+The live command exits nonzero and prints `NOT READY` when the selected provider is unavailable, authentication is missing, a model turn fails, the response is empty, provider switching fails, or the durable journal does not contain the expected user and assistant entries.

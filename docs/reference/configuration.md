@@ -54,10 +54,28 @@ Codex credentials and device-authentication state are managed by the Codex CLI o
 | Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
 | `OPENCODE_ENABLED` | boolean | `true` | Enable the OpenCode ACP provider | No |
-| `OPENCODE_CLI_PATH` | executable path or command | `opencode` | OpenCode ACP provider executable | Potentially |
+| `OPENCODE_CLI_PATH` | executable path or command | `opencode` | OpenCode CLI executable | Potentially |
 | `OPENCODE_TIMEOUT_MS` | integer milliseconds | `900000` | OpenCode task-turn timeout | No |
 | `OPENCODE_MODEL` | string | provider default | Host default OpenCode task model | No |
 | `OPENCODE_PRIMARY_MODEL` | string | provider/global default | OpenCode-specific model for PM-style primary-agent turns | No |
+
+### Provider readiness
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `REQUIRED_PROVIDERS` | comma-separated provider IDs | empty | Require specific providers to pass `smoke:host`; valid IDs are `claude`, `codex`, and `opencode` | No |
+
+`npm run smoke:host` reports `READY` when at least one enabled provider executable is available and all explicitly required providers are available. Additional enabled but unavailable providers are warnings with install, authenticate, or disable guidance. Disabled providers are reported without being probed.
+
+Set `REQUIRED_PROVIDERS` for a deployment that depends on a particular provider:
+
+```bash
+REQUIRED_PROVIDERS=codex npm run smoke:host
+```
+
+Multiple requirements use commas, such as `claude,codex`. Requiring a disabled or unavailable provider makes preflight fail even when another provider is available. Unknown provider IDs are configuration failures.
+
+The deterministic host preflight does not make a paid model call. It reports authentication when a provider probe can determine it; otherwise it states that authentication was not verified. Use `npm run smoke:agent -- --provider <provider>` for the live authenticated round trip.
 
 ### Primary agent and usage admission
 
@@ -92,10 +110,14 @@ Discord Agent SQLite stores only local project/surface/run linkage and bounded r
 
 | Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `DATABASE_PATH` | path | runtime data directory | SQLite database file | Yes |
+| `DATABASE_PATH` | path | `<repository>/data/discordagent.sqlite` | SQLite database file | Yes |
 | `WORKTREES_BASE_DIR` | path | `discordagent-worktrees` beside `DATABASE_PATH` | Managed directory containing isolated task worktrees | Yes |
 
-Development normally stores the database at `src/data/discordagent.sqlite`; compiled execution normally stores it at `dist/data/discordagent.sqlite`. A custom `DATABASE_PATH` changes the default worktree parent accordingly.
+Fresh installations use the same repository-root `data/` directory under `npm run dev`, compiled `npm start`, and `npm run smoke:host`. The database, legacy `projects.json` import file, and default managed-worktree directory all derive from that selected data root.
+
+For compatibility, a sole historical `src/data` or `dist/data` installation is reused in place without moving or copying state. Startup and host preflight report that compatibility selection. If more than one default data root contains a database, legacy project file, or managed-worktree directory, Discord Agent fails closed instead of choosing silently. Set `DATABASE_PATH` to the intended database before restarting; `WORKTREES_BASE_DIR` may be set separately when its location should not remain beside that database.
+
+Explicit non-empty `DATABASE_PATH` and `WORKTREES_BASE_DIR` values always take precedence. Relative explicit paths retain their existing process-working-directory semantics; absolute paths are recommended for service-manager deployments.
 
 ### Integrations and operations
 
@@ -133,4 +155,4 @@ The SQLite database is created automatically on first run. Migrations are versio
 
 ## Source of truth
 
-Runtime behavior in `src/config.ts` and adapter-specific validation in `src/factoryFloor/config.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.
+Runtime behavior in `src/config.ts`, provider host defaults in `src/agents/providerConfiguration.ts`, application paths in `src/utils/applicationPaths.ts`, and adapter-specific validation in `src/factoryFloor/config.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.

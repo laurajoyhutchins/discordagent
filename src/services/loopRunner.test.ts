@@ -34,11 +34,14 @@ function addChannelCapabilities(
   target: object,
   permissions: readonly bigint[],
 ): void {
+  const candidate = target as { id?: string; isThread?: () => boolean };
   const member = { permissions: new PermissionsBitField(permissions) };
   Object.assign(target, {
+    id: candidate.id ?? 'channel-1',
     guild: { members: { me: member } },
     parent: null,
     permissionsFor: () => new PermissionsBitField(permissions),
+    isThread: candidate.isThread ?? (() => false),
   });
 }
 

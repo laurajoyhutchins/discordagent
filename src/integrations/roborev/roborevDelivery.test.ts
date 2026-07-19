@@ -18,7 +18,7 @@ const notification: ReviewNotification = {
     verdict: 'B',
     agent: 'reviewer',
     jobId: 42,
-    body: 'Minor formatting issues found.',
+    body: 'Minor formatting issues found. @everyone',
     timestamp: '2026-07-18T12:00:00Z',
   },
 };
@@ -38,7 +38,7 @@ function channel(
 }
 
 describe('deliverRoborevNotification', () => {
-  it('delivers bounded text proactively when Embed Links is unavailable', async () => {
+  it('delivers bounded text proactively without parsing mentions when Embed Links is unavailable', async () => {
     const send = vi.fn(async (_payload: MessageCreateOptions) => ({ id: 'message-1' }));
 
     const result = await deliverRoborevNotification(
@@ -50,6 +50,7 @@ describe('deliverRoborevNotification', () => {
     expect(send).toHaveBeenCalledOnce();
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringMatching(/Review: abcdef12.*Minor Issues.*Minor formatting issues found/s),
+      allowedMentions: { parse: [] },
     }));
     const payload = send.mock.calls[0]![0];
     expect(payload.content).toBeDefined();
@@ -69,7 +70,10 @@ describe('deliverRoborevNotification', () => {
 
     expect(result).toEqual({ delivered: true, mode: 'text' });
     expect(send.mock.calls[0]![0]).toEqual(expect.objectContaining({ embeds: expect.any(Array) }));
-    expect(send.mock.calls[1]![0]).toEqual(expect.objectContaining({ content: expect.any(String) }));
+    expect(send.mock.calls[1]![0]).toEqual(expect.objectContaining({
+      content: expect.any(String),
+      allowedMentions: { parse: [] },
+    }));
     expect(logger).toHaveBeenCalledWith(expect.stringMatching(/embed send failed/i));
   });
 

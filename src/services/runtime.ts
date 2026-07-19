@@ -71,7 +71,10 @@ export interface RuntimeOptions {
   disableCodex?: boolean;
   disableOpenCode?: boolean;
   primaryModel?: PrimaryModel;
+  primaryModelFactory?: (provider: AgentProviderId) => PrimaryModel | undefined;
   disablePrimaryAgent?: boolean;
+  headlessPrimaryAgent?: boolean;
+  primaryProvider?: AgentProviderId;
   disableUsagePolling?: boolean;
 }
 
@@ -280,7 +283,7 @@ export async function startRuntime(
         try {
           const availability = await openCodeProvider.checkAvailability();
           if (availability.available) providers.register(openCodeProvider);
-          else console.warn('[runtime] OpenCode ACP unavailable:', redactErrorMessage(availability.reason ?? 'OpenCode provider is unavailable'));
+          else console.warn('[runtime] OpenCode ACP unavailable:', redactErrorMessage(availability.reason ?? 'OpenCode ACP is unavailable'));
         } catch (error) {
           console.warn('[runtime] OpenCode ACP unavailable:', redactErrorMessage(error));
         }
@@ -329,15 +332,19 @@ export async function startRuntime(
     const delegatingConversationService = createDelegatingConversationService();
     const conversationService = delegatingConversationService.service;
     let primaryProviderActivator: ((provider: AgentProviderId) => Promise<PrimaryProviderActivationResult>) | undefined;
-    const selectedProvider = settings.getDefaultProvider();
-    if (!options.disablePrimaryAgent && config.authorizedUserId) {
+    const selectedProvider = options.headlessPrimaryAgent ? options.primaryProvider : settings.getDefaultProvider();
+    if (!options.disablePrimaryAgent && (options.headlessPrimaryAgent || config.authorizedUserId)) {
       seedPolicyMemories(memories);
-      const guild = await client.guilds.fetch(config.guildId);
-      const configuredPrimaryChannelId = settings.get('primary_channel_id');
-      const primaryChannel = await ensurePrimaryAgentChannel(guild, config.authorizedRoleIds, config.authorizedUserId, configuredPrimaryChannelId);
-      if (configuredPrimaryChannelId !== primaryChannel.id) settings.set('primary_channel_id', primaryChannel.id);
+      let primaryChannel: import('discord.js').TextChannel | undefined;
+      if (!options.headlessPrimaryAgent) {
+        const guild = await client.guilds.fetch(config.guildId);
+        const configuredPrimaryChannelId = settings.get('primary_channel_id');
+        primaryChannel = await ensurePrimaryAgentChannel(guild, config.authorizedRoleIds, config.authorizedUserId, configuredPrimaryChannelId);
+        if (configuredPrimaryChannelId !== primaryChannel.id) settings.set('primary_channel_id', primaryChannel.id);
+      }
       const context = createContextAssembler({ projects, tasks, messages, memories, usage });
       const createPrimaryModel = (provider: AgentProviderId): PrimaryModel | undefined => {
+        if (options.primaryModelFactory) return options.primaryModelFactory(provider);
         if (options.primaryModel) return options.primaryModel;
         const globalSettings = settingsService.global();
         const configuredModel = provider === 'claude'
@@ -381,10 +388,14 @@ export async function startRuntime(
         return undefined;
       };
       const fetchProjectChannel = async (id: string): Promise<import('discord.js').TextChannel | null> => {
+        if (options.headlessPrimaryAgent) return null;
         const channel = await client.channels.fetch(id).catch(() => null);
         return channel?.isTextBased() && !channel.isDMBased() && !channel.isThread() ? channel as import('discord.js').TextChannel : null;
       };
       const sharedLaunchTask = async (proposal: PrimaryTaskProposal): Promise<void> => {
+        if (options.headlessPrimaryAgent) {
+          throw new Error('Task launch is unavailable in headless primary-agent mode.');
+        }
         const project = projects.findByName(proposal.projectName);
         if (!project) throw new Error(`Project "${proposal.projectName}" is not registered`);
         const channel = await fetchProjectChannel(project.agentChannelId);
@@ -392,8 +403,9 @@ export async function startRuntime(
         const seed = await channel.send(`Delegated by the primary agent: ${proposal.objective}`);
         await coordinator.startFromMessage({ projectName: project.name, prompt: proposal.objective, message: seed, provider: proposal.provider ?? project.defaultProvider });
       };
+      let activePrimaryProvider: AgentProviderId | undefined;
       const activatePrimaryProvider = async (provider: AgentProviderId): Promise<PrimaryProviderActivationResult> => {
-        const wasActive = primaryAgent !== undefined;
+        const wasActive = activePrimaryProvider !== undefined;
         const model = createPrimaryModel(provider);
         if (!model) throw new Error(`Provider ${provider} is not available for the PM chat on this host.`);
         const realService = createPrimaryConversationService({
@@ -401,9 +413,10 @@ export async function startRuntime(
           launchTask: sharedLaunchTask,
         });
         delegatingConversationService.setTarget(realService);
-        if (!primaryAgent) {
+        activePrimaryProvider = provider;
+        if (!options.headlessPrimaryAgent && !primaryAgent) {
           primaryAgent = createPrimaryAgentService({
-            channelId: primaryChannel.id, ownerId: config.authorizedUserId!,
+            channelId: primaryChannel!.id, ownerId: config.authorizedUserId!,
             conversationService,
             model, context, messages, memories, projects, coordinator,
             fetchProjectChannel,
@@ -413,27 +426,42 @@ export async function startRuntime(
         return wasActive ? 'reconfigured' : 'activated';
       };
       primaryProviderActivator = activatePrimaryProvider;
-      providerOnboarding = createProviderOnboardingService({
-        ownerId: config.authorizedUserId,
-        settings: settingsService,
-        metadata: settings,
-        providers,
-        channel: primaryChannel,
-        botUserId: client.user?.id ?? '',
-        onSelected: activatePrimaryProvider,
-        captureSelectionState: capturePrimaryProviderState,
-      });
-      setAgentRuntimeServices({ providers, tasks, pendingTasks, settingsService, providerOnboarding, primaryProviderActivator, primaryChannelId: primaryChannel.id, primaryOwnerId: config.authorizedUserId, ...(codexAuth ? { codexAuth } : {}) });
-      if (!selectedProvider) {
-        await providerOnboarding.ensurePrompt();
-      } else {
+
+      if (options.headlessPrimaryAgent) {
+        if (!selectedProvider) {
+          throw new Error('Headless primary-agent mode requires a primaryProvider.');
+        }
         const selected = providers.list().includes(selectedProvider) ? providers.require(selectedProvider) : undefined;
-        const availability = selected ? await selected.checkAvailability() : { available: false, reason: `Persisted provider "${selectedProvider}" is not registered on this host.` };
+        const availability = selected
+          ? await selected.checkAvailability()
+          : { available: false, reason: `Provider "${selectedProvider}" is not registered on this host.` };
         if (!selected || !availability.available) {
-          await providerOnboarding.ensurePrompt({ forceSelection: true });
-        } else {
-          await activatePrimaryProvider(selectedProvider);
+          throw new Error(availability.reason ?? `Provider "${selectedProvider}" is unavailable on this host.`);
+        }
+        await activatePrimaryProvider(selectedProvider);
+      } else {
+        providerOnboarding = createProviderOnboardingService({
+          ownerId: config.authorizedUserId,
+          settings: settingsService,
+          metadata: settings,
+          providers,
+          channel: primaryChannel!,
+          botUserId: client.user?.id ?? '',
+          onSelected: activatePrimaryProvider,
+          captureSelectionState: capturePrimaryProviderState,
+        });
+        setAgentRuntimeServices({ providers, tasks, pendingTasks, settingsService, providerOnboarding, primaryProviderActivator, primaryChannelId: primaryChannel!.id, primaryOwnerId: config.authorizedUserId, ...(codexAuth ? { codexAuth } : {}) });
+        if (!selectedProvider) {
           await providerOnboarding.ensurePrompt();
+        } else {
+          const selected = providers.list().includes(selectedProvider) ? providers.require(selectedProvider) : undefined;
+          const availability = selected ? await selected.checkAvailability() : { available: false, reason: `Persisted provider "${selectedProvider}" is not registered on this host.` };
+          if (!selected || !availability.available) {
+            await providerOnboarding.ensurePrompt({ forceSelection: true });
+          } else {
+            await activatePrimaryProvider(selectedProvider);
+            await providerOnboarding.ensurePrompt();
+          }
         }
       }
     }
@@ -487,7 +515,9 @@ export async function startRuntime(
         try { usage.release(reservation.id); } catch { /* already finalized */ }
       }
     }
-    await notifyRecoveredTasks(client, recoveredTasks, events, tasks, rendererFactory);
+    if (!options.headlessPrimaryAgent) {
+      await notifyRecoveredTasks(client, recoveredTasks, events, tasks, rendererFactory);
+    }
 
     return { database, projects, settings, settingsService, tasks, events, messages, memories, worktrees, providers, coordinator, renderers: runtimeRenderers, usage, pendingTasks, ...(providerOnboarding ? { providerOnboarding } : {}), ...(usagePoll ? { usagePoll } : {}), ...(usageUnsubscribe ? { usageUnsubscribe } : {}), ...(primaryAgent ? { primaryAgent } : {}), ...(conversationService ? { conversationService } : {}), ...(codexTransport ? { codexTransport } : {}), ...(codexAuth ? { codexAuth } : {}) };
   } catch (error) {

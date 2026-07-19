@@ -10,7 +10,7 @@ import { commands } from './commands/definitions.js';
 import { redactErrorMessage } from './utils/redaction.js';
 import { PROCESS_GATEWAY_INTENTS } from './discord/capabilities/registry.js';
 import { getAllProjects } from './services/projectStore.js';
-import { createRoborevReviewSource, buildReviewEmbed } from './integrations/roborev/index.js';
+import { createRoborevReviewSource, deliverRoborevNotification } from './integrations/roborev/index.js';
 import type { Disposable, ReviewNotification } from './integrations/reviewSource.js';
 import { Repl } from './terminal/repl.js';
 import { activatePrimaryProvider } from './services/agentRuntimeService.js';
@@ -50,11 +50,12 @@ async function handleReviewNotification(
   );
   if (!project?.roborevChannelId) return;
 
-  const embed = buildReviewEmbed(notification);
   const channel = await client.channels.fetch(project.roborevChannelId)
     .catch(() => null);
   if (!channel || !('send' in channel)) return;
-  await (channel as TextChannel).send({ embeds: [embed] });
+  await deliverRoborevNotification(channel as TextChannel, notification, {
+    logger: message => console.warn(`[roborev] ${message}`),
+  });
 }
 
 const client = new Client({
@@ -137,7 +138,6 @@ client.once('clientReady', async () => {
     }
   }
 });
-
 
 client.on('error', (err) => {
   console.error('Discord client error:', redactErrorMessage(err));

@@ -1,6 +1,5 @@
 import {
   Message,
-  TextChannel,
   AnyThreadChannel,
   ChannelType,
   EmbedBuilder,
@@ -9,8 +8,15 @@ import {
   ButtonStyle,
   ButtonInteraction,
   MessageFlags,
+  type InteractionReplyOptions,
+  type MessageCreateOptions,
+  type MessageReplyOptions,
 } from 'discord.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
+import {
+  createMessageDeliveryContext,
+  deliverPresentation,
+} from '../discord/presentationDelivery.js';
 import { getTaskCoordinator } from './taskCoordinatorService.js';
 import type { Project } from '../types.js';
 import { redactErrorMessage } from '../utils/redaction.js';
@@ -31,6 +37,7 @@ interface ActiveLoop {
   thread: AnyThreadChannel;
   coordinator: Pick<TaskCoordinator, 'startInExistingThread' | 'continueInThread'>;
   schedule: LoopScheduler;
+  logger: (message: string) => void;
 }
 
 export type LoopScheduler = (
@@ -41,12 +48,14 @@ export type LoopScheduler = (
 export interface LoopRunnerDependencies {
   coordinator: Pick<TaskCoordinator, 'startInExistingThread' | 'continueInThread'>;
   schedule: LoopScheduler;
+  logger?: (message: string) => void;
 }
 
 function defaultLoopDependencies(): LoopRunnerDependencies {
   return {
     coordinator: getTaskCoordinator(),
     schedule: (callback, delayMs) => setTimeout(() => { void callback(); }, delayMs),
+    logger: message => console.warn(message),
   };
 }
 
@@ -58,6 +67,9 @@ const loopThreads = new Map<string, string>();
 const MIN_INTERVAL_MS = 60_000;       // 1 minute minimum
 const MAX_INTERVAL_MS = 24 * 60 * 60_000; // 24 hours maximum
 const DEFAULT_INTERVAL_MS = 10 * 60_000;  // 10 minutes default
+const DISCORD_MESSAGE_LIMIT = 2_000;
+const PROMPT_TEXT_LIMIT = 1_024;
+const NO_MENTIONS = { parse: [] as never[] };
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -111,6 +123,54 @@ async function setThreadName(thread: AnyThreadChannel, name: string): Promise<vo
   try { await thread.setName(name.slice(0, 100)); } catch {}
 }
 
+function truncateText(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function truncateDiscordMessage(text: string): string {
+  return truncateText(text, DISCORD_MESSAGE_LIMIT);
+}
+
+function makeStartedText(prompt: string, intervalMs: number): string {
+  return truncateDiscordMessage([
+    '🔁 **Loop started**',
+    `**Prompt:** ${truncateText(prompt, PROMPT_TEXT_LIMIT)}`,
+    `**Interval:** ${formatDuration(intervalMs)}`,
+    '**Status:** Running first iteration...',
+    'Use `/stop-loop` or click **Stop Loop** to cancel.',
+  ].join('\n'));
+}
+
+function makeIterationText(iteration: number): string {
+  return `🔁 **Iteration #${iteration}**`;
+}
+
+function makeWaitingText(iteration: number, nextIterationAt: number, intervalMs: number): string {
+  return truncateDiscordMessage([
+    `🔁✅ **Iteration #${iteration} complete**`,
+    `**Next iteration:** ${discordTimestamp(nextIterationAt)}`,
+    `**Interval:** ${formatDuration(intervalMs)}`,
+    'Use `/stop-loop` or click **Stop Loop** to cancel.',
+  ].join('\n'));
+}
+
+function makeStoppedText(loop: ActiveLoop, stoppedBy?: string): string {
+  return truncateDiscordMessage([
+    '⏹️ **Loop stopped**',
+    `**Prompt:** ${truncateText(loop.prompt, PROMPT_TEXT_LIMIT)}`,
+    `**Iterations completed:** ${loop.iteration}`,
+    `**Ran for:** ${formatDuration(Date.now() - loop.startedAt)}`,
+    ...(stoppedBy ? [`**Stopped by:** ${stoppedBy}`] : []),
+  ].join('\n'));
+}
+
+function messageSendCapabilityId(channel: unknown): 'core.message.send' | 'task.thread.send' {
+  const isThread = (channel as { isThread?: () => boolean }).isThread;
+  return typeof isThread === 'function' && isThread.call(channel)
+    ? 'task.thread.send'
+    : 'core.message.send';
+}
+
 // ── parseLoopCommand ───────────────────────────────────────────────────
 
 export function parseLoopCommand(content: string): { intervalMs: number; prompt: string } | null {
@@ -140,6 +200,7 @@ export async function startLoop(
 ): Promise<void> {
   const channelId = project.agentChannelId;
   const dependencies = injected ?? defaultLoopDependencies();
+  const logger = dependencies.logger ?? (entry => console.warn(entry));
 
   // Validate interval
   if (intervalMs < MIN_INTERVAL_MS) {
@@ -158,8 +219,8 @@ export async function startLoop(
       ? `Next iteration ${discordTimestamp(existing.nextIterationAt)}.`
       : 'Currently running an iteration.';
     await message.reply(
-      `A loop is already running in this channel (iteration #${existing.iteration}, every ${formatDuration(existing.intervalMs)}). ` +
-      `${nextStr}\nUse \`/stop-loop\` or click the **Stop Loop** button to stop it first.`
+      `A loop is already running in this channel (iteration #${existing.iteration}, every ${formatDuration(existing.intervalMs)}). `
+      + `${nextStr}\nUse \`/stop-loop\` or click the **Stop Loop** button to stop it first.`
     );
     return;
   }
@@ -179,7 +240,7 @@ export async function startLoop(
     autoArchiveDuration: 60,
   });
 
-  // Send start embed inside the thread
+  // Send start presentation inside the thread
   const startEmbed = new EmbedBuilder()
     .setColor(0x3498db)
     .setTitle('🔁 Loop started')
@@ -190,8 +251,24 @@ export async function startLoop(
     )
     .setFooter({ text: 'Use /stop-loop or click Stop Loop to cancel' })
     .setTimestamp();
-
-  await thread.send({ embeds: [startEmbed], components: [makeStopButton(channelId)] });
+  const startComponents = [makeStopButton(channelId)];
+  const startDelivery = await deliverPresentation<MessageCreateOptions>({
+    context: createMessageDeliveryContext(thread),
+    sendCapabilityId: 'task.thread.send',
+    send: payload => thread.send(payload),
+    rich: { embeds: [startEmbed], components: startComponents },
+    fallback: {
+      content: makeStartedText(prompt, intervalMs),
+      components: startComponents,
+      allowedMentions: NO_MENTIONS,
+    },
+    label: `Loop start for ${project.name}`,
+    logger,
+  });
+  if (!startDelivery.delivered) {
+    logger(`[loop] Loop start presentation was not delivered; loop ${loopId} was not scheduled.`);
+    return;
+  }
 
   const loop: ActiveLoop = {
     id: loopId,
@@ -209,6 +286,7 @@ export async function startLoop(
     thread,
     coordinator: dependencies.coordinator,
     schedule: dependencies.schedule,
+    logger,
   };
 
   activeLoops.set(channelId, loop);
@@ -231,7 +309,18 @@ export async function startLoop(
         .setTitle(`🔁 Iteration #${loop.iteration}`)
         .setTimestamp();
 
-      await thread.send({ embeds: [iterEmbed] });
+      await deliverPresentation<MessageCreateOptions>({
+        context: createMessageDeliveryContext(thread),
+        sendCapabilityId: 'task.thread.send',
+        send: payload => thread.send(payload),
+        rich: { embeds: [iterEmbed] },
+        fallback: {
+          content: makeIterationText(loop.iteration),
+          allowedMentions: NO_MENTIONS,
+        },
+        label: `Loop iteration ${loop.iteration} for ${project.name}`,
+        logger: loop.logger,
+      });
 
       if (loop.iteration === 1) {
         await loop.coordinator.startInExistingThread({
@@ -254,7 +343,7 @@ export async function startLoop(
       // Update thread name to show idle + next time
       await setThreadName(thread, `🔁✅ Loop: ${threadLabel(prompt)}`);
 
-      // Send "waiting" embed with stop button
+      // Send waiting presentation with stop button
       const waitEmbed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle(`🔁✅ Iteration #${loop.iteration} complete`)
@@ -264,8 +353,21 @@ export async function startLoop(
         )
         .setFooter({ text: 'Use /stop-loop or click Stop Loop to cancel' })
         .setTimestamp();
+      const waitComponents = [makeStopButton(channelId)];
 
-      await thread.send({ embeds: [waitEmbed], components: [makeStopButton(channelId)] }).catch(() => {});
+      await deliverPresentation<MessageCreateOptions>({
+        context: createMessageDeliveryContext(thread),
+        sendCapabilityId: 'task.thread.send',
+        send: payload => thread.send(payload),
+        rich: { embeds: [waitEmbed], components: waitComponents },
+        fallback: {
+          content: makeWaitingText(loop.iteration, loop.nextIterationAt, intervalMs),
+          components: waitComponents,
+          allowedMentions: NO_MENTIONS,
+        },
+        label: `Loop waiting state for ${project.name}`,
+        logger: loop.logger,
+      });
 
       loop.timer = loop.schedule(runIteration, intervalMs);
     }
@@ -287,7 +389,18 @@ export async function stopLoop(channelId: string, message: Message): Promise<voi
   await doStopLoop(loop, channelId);
 
   const embed = makeStoppedEmbed(loop);
-  await message.reply({ embeds: [embed] });
+  await deliverPresentation<MessageReplyOptions>({
+    context: createMessageDeliveryContext(message.channel),
+    sendCapabilityId: messageSendCapabilityId(message.channel),
+    send: payload => message.reply(payload),
+    rich: { embeds: [embed] },
+    fallback: {
+      content: makeStoppedText(loop),
+      allowedMentions: NO_MENTIONS,
+    },
+    label: `Loop stopped state for ${loop.project.name}`,
+    logger: loop.logger,
+  });
 }
 
 // ── stopLoopFromButton ─────────────────────────────────────────────────
@@ -301,10 +414,22 @@ export async function stopLoopFromButton(channelId: string, interaction: ButtonI
 
   await doStopLoop(loop, channelId);
 
+  const stoppedBy = `<@${interaction.user.id}>`;
   const embed = makeStoppedEmbed(loop)
-    .addFields({ name: 'Stopped by', value: `<@${interaction.user.id}>`, inline: true });
+    .addFields({ name: 'Stopped by', value: stoppedBy, inline: true });
 
-  await interaction.reply({ embeds: [embed] });
+  await deliverPresentation<InteractionReplyOptions>({
+    context: createMessageDeliveryContext(loop.thread),
+    sendCapabilityId: 'task.thread.send',
+    send: payload => interaction.reply(payload),
+    rich: { embeds: [embed] },
+    fallback: {
+      content: makeStoppedText(loop, stoppedBy),
+      allowedMentions: { users: [interaction.user.id], parse: [] },
+    },
+    label: `Loop stopped interaction for ${loop.project.name}`,
+    logger: loop.logger,
+  });
 }
 
 // ── cancelLoop (silent, from /cancel) ──────────────────────────────────
@@ -313,7 +438,7 @@ export function cancelLoop(channelId: string): number | null {
   const loop = activeLoops.get(channelId);
   if (!loop) return null;
 
-  doStopLoop(loop, channelId);
+  void doStopLoop(loop, channelId);
   return loop.iteration;
 }
 
@@ -364,10 +489,10 @@ export function getLoopStatus(channelId: string): string | null {
     : 'Currently running an iteration';
 
   return (
-    `🔁 **Loop active** — every ${formatDuration(loop.intervalMs)}\n` +
-    `**Prompt:** ${loop.prompt.slice(0, 200)}\n` +
-    `**Iteration:** #${loop.iteration} | **Running since:** ${discordTimestamp(loop.startedAt)}\n` +
-    `**Status:** ${nextStr}`
+    `🔁 **Loop active** — every ${formatDuration(loop.intervalMs)}\n`
+    + `**Prompt:** ${loop.prompt.slice(0, 200)}\n`
+    + `**Iteration:** #${loop.iteration} | **Running since:** ${discordTimestamp(loop.startedAt)}\n`
+    + `**Status:** ${nextStr}`
   );
 }
 

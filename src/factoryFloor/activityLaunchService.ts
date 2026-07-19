@@ -36,6 +36,7 @@ export interface FactoryFloorActivityLaunchBindingLookup {
 
 export interface FactoryFloorActivityLaunchDependencies {
   readonly expectedApplicationId: string;
+  readonly expectedGuildId: string;
   readonly findProjectByChannelId: (channelId: string) => Project | undefined;
   readonly bindings: FactoryFloorActivityLaunchBindingLookup;
   readonly launches: Pick<FactoryFloorLaunchRepository, 'create' | 'invalidate'>;
@@ -258,6 +259,9 @@ export function createFactoryFloorActivityLaunchService(
         || request.installationOwnerId !== request.guildId
       ) {
         return failure('installation_mismatch');
+      }
+      if (request.guildId !== dependencies.expectedGuildId) {
+        return failure('guild_mismatch');
       }
 
       const project = dependencies.findProjectByChannelId(request.channelId);

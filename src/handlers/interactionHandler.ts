@@ -21,6 +21,10 @@ import { handleRoborev } from '../commands/roborev.js';
 import { handleSettings, handleSettingsComponent } from '../commands/settings.js';
 import { handleProjectSettings, handleProjectSettingsComponent } from '../commands/projectSettings.js';
 import { handleTaskControlButton } from '../discord/taskControlHandler.js';
+import {
+  handleFactoryFloorActivityLaunch,
+  type FactoryFloorActivityLaunchInteraction,
+} from '../factoryFloor/activityLaunchHandler.js';
 
 export async function routeSettingsComponents(
   interaction: Interaction,
@@ -43,7 +47,32 @@ export async function routeTaskControlComponents(
   return handler(interaction);
 }
 
+function isPrimaryEntryPointInteraction(interaction: Interaction): boolean {
+  const candidate = interaction as Interaction & {
+    isPrimaryEntryPointCommand?: () => boolean;
+  };
+  return candidate.isPrimaryEntryPointCommand?.() ?? false;
+}
+
 export async function handleInteraction(interaction: Interaction): Promise<void> {
+  if (isPrimaryEntryPointInteraction(interaction)) {
+    try {
+      await handleFactoryFloorActivityLaunch(
+        interaction as unknown as FactoryFloorActivityLaunchInteraction,
+      );
+    } catch (error) {
+      console.error('Error handling Factory Floor Activity launch:', redactErrorMessage(error));
+      const command = interaction as Interaction & {
+        reply(options: { content: string; flags: MessageFlags }): Promise<unknown>;
+      };
+      await command.reply({
+        content: 'Factory Floor could not be opened. Try again from a registered project surface.',
+        flags: MessageFlags.Ephemeral,
+      }).catch(() => undefined);
+    }
+    return;
+  }
+
   // Settings components are revalidated by their command handlers against the
   // current channel, project, and clicking user before any state changes.
   if (await routeSettingsComponents(interaction)) return;

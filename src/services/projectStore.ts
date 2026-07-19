@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { AgentProviderId, ReasoningEffort } from '../agents/contracts.js';
 import { openDatabase, type DatabaseHandle } from '../db/database.js';
@@ -16,9 +15,7 @@ import {
   normalizeProject,
   type Project,
 } from '../types.js';
-
-const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_LEGACY_PATH = join(moduleDirectory, '..', 'data', 'projects.json');
+import { resolveApplicationPaths } from '../utils/applicationPaths.js';
 
 export interface ProjectStorePaths {
   databasePath?: string;
@@ -41,10 +38,15 @@ function projectKey(name: string): string {
 export function initializeProjectStore(paths: ProjectStorePaths = {}): void {
   closeProjectStore();
 
-  database = openDatabase(paths.databasePath);
-  runMigrations(database);
+  const defaults = paths.databasePath ? undefined : resolveApplicationPaths();
+  const databasePath = paths.databasePath ?? defaults!.databasePath;
+  const legacyPath = paths.legacyPath
+    ?? (paths.databasePath
+      ? join(dirname(databasePath), 'projects.json')
+      : defaults!.legacyProjectsPath);
 
-  const legacyPath = paths.legacyPath ?? DEFAULT_LEGACY_PATH;
+  database = openDatabase(databasePath);
+  runMigrations(database);
   importLegacyProjects(database, legacyPath);
   projects = createProjectRepository(database);
   settings = createSettingsRepository(database);

@@ -166,9 +166,8 @@ function mapLaunch(row: LaunchRow): FactoryFloorLaunchRecord {
   };
 }
 
-function sameLaunch(row: LaunchRow, input: NormalizedCreateLaunchInput): boolean {
-  return row.state_id === input.stateId
-    && row.interaction_id === input.interactionId
+function sameTrustedContext(row: LaunchRow, input: NormalizedCreateLaunchInput): boolean {
+  return row.interaction_id === input.interactionId
     && row.application_id === input.applicationId
     && row.installation_type === input.installationType
     && row.installation_owner_id === input.installationOwnerId
@@ -180,9 +179,7 @@ function sameLaunch(row: LaunchRow, input: NormalizedCreateLaunchInput): boolean
     && row.factory_floor_project_id === input.factoryFloorProjectId
     && row.surface_id === (input.surfaceId ?? null)
     && row.run_id === (input.runId ?? null)
-    && row.context_kind === input.contextKind
-    && row.created_at === input.createdAt
-    && row.expires_at === input.expiresAt;
+    && row.context_kind === input.contextKind;
 }
 
 export function createFactoryFloorLaunchRepository(
@@ -313,7 +310,7 @@ export function createFactoryFloorLaunchRepository(
         | LaunchRow
         | undefined;
       if (existing) {
-        if (sameLaunch(existing, normalized)) return mapLaunch(existing);
+        if (sameTrustedContext(existing, normalized)) return mapLaunch(existing);
         throw new FactoryFloorLaunchConflictError('launch_interaction_conflict');
       }
 

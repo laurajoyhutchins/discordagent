@@ -68,6 +68,8 @@ const MIN_INTERVAL_MS = 60_000;       // 1 minute minimum
 const MAX_INTERVAL_MS = 24 * 60 * 60_000; // 24 hours maximum
 const DEFAULT_INTERVAL_MS = 10 * 60_000;  // 10 minutes default
 const DISCORD_MESSAGE_LIMIT = 2_000;
+const PROMPT_TEXT_LIMIT = 1_024;
+const NO_MENTIONS = { parse: [] as never[] };
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -121,16 +123,18 @@ async function setThreadName(thread: AnyThreadChannel, name: string): Promise<vo
   try { await thread.setName(name.slice(0, 100)); } catch {}
 }
 
+function truncateText(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
 function truncateDiscordMessage(text: string): string {
-  return text.length <= DISCORD_MESSAGE_LIMIT
-    ? text
-    : `${text.slice(0, DISCORD_MESSAGE_LIMIT - 1)}…`;
+  return truncateText(text, DISCORD_MESSAGE_LIMIT);
 }
 
 function makeStartedText(prompt: string, intervalMs: number): string {
   return truncateDiscordMessage([
     '🔁 **Loop started**',
-    `**Prompt:** ${prompt}`,
+    `**Prompt:** ${truncateText(prompt, PROMPT_TEXT_LIMIT)}`,
     `**Interval:** ${formatDuration(intervalMs)}`,
     '**Status:** Running first iteration...',
     'Use `/stop-loop` or click **Stop Loop** to cancel.',
@@ -153,7 +157,7 @@ function makeWaitingText(iteration: number, nextIterationAt: number, intervalMs:
 function makeStoppedText(loop: ActiveLoop, stoppedBy?: string): string {
   return truncateDiscordMessage([
     '⏹️ **Loop stopped**',
-    `**Prompt:** ${loop.prompt}`,
+    `**Prompt:** ${truncateText(loop.prompt, PROMPT_TEXT_LIMIT)}`,
     `**Iterations completed:** ${loop.iteration}`,
     `**Ran for:** ${formatDuration(Date.now() - loop.startedAt)}`,
     ...(stoppedBy ? [`**Stopped by:** ${stoppedBy}`] : []),
@@ -253,7 +257,11 @@ export async function startLoop(
     sendCapabilityId: 'task.thread.send',
     send: payload => thread.send(payload),
     rich: { embeds: [startEmbed], components: startComponents },
-    fallback: { content: makeStartedText(prompt, intervalMs), components: startComponents },
+    fallback: {
+      content: makeStartedText(prompt, intervalMs),
+      components: startComponents,
+      allowedMentions: NO_MENTIONS,
+    },
     label: `Loop start for ${project.name}`,
     logger,
   });
@@ -306,7 +314,10 @@ export async function startLoop(
         sendCapabilityId: 'task.thread.send',
         send: payload => thread.send(payload),
         rich: { embeds: [iterEmbed] },
-        fallback: { content: makeIterationText(loop.iteration) },
+        fallback: {
+          content: makeIterationText(loop.iteration),
+          allowedMentions: NO_MENTIONS,
+        },
         label: `Loop iteration ${loop.iteration} for ${project.name}`,
         logger: loop.logger,
       });
@@ -352,6 +363,7 @@ export async function startLoop(
         fallback: {
           content: makeWaitingText(loop.iteration, loop.nextIterationAt, intervalMs),
           components: waitComponents,
+          allowedMentions: NO_MENTIONS,
         },
         label: `Loop waiting state for ${project.name}`,
         logger: loop.logger,
@@ -382,7 +394,10 @@ export async function stopLoop(channelId: string, message: Message): Promise<voi
     sendCapabilityId: messageSendCapabilityId(message.channel),
     send: payload => message.reply(payload),
     rich: { embeds: [embed] },
-    fallback: { content: makeStoppedText(loop) },
+    fallback: {
+      content: makeStoppedText(loop),
+      allowedMentions: NO_MENTIONS,
+    },
     label: `Loop stopped state for ${loop.project.name}`,
     logger: loop.logger,
   });
@@ -408,7 +423,10 @@ export async function stopLoopFromButton(channelId: string, interaction: ButtonI
     sendCapabilityId: 'task.thread.send',
     send: payload => interaction.reply(payload),
     rich: { embeds: [embed] },
-    fallback: { content: makeStoppedText(loop, stoppedBy) },
+    fallback: {
+      content: makeStoppedText(loop, stoppedBy),
+      allowedMentions: { users: [interaction.user.id], parse: [] },
+    },
     label: `Loop stopped interaction for ${loop.project.name}`,
     logger: loop.logger,
   });

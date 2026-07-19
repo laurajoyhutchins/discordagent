@@ -68,13 +68,13 @@ describe('FactoryFloorServiceClient', () => {
     )).resolves.toBeUndefined();
   });
 
-  it('maps remote errors without exposing response bodies or credentials', async () => {
+  it('maps remote errors without exposing response bodies, credentials, or unsafe codes', async () => {
     const client = new FactoryFloorServiceClient({
       baseUrl: 'https://factory.example',
       keys,
       fetchFn: async () => new Response(JSON.stringify({
         error: {
-          code: 'service_auth_signature_mismatch',
+          code: 'secret\nopaque-session-token',
           message: 'do not leak super-secret-key',
         },
       }), { status: 401 }),
@@ -90,11 +90,42 @@ describe('FactoryFloorServiceClient', () => {
     expect(caught).toBeInstanceOf(FactoryFloorClientError);
     expect(caught).toMatchObject({
       kind: 'unauthorized',
-      code: 'service_auth_signature_mismatch',
+      code: 'http_401',
       status: 401,
     });
     expect(String(caught)).not.toContain('super-secret-key');
     expect(String(caught)).not.toContain('opaque-session-token');
+  });
+
+  it('rejects base URLs whose ignored components would make signing ambiguous', () => {
+    expect(() => new FactoryFloorServiceClient({
+      baseUrl: 'https://factory.example/control-plane',
+      keys,
+    })).toThrow('factory_floor_base_url_path_invalid');
+    expect(() => new FactoryFloorServiceClient({
+      baseUrl: 'https://user:password@factory.example',
+      keys,
+    })).toThrow('factory_floor_base_url_components_invalid');
+  });
+
+  it('maps unreadable response bodies to a deterministic unavailable error', async () => {
+    const client = new FactoryFloorServiceClient({
+      baseUrl: 'https://factory.example',
+      keys,
+      fetchFn: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => {
+          throw new Error('stream failed with opaque-session-token');
+        },
+      }) as Response,
+    });
+
+    await expect(client.refreshActivitySession('opaque-session-token')).rejects.toMatchObject({
+      kind: 'unavailable',
+      code: 'factory_floor_response_unreadable',
+      status: 200,
+    });
   });
 });
 

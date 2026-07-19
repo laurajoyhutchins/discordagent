@@ -1,16 +1,30 @@
 import { createServer } from 'node:net';
-import { Client, GatewayIntentBits, Partials, REST, Routes, type TextChannel } from 'discord.js';
+import {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  REST,
+  Routes,
+  type AnyThreadChannel,
+  type TextChannel,
+} from 'discord.js';
 import { config, isTerminalReplEnabled } from './config.js';
 import { handleInteraction } from './handlers/interactionHandler.js';
 import { handleMessage } from './handlers/messageHandler.js';
 import { handleThreadDelete } from './handlers/threadDeleteHandler.js';
 import { startRuntime, stopRuntime, type RuntimeServices } from './services/runtime.js';
-import { stopAllLoops } from './services/loopRunner.js';
+import {
+  clearLoopRunner,
+  configureLoopRunner,
+  reconcileScheduledLoops,
+  stopAllLoops,
+} from './services/loopRunner.js';
 import { commands } from './commands/definitions.js';
 import { redactErrorMessage } from './utils/redaction.js';
 import { PROCESS_GATEWAY_INTENTS } from './discord/capabilities/registry.js';
 import { getAllProjects } from './services/projectStore.js';
-import { createRoborevReviewSource, buildReviewEmbed } from './integrations/roborev/index.js';
+import { createLoopRepository } from './repositories/loopRepository.js';
+import { createRoborevReviewSource, deliverRoborevNotification } from './integrations/roborev/index.js';
 import type { Disposable, ReviewNotification } from './integrations/reviewSource.js';
 import { Repl } from './terminal/repl.js';
 import { activatePrimaryProvider } from './services/agentRuntimeService.js';
@@ -50,11 +64,17 @@ async function handleReviewNotification(
   );
   if (!project?.roborevChannelId) return;
 
-  const embed = buildReviewEmbed(notification);
   const channel = await client.channels.fetch(project.roborevChannelId)
     .catch(() => null);
   if (!channel || !('send' in channel)) return;
-  await (channel as TextChannel).send({ embeds: [embed] });
+  await deliverRoborevNotification(channel as TextChannel, notification, {
+    logger: message => console.warn(`[roborev] ${message}`),
+  });
+}
+
+async function fetchLoopThread(threadId: string): Promise<AnyThreadChannel | null> {
+  const channel = await client.channels.fetch(threadId).catch(() => null);
+  return channel?.isThread() ? channel : null;
 }
 
 const client = new Client({
@@ -67,13 +87,23 @@ client.once('clientReady', async () => {
 
   try {
     runtime = await startRuntime(client);
+    configureLoopRunner({
+      repository: createLoopRepository(runtime.database),
+      coordinator: runtime.coordinator,
+      fetchThread: fetchLoopThread,
+      findProject: name => runtime?.projects.findByName(name),
+      logger: message => console.warn(message),
+    });
+    await reconcileScheduledLoops();
   } catch (error) {
     console.error('Failed to initialize Discord Agent runtime:', redactErrorMessage(error));
+    clearLoopRunner();
+    if (runtime) await stopRuntime(runtime).catch(() => undefined);
     process.exit(1);
     return;
   }
 
-  // Do not accept work until the durable coordinator and recovery pass are ready.
+  // Do not accept work until durable task and scheduled-loop recovery are ready.
   client.on('interactionCreate', handleInteraction);
   client.on('messageCreate', handleMessage);
   client.on('threadDelete', handleThreadDelete);
@@ -137,7 +167,6 @@ client.once('clientReady', async () => {
     }
   }
 });
-
 
 client.on('error', (err) => {
   console.error('Discord client error:', redactErrorMessage(err));
@@ -210,6 +239,7 @@ async function shutdown(): Promise<void> {
   console.log('Shutting down...');
   if (repl) await repl.stop();
   stopAllLoops();
+  clearLoopRunner();
   if (reviewSourceDisposable) await reviewSourceDisposable.dispose();
   if (runtime) await stopRuntime(runtime);
   client.destroy();

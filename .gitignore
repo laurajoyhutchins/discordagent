@@ -1,9 +1,11 @@
 node_modules/
 dist/
 .env
+data/
 src/data/projects.json
 src/data/*.sqlite
 src/data/*.sqlite-*
+src/data/discordagent-worktrees/
 
 # Local artifacts
 .playwright-mcp/

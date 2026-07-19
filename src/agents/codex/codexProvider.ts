@@ -38,8 +38,13 @@ export class CodexProvider implements AgentProvider {
 
   constructor(private readonly options: CodexProviderOptions) {
     const onNotification = (method: string, params: unknown) => void this.handleNotification(method, params);
+    const onExit = (error: unknown) => this.handleTransportExit(error);
     options.transport.on('notification', onNotification);
-    this.unsubs.push(() => options.transport.off('notification', onNotification));
+    options.transport.on('exit', onExit);
+    this.unsubs.push(
+      () => options.transport.off('notification', onNotification),
+      () => options.transport.off('exit', onExit),
+    );
     this.installServerHandlers();
   }
 
@@ -117,6 +122,7 @@ export class CodexProvider implements AgentProvider {
     let resolveCompletion!: (result: TaskResult) => void;
     let rejectCompletion!: (error: Error) => void;
     const completion = new Promise<TaskResult>((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject; });
+    void completion.catch(() => undefined);
     const active: ActiveTurn = {
       threadId,
       workingDirectory: input.workingDirectory,
@@ -148,16 +154,30 @@ export class CodexProvider implements AgentProvider {
     return { session, completion };
   }
 
+  private handleTransportExit(error: unknown): void {
+    const activeTurns = [...this.active.values()];
+    this.active.clear();
+    const message = redactErrorMessage(error);
+    for (const active of activeTurns) active.reject(new Error(message));
+  }
+
   private async handleNotification(method: string, params: unknown): Promise<void> {
     const adapted = adaptCodexNotification(method, params);
     if (!adapted.threadId) return;
     const active = this.active.get(adapted.threadId);
     if (!active) return;
-    for (const event of adapted.events) await active.host.emit(event);
-    if (adapted.terminal) {
-      this.active.delete(adapted.threadId);
-      active.resolve({ ...adapted.terminal, startedAt: active.startedAt, sessionId: active.threadId });
+    if (!adapted.terminal) {
+      for (const event of adapted.events) await active.host.emit(event);
+      return;
     }
+
+    this.active.delete(adapted.threadId);
+    try {
+      for (const event of adapted.events) await active.host.emit(event);
+    } catch (error) {
+      console.warn('[codexProvider] Failed to emit terminal event:', redactErrorMessage(error));
+    }
+    active.resolve({ ...adapted.terminal, startedAt: active.startedAt, sessionId: active.threadId });
   }
 
   private installServerHandlers(): void {

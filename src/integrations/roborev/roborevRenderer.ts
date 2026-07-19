@@ -4,12 +4,20 @@ import { EmbedBuilder } from 'discord.js';
 import type { ReviewNotification } from '../reviewSource.js';
 import type { VerdictConfig } from './types.js';
 
+const DISCORD_MESSAGE_LIMIT = 2_000;
+
 const VERDICT_CONFIG: Record<string, VerdictConfig> = {
   A: { color: 0x2ecc71, label: 'Approved', emoji: '✅' },
   B: { color: 0x3498db, label: 'Minor Issues', emoji: '💡' },
   C: { color: 0xf39c12, label: 'Needs Changes', emoji: '⚠️' },
   D: { color: 0xe67e22, label: 'Significant Issues', emoji: '🔶' },
   F: { color: 0xe74c3c, label: 'Critical Issues', emoji: '❌' },
+};
+
+const UNKNOWN_VERDICT: VerdictConfig = {
+  color: 0x95a5a6,
+  label: 'Unknown',
+  emoji: '❓',
 };
 
 export function buildReviewEmbed(
@@ -19,6 +27,40 @@ export function buildReviewEmbed(
     return buildStartedEmbed(notification);
   }
   return buildCompletedEmbed(notification);
+}
+
+export function buildReviewText(notification: ReviewNotification): string {
+  const sha = notification.revision?.slice(0, 8) ?? 'unknown';
+  const agent = (notification.details?.agent as string) ?? 'unknown';
+
+  if (notification.status === 'started') {
+    return truncateDiscordMessage([
+      `🔍 **Reviewing ${sha}**`,
+      `Agent: ${agent}`,
+    ].join('\n'));
+  }
+
+  const verdict = (notification.details?.verdict as string) ?? '';
+  const config = VERDICT_CONFIG[verdict] ?? UNKNOWN_VERDICT;
+  const jobId = notification.details?.jobId as number | undefined;
+  const body = notification.details?.body as string | undefined;
+  const title = `${config.emoji} **Review: ${sha} — ${config.label}**`;
+  const metadata = [
+    `Commit: \`${sha}\``,
+    `Agent: ${agent}`,
+    `Verdict: ${config.emoji} ${verdict || '?'}`,
+  ].join('\n');
+  const defaultDetails = [
+    `Verdict: **${config.label}** (${verdict || 'unknown'})`,
+    ...(jobId ? [`Run \`roborev show ${jobId}\` for details.`] : []),
+  ].join('\n');
+  const detailBudget = Math.max(
+    1,
+    DISCORD_MESSAGE_LIMIT - title.length - metadata.length - 2,
+  );
+  const details = truncateText(body ?? defaultDetails, detailBudget);
+
+  return [title, details, metadata].join('\n');
 }
 
 function buildStartedEmbed(notification: ReviewNotification): EmbedBuilder {
@@ -37,8 +79,7 @@ function buildStartedEmbed(notification: ReviewNotification): EmbedBuilder {
 
 function buildCompletedEmbed(notification: ReviewNotification): EmbedBuilder {
   const verdict = (notification.details?.verdict as string) ?? '';
-  const config = VERDICT_CONFIG[verdict]
-    ?? { color: 0x95a5a6, label: 'Unknown', emoji: '❓' };
+  const config = VERDICT_CONFIG[verdict] ?? UNKNOWN_VERDICT;
   const sha = notification.revision?.slice(0, 8) ?? 'unknown';
   const agent = (notification.details?.agent as string) ?? 'unknown';
   const jobId = notification.details?.jobId as number | undefined;
@@ -73,6 +114,14 @@ function buildCompletedEmbed(notification: ReviewNotification): EmbedBuilder {
   );
 
   return embed;
+}
+
+function truncateText(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function truncateDiscordMessage(text: string): string {
+  return truncateText(text, DISCORD_MESSAGE_LIMIT);
 }
 
 export function anyProjectHasRoborev(

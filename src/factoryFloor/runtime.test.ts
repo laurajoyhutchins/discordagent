@@ -25,6 +25,7 @@ function database(): DatabaseHandle {
 function enabledEnv(overrides: Record<string, string | undefined> = {}) {
   return {
     DISCORD_CLIENT_ID: 'application-1',
+    DISCORD_GUILD_ID: 'guild-1',
     FACTORY_FLOOR_ENABLED: 'true',
     FACTORY_FLOOR_BASE_URL: 'https://factory-floor.example/',
     FACTORY_FLOOR_AGENT_TO_FACTORY_KEY: 'agent-key',

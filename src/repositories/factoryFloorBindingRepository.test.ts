@@ -73,12 +73,7 @@ describe('FactoryFloorBindingRepository', () => {
       projectName: 'FACTORY-FLOOR',
       factoryFloorProjectId: 'ff-project-1',
       guildId: 'guild-1',
-    })).toMatchObject({
-      projectName: project.projectName,
-      factoryFloorProjectId: project.factoryFloorProjectId,
-      guildId: project.guildId,
-      createdAt: project.createdAt,
-    });
+    })).toEqual(project);
 
     const surface = bindings.bindSurface({
       projectName: 'factory-floor',
@@ -95,16 +90,10 @@ describe('FactoryFloorBindingRepository', () => {
       threadId: 'thread-1',
       messageId: 'message-1',
       activityInstanceId: 'activity-1',
-    })).toMatchObject({
-      id: surface.id,
-      projectName: surface.projectName,
-      guildId: surface.guildId,
-      channelId: surface.channelId,
-      threadId: surface.threadId,
-      messageId: surface.messageId,
-      activityInstanceId: surface.activityInstanceId,
-      createdAt: surface.createdAt,
-    });
+    })).toEqual(surface);
+    expect(bindings.findSurfaceByThread('guild-1', 'channel-1', 'thread-1')).toEqual(surface);
+    expect(bindings.findSurfaceByMessage('message-1')).toEqual(surface);
+    expect(bindings.findSurfaceByActivityInstance('activity-1')).toEqual(surface);
 
     const run = bindings.bindRun({
       projectName: 'factory-floor',
@@ -115,18 +104,49 @@ describe('FactoryFloorBindingRepository', () => {
       projectName: 'factory-floor',
       surfaceId: surface.id,
       runId: 'run-1',
-    })).toMatchObject({
-      runId: run.runId,
-      projectName: run.projectName,
-      surfaceId: run.surfaceId,
-      createdAt: run.createdAt,
+    })).toEqual(run);
+    expect(bindings.findRun('run-1')).toEqual(run);
+  });
+
+  it('reconciles partial Discord surface identities without erasing trusted linkage', () => {
+    const db = database();
+    runMigrations(db);
+    createProject(db, 'factory-floor', 'channel-1');
+    const bindings = createFactoryFloorBindingRepository(db);
+    bindings.bindProject({
+      projectName: 'factory-floor',
+      factoryFloorProjectId: 'ff-project-1',
+      guildId: 'guild-1',
     });
-    expect(bindings.findRun('run-1')).toMatchObject({
-      runId: run.runId,
-      projectName: run.projectName,
-      surfaceId: run.surfaceId,
-      createdAt: run.createdAt,
+
+    const initial = bindings.bindSurface({
+      projectName: 'factory-floor',
+      guildId: 'guild-1',
+      channelId: 'channel-1',
+      threadId: 'thread-1',
     });
+    const enriched = bindings.bindSurface({
+      projectName: 'factory-floor',
+      guildId: 'guild-1',
+      channelId: 'channel-1',
+      threadId: 'thread-1',
+      messageId: 'message-1',
+      activityInstanceId: 'activity-1',
+    });
+    const partialRead = bindings.bindSurface({
+      projectName: 'factory-floor',
+      guildId: 'guild-1',
+      channelId: 'channel-1',
+      activityInstanceId: 'activity-1',
+    });
+
+    expect(enriched).toMatchObject({
+      id: initial.id,
+      threadId: 'thread-1',
+      messageId: 'message-1',
+      activityInstanceId: 'activity-1',
+    });
+    expect(partialRead).toEqual(enriched);
   });
 
   it('fails closed when identities cross project, guild, surface, or run boundaries', () => {
@@ -171,6 +191,13 @@ describe('FactoryFloorBindingRepository', () => {
       channelId: 'channel-2',
       activityInstanceId: 'activity-1',
     })).toThrow('surface_binding_conflict');
+    expect(() => bindings.bindSurface({
+      projectName: 'one',
+      guildId: 'guild-1',
+      channelId: 'channel-1',
+      threadId: 'thread-1',
+      activityInstanceId: 'activity-2',
+    })).toThrow('surface_binding_conflict');
     expect(() => bindings.bindRun({
       projectName: 'two',
       surfaceId: surface.id,
@@ -186,6 +213,33 @@ describe('FactoryFloorBindingRepository', () => {
       projectName: 'one',
       surfaceId: surface.id,
       runId: 'run-2',
+    })).toThrow('surface_already_bound_to_run');
+  });
+
+  it('does not reactivate a retired run over a newer active run on the same surface', () => {
+    const db = database();
+    runMigrations(db);
+    createProject(db, 'factory-floor', 'channel-1');
+    const bindings = createFactoryFloorBindingRepository(db);
+    bindings.bindProject({
+      projectName: 'factory-floor',
+      factoryFloorProjectId: 'ff-project-1',
+      guildId: 'guild-1',
+    });
+    const surface = bindings.bindSurface({
+      projectName: 'factory-floor',
+      guildId: 'guild-1',
+      channelId: 'channel-1',
+      threadId: 'thread-1',
+    });
+    bindings.bindRun({ projectName: 'factory-floor', surfaceId: surface.id, runId: 'run-1' });
+    bindings.retireRun('run-1');
+    bindings.bindRun({ projectName: 'factory-floor', surfaceId: surface.id, runId: 'run-2' });
+
+    expect(() => bindings.bindRun({
+      projectName: 'factory-floor',
+      surfaceId: surface.id,
+      runId: 'run-1',
     })).toThrow('surface_already_bound_to_run');
   });
 
@@ -223,6 +277,45 @@ describe('FactoryFloorBindingRepository', () => {
     expect(runColumns).not.toContain('events');
     expect(runColumns).not.toContain('artifacts');
     expect(runColumns).not.toContain('approvals');
+  });
+
+  it('automatically retires bindings when the local project is archived', () => {
+    const db = database();
+    runMigrations(db);
+    createProject(db, 'factory-floor', 'channel-1');
+    const projects = createProjectRepository(db);
+    const bindings = createFactoryFloorBindingRepository(db);
+    bindings.bindProject({
+      projectName: 'factory-floor',
+      factoryFloorProjectId: 'ff-project-1',
+      guildId: 'guild-1',
+    });
+    const surface = bindings.bindSurface({
+      projectName: 'factory-floor',
+      guildId: 'guild-1',
+      channelId: 'channel-1',
+      threadId: 'thread-1',
+      messageId: 'message-1',
+    });
+    bindings.bindRun({
+      projectName: 'factory-floor',
+      surfaceId: surface.id,
+      runId: 'run-1',
+    });
+
+    projects.archive('factory-floor');
+
+    expect(bindings.findProjectByFactoryFloorId('ff-project-1')).toBeUndefined();
+    expect(bindings.findSurfaceByThread('guild-1', 'channel-1', 'thread-1')).toBeUndefined();
+    expect(bindings.findSurfaceByMessage('message-1')).toBeUndefined();
+    expect(bindings.findRun('run-1')).toBeUndefined();
+    const active = db.raw.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM factory_floor_project_bindings WHERE retired_at IS NULL) AS projects,
+        (SELECT COUNT(*) FROM factory_floor_surface_bindings WHERE retired_at IS NULL) AS surfaces,
+        (SELECT COUNT(*) FROM factory_floor_run_bindings WHERE retired_at IS NULL) AS runs
+    `).get() as { projects: number; surfaces: number; runs: number };
+    expect(active).toEqual({ projects: 0, surfaces: 0, runs: 0 });
   });
 });
 

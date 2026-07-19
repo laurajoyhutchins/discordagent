@@ -66,12 +66,20 @@ jobs:
           set -o pipefail
           git diff --check "${{ github.event.pull_request.base.sha }}"...HEAD 2>&1 | tee whitespace.log
 
+      - name: Write agent CI handoff
+        if: always()
+        env:
+          AGENT_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          AGENT_CI_JOB_STATUS: ${{ job.status }}
+        run: node scripts/write-agent-ci-summary.mjs --manifest .github/agent-ci-manifest.json --output .agent-ci/static/agent-ci-summary.json --job static --artifact static-quality-logs >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload static-analysis logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: static-quality-logs
           path: |
+            .agent-ci/static/agent-ci-summary.json
             format.log
             lint.log
             typecheck.log
@@ -104,12 +112,20 @@ jobs:
           set -o pipefail
           npm run test:ci 2>&1 | tee test.log
 
+      - name: Write agent CI handoff
+        if: always()
+        env:
+          AGENT_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          AGENT_CI_JOB_STATUS: ${{ job.status }}
+        run: node scripts/write-agent-ci-summary.mjs --manifest .github/agent-ci-manifest.json --output .agent-ci/test/agent-ci-summary.json --job test --artifact test-and-coverage >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload test and coverage evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-and-coverage
           path: |
+            .agent-ci/test/agent-ci-summary.json
             test.log
             coverage/
           if-no-files-found: ignore
@@ -139,12 +155,21 @@ jobs:
           set -o pipefail
           npm run check:docs 2>&1 | tee docs.log
 
+      - name: Write agent CI handoff
+        if: always()
+        env:
+          AGENT_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          AGENT_CI_JOB_STATUS: ${{ job.status }}
+        run: node scripts/write-agent-ci-summary.mjs --manifest .github/agent-ci-manifest.json --output .agent-ci/docs/agent-ci-summary.json --job docs --artifact documentation-logs >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload documentation logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: documentation-logs
-          path: docs.log
+          path: |
+            .agent-ci/docs/agent-ci-summary.json
+            docs.log
           if-no-files-found: ignore
           retention-days: 14
 

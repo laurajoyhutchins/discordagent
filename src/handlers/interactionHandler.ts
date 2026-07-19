@@ -11,6 +11,7 @@ import { handleUsage } from '../commands/usage.js';
 import { handleAgents } from '../commands/agents.js';
 import { handleModel } from '../commands/model.js';
 import { handleProvider } from '../commands/provider.js';
+import { handleHelp } from '../commands/help.js';
 import { handleTurnIntoTask } from '../commands/turnIntoTask.js';
 import { stopLoopFromButton } from '../services/loopRunner.js';
 import { handleCodexAuth, handleCodexAuthButton } from '../commands/codexAuth.js';
@@ -105,6 +106,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
 
   try {
     switch (interaction.commandName) {
+      case 'help':
+        await handleHelp(interaction);
+        break;
       case 'add-project':
         await handleAddProject(interaction);
         break;

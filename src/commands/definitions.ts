@@ -10,6 +10,10 @@ export const commands = [
     .setType(ApplicationCommandType.Message),
 
   new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Show contextual guidance for the channel you are in'),
+
+  new SlashCommandBuilder()
     .setName('add-project')
     .setDescription('Register a project for agent orchestration')
     .addStringOption(opt =>

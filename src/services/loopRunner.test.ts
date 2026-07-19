@@ -129,21 +129,27 @@ describe('loopRunner capability-aware presentation', () => {
     const { thread, message, coordinator, schedule } = setup();
     addChannelCapabilities(thread, [PermissionFlagsBits.SendMessagesInThreads]);
 
-    await startLoop(60_000, 'run the tests', project, message, { coordinator, schedule });
+    await startLoop(60_000, 'run the tests @everyone', project, message, { coordinator, schedule });
 
     const payloads = thread.send.mock.calls.map(([payload]) => payload as {
       content?: string;
       components?: unknown[];
+      allowedMentions?: { parse: string[] };
     });
     expect(payloads).toEqual(expect.arrayContaining([
       expect.objectContaining({
         content: expect.stringMatching(/Loop started.*run the tests.*1m/s),
         components: expect.any(Array),
+        allowedMentions: { parse: [] },
       }),
-      expect.objectContaining({ content: expect.stringMatching(/Iteration #1/) }),
+      expect.objectContaining({
+        content: expect.stringMatching(/Iteration #1/),
+        allowedMentions: { parse: [] },
+      }),
       expect.objectContaining({
         content: expect.stringMatching(/Iteration #1 complete.*Next iteration/s),
         components: expect.any(Array),
+        allowedMentions: { parse: [] },
       }),
     ]));
   });
@@ -165,10 +171,15 @@ describe('loopRunner capability-aware presentation', () => {
       content?: string;
       embeds?: unknown[];
       components?: unknown[];
+      allowedMentions?: { parse: string[] };
     });
     expect(payloads.filter(payload => payload.embeds?.length)).toHaveLength(3);
     const fallbacks = payloads.filter(payload => payload.content);
     expect(fallbacks).toHaveLength(3);
+    expect(fallbacks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ allowedMentions: { parse: [] } }),
+    ]));
+    expect(fallbacks.every(payload => payload.allowedMentions?.parse.length === 0)).toBe(true);
     expect(fallbacks[0]).toEqual(expect.objectContaining({ components: expect.any(Array) }));
     expect(fallbacks[2]).toEqual(expect.objectContaining({ components: expect.any(Array) }));
   });
@@ -201,11 +212,12 @@ describe('loopRunner capability-aware presentation', () => {
     ]);
     addChannelCapabilities(channel, [PermissionFlagsBits.SendMessages]);
 
-    await startLoop(60_000, 'run the tests', project, message, { coordinator, schedule });
+    await startLoop(60_000, 'run the tests @everyone', project, message, { coordinator, schedule });
     await stopLoop(project.agentChannelId, message);
 
     expect(message.reply).toHaveBeenLastCalledWith(expect.objectContaining({
       content: expect.stringMatching(/Loop stopped.*run the tests.*Iterations completed/s),
+      allowedMentions: { parse: [] },
     }));
   });
 });

@@ -15,16 +15,15 @@ Intents are defined in `PROCESS_GATEWAY_INTENTS` in the capability registry and 
 
 ## Required bot permissions
 
-These must be granted at the guild level (not just channel overwrites):
+These must be granted at the guild level and remain available through effective channel overwrites:
 
 | Permission | Purpose | Fallback if missing |
 |---|---|---|
 | View Channel | Read private channels | Bot cannot operate |
-| Send Messages | Reply and publish output | Bot cannot operate |
-| Embed Links | Rich embed control cards | Plain text |
+| Send Messages | Reply and publish output | Bot cannot operate in ordinary text channels |
 | Read Message History | Inspect task thread context | Bot cannot operate |
 | Create Public Threads | One thread per task | Bot cannot operate |
-| Send Messages in Threads | Publish in task threads | Bot cannot operate |
+| Send Messages in Threads | Publish in task threads | Bot cannot operate in task threads |
 
 ## Bootstrap permissions
 
@@ -40,6 +39,7 @@ Remove after initial setup if project management is no longer needed.
 
 | Permission | Feature | Fallback |
 |---|---|---|
+| Embed Links | Rich task cards, RoboRev notifications, and scheduled-loop lifecycle messages | Bounded plain text; loop controls remain attached where components are supported |
 | Pin Messages | Pinned control cards | Cards remain unpinned |
 | Send Polls | Native polls | Polls not offered |
 | View Audit Log | Audit reconciliation | Feature disabled |
@@ -48,6 +48,8 @@ Remove after initial setup if project management is no longer needed.
 | Connect / Speak | Live voice | Feature disabled |
 | Send Voice Messages | Voice messages | Feature disabled |
 | Set Voice Channel Status | Voice status | Feature disabled |
+
+Discord Agent evaluates effective channel permissions before known capability-dependent sends. When Embed Links is known unavailable, it sends the text projection directly. If Discord rejects a rich payload despite the capability check, the delivery boundary retries once with bounded plain text and preserves interactive components such as **Stop Loop**. A failure of both rich and text delivery is logged as a real send failure rather than reported as successful delivery.
 
 ## OAuth scopes
 

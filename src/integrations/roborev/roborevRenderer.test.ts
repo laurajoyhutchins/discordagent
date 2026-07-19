@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { EmbedBuilder } from 'discord.js';
 import type { ReviewNotification } from '../reviewSource.js';
-import { buildReviewEmbed, anyProjectHasRoborev, hasRoborevSetup } from './roborevRenderer.js';
+import {
+  anyProjectHasRoborev,
+  buildReviewEmbed,
+  buildReviewText,
+  hasRoborevSetup,
+} from './roborevRenderer.js';
 
 function startedNotification(overrides: Partial<ReviewNotification> = {}): ReviewNotification {
   return {
@@ -90,6 +95,46 @@ describe('buildReviewEmbed', () => {
 
   it('returns an EmbedBuilder instance', () => {
     expect(buildReviewEmbed(startedNotification())).toBeInstanceOf(EmbedBuilder);
+  });
+});
+
+describe('buildReviewText', () => {
+  it('preserves started-review meaning without an embed', () => {
+    expect(buildReviewText(startedNotification())).toMatch(
+      /Reviewing abcdef12.*Agent: reviewer/s,
+    );
+  });
+
+  it('preserves verdict, body, attribution, and revision in bounded text', () => {
+    const text = buildReviewText(completedNotification({
+      status: 'warning',
+      details: {
+        verdict: 'B',
+        body: 'Minor formatting issues found.',
+        agent: 'reviewer',
+        jobId: 42,
+      },
+    }));
+
+    expect(text).toMatch(/Review: abcdef12.*Minor Issues/s);
+    expect(text).toContain('Minor formatting issues found.');
+    expect(text).toContain('Agent: reviewer');
+    expect(text).toContain('Verdict: 💡 B');
+    expect(text.length).toBeLessThanOrEqual(2_000);
+  });
+
+  it('truncates oversized review bodies to the Discord message limit', () => {
+    const text = buildReviewText(completedNotification({
+      details: {
+        verdict: 'C',
+        body: 'x'.repeat(5_000),
+        agent: 'reviewer',
+        jobId: 42,
+      },
+    }));
+
+    expect(text.length).toBeLessThanOrEqual(2_000);
+    expect(text.endsWith('…')).toBe(true);
   });
 });
 

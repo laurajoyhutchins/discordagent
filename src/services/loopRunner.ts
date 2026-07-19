@@ -160,6 +160,13 @@ function makeStoppedText(loop: ActiveLoop, stoppedBy?: string): string {
   ].join('\n'));
 }
 
+function messageSendCapabilityId(channel: unknown): 'core.message.send' | 'task.thread.send' {
+  const isThread = (channel as { isThread?: () => boolean }).isThread;
+  return typeof isThread === 'function' && isThread.call(channel)
+    ? 'task.thread.send'
+    : 'core.message.send';
+}
+
 // ── parseLoopCommand ───────────────────────────────────────────────────
 
 export function parseLoopCommand(content: string): { intervalMs: number; prompt: string } | null {
@@ -372,7 +379,7 @@ export async function stopLoop(channelId: string, message: Message): Promise<voi
   const embed = makeStoppedEmbed(loop);
   await deliverPresentation<MessageReplyOptions>({
     context: createMessageDeliveryContext(message.channel),
-    sendCapabilityId: message.channel.isThread() ? 'task.thread.send' : 'core.message.send',
+    sendCapabilityId: messageSendCapabilityId(message.channel),
     send: payload => message.reply(payload),
     rich: { embeds: [embed] },
     fallback: { content: makeStoppedText(loop) },

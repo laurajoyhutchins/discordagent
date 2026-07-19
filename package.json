@@ -16,6 +16,7 @@
     "check": "npm test && npm run build",
     "smoke:host": "tsx src/smoke/hostPreflight.ts",
     "smoke:discord": "tsx src/smoke/discordConnectivity.ts",
+    "smoke:agent": "tsx src/smoke/agentRoundTrip.ts",
     "smoke": "npm run smoke:host && npm run smoke:discord",
     "docs:links": "node scripts/check-docs-links.mjs",
     "check:docs": "npm run docs:links"

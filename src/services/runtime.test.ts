@@ -21,6 +21,7 @@ process.env.CLAUDE_ENABLED = 'true';
 
 const { getTaskCoordinator } = await import('./taskCoordinatorService.js');
 const { getUsageAdmissionService } = await import('./usageAdmissionRegistry.js');
+const { activatePrimaryProvider } = await import('./agentRuntimeService.js');
 const {
   startRuntime,
   stopRuntime,
@@ -120,6 +121,49 @@ describe('runtime startup', () => {
     await stopRuntime(runtime);
     expect(() => getTaskCoordinator()).toThrow(/not initialized/i);
     expect(getUsageAdmissionService()).toBeUndefined();
+  });
+
+  it('runs and reconfigures the primary conversation service without a Discord gateway', async () => {
+    const directory = tempDirectory();
+    const codex = { ...fakeProvider(), id: 'codex' as const };
+    const client = {
+      guilds: { cache: new Map() },
+      channels: { fetch: vi.fn() },
+    } as unknown as Client;
+    const runtime = await startRuntime(client, {
+      databasePath: join(directory, 'runtime.sqlite'),
+      legacyPath: join(directory, 'missing-projects.json'),
+      worktreesBaseDir: join(directory, 'worktrees'),
+      claudeProvider: fakeProvider(),
+      codexProvider: codex,
+      disableOpenCode: true,
+      headlessPrimaryAgent: true,
+      primaryProvider: 'claude',
+      primaryModelFactory: provider => ({
+        respond: async () => ({ reply: `${provider} ready` }),
+      }),
+    });
+
+    const first = await runtime.conversationService!.process({
+      conversationId: 'headless:primary',
+      userId: 'owner',
+      text: 'first turn',
+    });
+    expect(first).toEqual({ kind: 'reply', text: 'claude ready' });
+
+    expect(await activatePrimaryProvider('codex')).toBe('reconfigured');
+    const second = await runtime.conversationService!.process({
+      conversationId: 'headless:primary',
+      userId: 'owner',
+      text: 'second turn',
+    });
+    expect(second).toEqual({ kind: 'reply', text: 'codex ready' });
+    expect(runtime.messages.recent('headless:primary').map(entry => entry.role)).toEqual([
+      'user', 'assistant', 'user', 'assistant',
+    ]);
+    expect(client.channels.fetch).not.toHaveBeenCalled();
+
+    await stopRuntime(runtime);
   });
 
   it('disposes active task renderers during runtime shutdown', async () => {

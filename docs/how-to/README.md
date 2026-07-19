@@ -24,6 +24,7 @@ Goal-oriented procedures for specific operational tasks.
 
 - [Recover an interrupted task](operations/recover-an-interrupted-task.md)
 - [Use the terminal REPL](operations/use-the-terminal-repl.md)
+- [Verify agent plumbing without Discord](operations/verify-agent-plumbing-without-discord.md)
 
 ## Integrations
 

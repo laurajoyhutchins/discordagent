@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from './database.js';
+import { FACTORY_FLOOR_BINDINGS_MIGRATION } from './factoryFloorBindingsMigration.js';
 import { SCHEMA_MIGRATIONS } from './schema.js';
 
 export interface Migration {
@@ -14,6 +15,11 @@ export interface Migration {
    */
   disableForeignKeys?: boolean;
 }
+
+const DEFAULT_MIGRATIONS: readonly Migration[] = [
+  ...SCHEMA_MIGRATIONS,
+  FACTORY_FLOOR_BINDINGS_MIGRATION,
+];
 
 const BOOTSTRAP_SQL = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -64,7 +70,7 @@ function describeForeignKeyViolations(violations: readonly ForeignKeyViolation[]
 
 export function runMigrations(
   db: DatabaseHandle,
-  migrations: readonly Migration[] = SCHEMA_MIGRATIONS,
+  migrations: readonly Migration[] = DEFAULT_MIGRATIONS,
 ): void {
   validateMigrations(migrations);
   db.raw.exec(BOOTSTRAP_SQL);

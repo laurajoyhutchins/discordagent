@@ -1,13 +1,12 @@
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { HostMcpServers } from './agents/contracts.js';
+import { resolveApplicationPaths } from './utils/applicationPaths.js';
 
-const defaultDatabasePath = join(dirname(fileURLToPath(import.meta.url)), 'data', 'discordagent.sqlite');
-const databasePath = process.env.DATABASE_PATH ?? defaultDatabasePath;
-const defaultWorktreesBaseDir = join(dirname(databasePath), 'discordagent-worktrees');
+const applicationPaths = resolveApplicationPaths();
+if (applicationPaths.notice) console.warn(`[config] ${applicationPaths.notice}`);
 
 function required(key: string): string {
   const value = process.env[key];
@@ -69,6 +68,7 @@ export const config = {
   authorizedUserId: process.env.AUTHORIZED_USER_ID ?? process.env.NOTIFY_USER_ID ?? '',
   primaryAgentModel: process.env.PRIMARY_AGENT_MODEL ?? '',
   primaryUsageReserve: parseFloat(process.env.PRIMARY_USAGE_RESERVE ?? '10'),
-  databasePath,
-  worktreesBaseDir: process.env.WORKTREES_BASE_DIR ?? defaultWorktreesBaseDir,
+  databasePath: applicationPaths.databasePath,
+  legacyProjectsPath: applicationPaths.legacyProjectsPath,
+  worktreesBaseDir: applicationPaths.worktreesBaseDir,
 } as const;

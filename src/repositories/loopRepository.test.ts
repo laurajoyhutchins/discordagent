@@ -71,9 +71,9 @@ describe('LoopRepository', () => {
     expect(running).toEqual(expect.objectContaining({
       status: 'running',
       iteration: 1,
-      nextRunAt: undefined,
       updatedAt: 2_000,
     }));
+    expect(running).not.toHaveProperty('nextRunAt');
     expect(loops.acquireIteration('loop-1', 2_001)).toBeUndefined();
 
     const waiting = loops.scheduleNext('loop-1', 62_000, 2_100);

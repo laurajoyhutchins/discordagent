@@ -4,6 +4,10 @@
 
 ```text
 discordagent/
+├── data/                        # Default runtime state; ignored by Git
+│   ├── discordagent.sqlite      # SQLite operational store
+│   ├── projects.json            # Optional one-time legacy import input
+│   └── discordagent-worktrees/  # Managed isolated task worktrees
 ├── src/
 │   ├── index.ts                 # Discord client, lock, startup, review-source wiring, shutdown
 │   ├── agents/
@@ -35,11 +39,14 @@ discordagent/
 └── tsconfig.json
 ```
 
+The `data/` directory is created only when runtime state is needed and is not committed. Existing installations may continue using one historical `src/data/` or `dist/data/` directory under the compatibility policy below.
+
 ## Runtime paths
 
 | Path | Purpose |
 |---|---|
 | `<DATABASE_PATH>` | SQLite operational database |
+| `<data-root>/projects.json` | Optional legacy project import file associated with the selected database |
 | `<WORKTREES_BASE_DIR>/` | Managed parent directory for isolated task worktrees |
 | `<WORKTREES_BASE_DIR>/agent--<provider>--<slug>-<thread-suffix>/` | Usual task-worktree directory name |
 
@@ -50,7 +57,14 @@ The branch name and directory name are related but not identical:
 
 `WorktreeManager` replaces `/` with `--` when deriving the directory name from the branch. If that directory already exists, it appends a numeric collision suffix such as `-2`.
 
-Development normally stores the database at `src/data/discordagent.sqlite`; compiled execution normally stores it at `dist/data/discordagent.sqlite`. When `DATABASE_PATH` is set explicitly, the default worktree parent is a `discordagent-worktrees` directory beside that database file.
+Fresh installations select `<repository>/data` as the data root regardless of whether JavaScript runs from `src` through `tsx` or from compiled `dist` output. Host preflight calls the same resolver as runtime.
+
+Compatibility selection is non-destructive:
+
+1. If no default root contains state, use `<repository>/data`.
+2. If exactly one of `<repository>/data`, `<repository>/src/data`, or `<repository>/dist/data` contains a database, legacy project file, or managed-worktree directory, reuse that root in place.
+3. If more than one root contains state, fail and require an explicit `DATABASE_PATH` rather than choosing one silently.
+4. When `DATABASE_PATH` is explicit, use it exactly and derive the legacy project path and default worktree parent beside it. An explicit `WORKTREES_BASE_DIR` overrides that worktree location.
 
 RoboRev uses the configured host executable and repository-local configuration. It does not create an additional durable runtime directory or store webhook credentials.
 

@@ -22,12 +22,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
 
       - name: Use Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
@@ -66,12 +66,19 @@ jobs:
           set -o pipefail
           git diff --check "${{ github.event.pull_request.base.sha }}"...HEAD 2>&1 | tee whitespace.log
 
+      - name: Write agent CI handoff
+        if: always()
+        env:
+          AGENT_CI_JOB_STATUS: ${{ job.status }}
+        run: node scripts/write-agent-ci-summary.mjs --manifest .github/agent-ci-manifest.json --output .agent-ci/static/agent-ci-summary.json --job static --artifact static-quality-logs >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload static-analysis logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: static-quality-logs
           path: |
+            .agent-ci/static/agent-ci-summary.json
             format.log
             lint.log
             typecheck.log
@@ -87,10 +94,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Use Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
@@ -104,12 +111,19 @@ jobs:
           set -o pipefail
           npm run test:ci 2>&1 | tee test.log
 
+      - name: Write agent CI handoff
+        if: always()
+        env:
+          AGENT_CI_JOB_STATUS: ${{ job.status }}
+        run: node scripts/write-agent-ci-summary.mjs --manifest .github/agent-ci-manifest.json --output .agent-ci/test/agent-ci-summary.json --job test --artifact test-and-coverage >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload test and coverage evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: test-and-coverage
           path: |
+            .agent-ci/test/agent-ci-summary.json
             test.log
             coverage/
           if-no-files-found: ignore
@@ -122,10 +136,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Use Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
@@ -139,12 +153,20 @@ jobs:
           set -o pipefail
           npm run check:docs 2>&1 | tee docs.log
 
+      - name: Write agent CI handoff
+        if: always()
+        env:
+          AGENT_CI_JOB_STATUS: ${{ job.status }}
+        run: node scripts/write-agent-ci-summary.mjs --manifest .github/agent-ci-manifest.json --output .agent-ci/docs/agent-ci-summary.json --job docs --artifact documentation-logs >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload documentation logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: documentation-logs
-          path: docs.log
+          path: |
+            .agent-ci/docs/agent-ci-summary.json
+            docs.log
           if-no-files-found: ignore
           retention-days: 14
 

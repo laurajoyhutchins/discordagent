@@ -24,6 +24,7 @@ function paths() {
 
 function enableFactoryFloor(): void {
   process.env.DISCORD_CLIENT_ID = 'application-1';
+  process.env.DISCORD_GUILD_ID = 'guild-1';
   process.env.FACTORY_FLOOR_ENABLED = 'true';
   process.env.FACTORY_FLOOR_BASE_URL = 'https://factory-floor.example/';
   process.env.FACTORY_FLOOR_AGENT_TO_FACTORY_KEY = 'agent-key';

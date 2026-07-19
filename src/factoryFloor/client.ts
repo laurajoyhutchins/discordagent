@@ -118,6 +118,8 @@ interface RequestOptions {
   retryable?: boolean;
 }
 
+const REMOTE_ERROR_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
 function normalizeBaseUrl(value: string): URL {
   let url: URL;
   try {
@@ -134,6 +136,19 @@ function normalizeBaseUrl(value: string): URL {
       'factory_floor_base_url_protocol_invalid',
     );
   }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new FactoryFloorClientError(
+      'configuration',
+      'factory_floor_base_url_components_invalid',
+    );
+  }
+  if (url.pathname !== '/' && url.pathname !== '') {
+    throw new FactoryFloorClientError(
+      'configuration',
+      'factory_floor_base_url_path_invalid',
+    );
+  }
+  url.pathname = '/';
   return url;
 }
 
@@ -148,8 +163,9 @@ function errorKind(status: number): FactoryFloorClientErrorKind {
 function errorCode(text: string, status: number): string {
   try {
     const parsed = JSON.parse(text) as { error?: { code?: unknown } };
-    if (typeof parsed.error?.code === 'string' && parsed.error.code.trim()) {
-      return parsed.error.code.trim();
+    if (typeof parsed.error?.code === 'string') {
+      const code = parsed.error.code.trim();
+      if (REMOTE_ERROR_CODE_PATTERN.test(code)) return code;
     }
   } catch {
     // The raw response is intentionally not propagated into logs or errors.
@@ -200,7 +216,20 @@ class FactoryFloorRequester {
         );
       }
 
-      const text = response.status === 204 ? '' : await response.text();
+      let text = '';
+      if (response.status !== 204) {
+        try {
+          text = await response.text();
+        } catch {
+          if (options.retryable && attempt + 1 < attempts) continue;
+          throw new FactoryFloorClientError(
+            'unavailable',
+            'factory_floor_response_unreadable',
+            response.status,
+          );
+        }
+      }
+
       if (!response.ok) {
         if (
           options.retryable &&

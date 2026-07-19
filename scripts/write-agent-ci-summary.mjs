@@ -19,14 +19,20 @@ const artifact = readOption('--artifact');
 const ansiEscapePattern = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
 const normalizeLine = (line) => line.replace(ansiEscapePattern, '').trim();
 
-const errorPattern =
-  /(?:^|\b)(?:error|fail|failed|failure|fatal|exception|assertionerror|typeerror|referenceerror|syntaxerror|not ok)(?:\b|:)/i;
+const actionablePatterns = [
+  /^(?:error|fail|failed|failure|fatal|exception|not ok)(?:\b|:)/i,
+  /\b(?:AssertionError|TypeError|ReferenceError|SyntaxError)\b/,
+  /\b(?:Command failed|Code style issues found|ELIFECYCLE)\b/i,
+  /\bERR_[A-Z0-9_]+\b/,
+];
 const noisePattern =
   /(?:0 errors?|0 failures?|no errors?|without errors?|error count:\s*0|failures?\s*[:=]\s*0)/i;
 
 export const findActionableError = (text) => {
   const lines = text.split(/\r?\n/).map(normalizeLine).filter(Boolean);
-  const match = lines.find((line) => errorPattern.test(line) && !noisePattern.test(line));
+  const match = lines.find(
+    (line) => actionablePatterns.some((pattern) => pattern.test(line)) && !noisePattern.test(line),
+  );
   return match ? match.slice(0, 500) : null;
 };
 

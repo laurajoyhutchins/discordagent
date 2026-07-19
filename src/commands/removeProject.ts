@@ -3,7 +3,7 @@ import {
   type ChatInputCommandInteraction,
   type Guild,
 } from 'discord.js';
-import { notifyRoborevConfigurationChanged } from '../integrations/roborev/index.js';
+import { notifyRoborevConfigurationChanged } from '../integrations/roborev/roborevLifecycle.js';
 import { deleteProjectChannels } from '../services/channelManager.js';
 import { terminalizeLoopsByProject } from '../services/loopRunner.js';
 import { getProject, removeProject } from '../services/projectStore.js';

@@ -159,7 +159,7 @@ export async function reconcileFactoryFloorEntryPoint(
   const commands = await options.api.listGlobalCommands();
   const entryPoints = commands.filter(command => command.type === PRIMARY_ENTRY_POINT);
   if (entryPoints.length > 1) {
-    throw new Error('Discord returned multiple PRIMARY_ENTRY_POINT commands');
+    throw new Error('Discord returned multiple Primary Entry Point commands');
   }
 
   const desired = desiredFactoryFloorEntryPoint();

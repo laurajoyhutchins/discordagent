@@ -5,9 +5,16 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Client } from 'discord.js';
 import type { AgentProviderId } from '../agents/contracts.js';
+import { isStructuredErrorMessage } from '../discord/errorCard.js';
 
 const PROVIDERS = new Set<AgentProviderId>(['claude', 'codex', 'opencode']);
 const DEFAULT_PROMPT = 'Reply with a short confirmation that the headless primary-agent smoke test reached you.';
+const UNHEALTHY_REPLY_PATTERNS = [
+  /^I could not complete the coordination turn:/i,
+  /^Codex sign-in is required\b/i,
+  /^Codex CLI compatibility error:/i,
+  /^I could not form a response\.?$/i,
+] as const;
 
 export interface AgentRoundTripOptions {
   readonly provider: AgentProviderId;
@@ -79,8 +86,15 @@ function enabledProviders(options: AgentRoundTripOptions): Set<AgentProviderId> 
   return new Set([options.provider, ...(options.switchProvider ? [options.switchProvider] : [])]);
 }
 
-function assertReply(text: string, label: string): void {
-  if (!text.trim()) throw new Error(`${label} returned an empty reply.`);
+export function assertHealthyAgentResult(
+  result: { readonly kind: string; readonly text: string },
+  label: string,
+): void {
+  const text = result.text.trim();
+  if (!text) throw new Error(`${label} returned an empty reply.`);
+  if (UNHEALTHY_REPLY_PATTERNS.some(pattern => pattern.test(text)) || isStructuredErrorMessage(text)) {
+    throw new Error(`${label} provider failed with an unhealthy primary-agent response: ${text.slice(0, 240)}`);
+  }
 }
 
 export async function runAgentRoundTrip(options: AgentRoundTripOptions): Promise<AgentRoundTripResult> {
@@ -107,28 +121,34 @@ export async function runAgentRoundTrip(options: AgentRoundTripOptions): Promise
       disableUsagePolling: true,
     });
 
-    const first = await runtime.conversationService!.process({
-      conversationId,
-      userId: 'headless-smoke',
-      text: options.prompt,
-    });
-    assertReply(first.text, options.provider);
-
-    let secondKind: string | undefined;
-    let responsePreview = first.text.trim().replace(/\s+/g, ' ').slice(0, 160);
     if (options.switchProvider) {
+      if (!runtime.providers.list().includes(options.switchProvider)) {
+        throw new Error(`${options.switchProvider} is not registered on this host.`);
+      }
       const target = runtime.providers.require(options.switchProvider);
       const availability = await target.checkAvailability();
       if (!availability.available) {
         throw new Error(availability.reason ?? `${options.switchProvider} is unavailable on this host.`);
       }
+    }
+
+    const first = await runtime.conversationService!.process({
+      conversationId,
+      userId: 'headless-smoke',
+      text: options.prompt,
+    });
+    assertHealthyAgentResult(first, options.provider);
+
+    let secondKind: string | undefined;
+    let responsePreview = first.text.trim().replace(/\s+/g, ' ').slice(0, 160);
+    if (options.switchProvider) {
       await activatePrimaryProvider(options.switchProvider);
       const second = await runtime.conversationService!.process({
         conversationId,
         userId: 'headless-smoke',
         text: options.prompt,
       });
-      assertReply(second.text, options.switchProvider);
+      assertHealthyAgentResult(second, options.switchProvider);
       secondKind = second.kind;
       responsePreview = second.text.trim().replace(/\s+/g, ' ').slice(0, 160);
     }
@@ -151,8 +171,11 @@ export async function runAgentRoundTrip(options: AgentRoundTripOptions): Promise
       responsePreview,
     };
   } finally {
-    if (runtime) await stopRuntime(runtime);
-    rmSync(directory, { recursive: true, force: true });
+    try {
+      if (runtime) await stopRuntime(runtime);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   }
 }
 

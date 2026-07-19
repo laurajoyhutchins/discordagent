@@ -41,6 +41,40 @@ describe('CodexProvider', () => {
     expect(events).toContainEqual({ type: 'text_delta', text: 'hi' });
   });
 
+  it('rejects active completion when the App Server transport exits', async () => {
+    const transport = new FakeTransport();
+    const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
+    const run = await provider.startTask(startInput, createHost());
+
+    transport.emit('exit', new Error('Codex App Server exited (1)'));
+
+    await expect(run.completion).rejects.toThrow(/Codex App Server exited/);
+  });
+
+  it('settles a terminal completion when final event delivery fails', async () => {
+    const transport = new FakeTransport();
+    const provider = new CodexProvider({
+      transport: transport as never,
+      auth: { readAccount: async () => ({ authenticated: true }) } as never,
+    });
+    const run = await provider.startTask(startInput, createHost({
+      emit: async event => {
+        if (event.type === 'completed') throw new Error('event delivery failed');
+      },
+    }));
+
+    transport.emit('notification', 'turn/completed', {
+      threadId: 'thread-1',
+      turn: { id: 'turn-1', status: 'completed', error: null },
+    });
+
+    const outcome = await Promise.race([
+      run.completion.then(result => result.outcome, error => `rejected:${String(error)}`),
+      new Promise<string>(resolve => setTimeout(() => resolve('timed-out'), 50)),
+    ]);
+    expect(outcome).toBe('completed');
+  });
+
   it('resumes a stored thread before starting a continuation turn', async () => {
     const transport = new FakeTransport();
     const provider = new CodexProvider({ transport: transport as never, auth: { readAccount: async () => ({ authenticated: true }) } as never });
@@ -164,5 +198,4 @@ describe('CodexProvider', () => {
       scope: 'turn',
     });
   });
-
 });

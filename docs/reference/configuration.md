@@ -84,6 +84,28 @@ The deterministic host preflight does not make a paid model call. It reports aut
 | `PRIMARY_AGENT_MODEL` | string | provider default | Optional host default model for PM-style primary-agent turns | No |
 | `PRIMARY_USAGE_RESERVE` | number | `10` | Percentage points of provider capacity reserved for coordination and recovery | No |
 
+### Factory Floor Activity adapter
+
+The Factory Floor adapter is disabled unless `FACTORY_FLOOR_ENABLED=true`. Disabled or absent configuration does not affect Discord Agent startup or direct Claude, Codex, and OpenCode tasks.
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `FACTORY_FLOOR_ENABLED` | boolean | `false` | Enable Factory Floor adapter composition | No |
+| `FACTORY_FLOOR_BASE_URL` | HTTP(S) origin | — | Factory Floor control-plane origin, without credentials, path, query, or fragment | Potentially |
+| `FACTORY_FLOOR_AGENT_TO_FACTORY_KEY` | string | — | Current HMAC key used only for Discord Agent-to-Factory Floor service requests | Yes |
+| `FACTORY_FLOOR_FACTORY_TO_AGENT_KEY` | string | — | Current HMAC key used only for Factory Floor-to-Discord Agent callbacks | Yes |
+| `FACTORY_FLOOR_PREVIOUS_AGENT_TO_FACTORY_KEY` | string | empty | Previous outgoing-direction key accepted during rotation overlap | Yes |
+| `FACTORY_FLOOR_PREVIOUS_FACTORY_TO_AGENT_KEY` | string | empty | Previous callback-direction key accepted during rotation overlap | Yes |
+| `FACTORY_FLOOR_OPERATOR_TOKEN` | string | empty | Optional least-privileged operator API token; never substitutes for service authentication | Yes |
+| `FACTORY_FLOOR_REQUEST_TIMEOUT_MS` | positive integer milliseconds | `15000` | Per-request timeout for Factory Floor clients | No |
+| `FACTORY_FLOOR_MAX_RETRIES` | integer `0`–`3` | `1` | Retry count for explicitly retryable read requests | No |
+
+Current and previous keys within one direction must be different, and no key value may appear in both directions. Operator tokens, service-authentication keys, Activity session tokens, Discord OAuth credentials, and the Discord bot token are separate credential classes and must not reuse values.
+
+Service authentication signs the protocol version, directional key identifier, timestamp, nonce, uppercase method, request path, and SHA-256 digest of the exact body bytes. The receiver enforces bounded clock skew, constant-time signature comparison, key-rotation overlap, and replay-nonce consumption.
+
+Discord Agent SQLite stores only local project/surface/run linkage and bounded replay nonces. It does not store HMAC keys, signatures, operator tokens, Activity session tokens, Factory Floor events, approvals, artifacts, or runtime state.
+
 ### Storage
 
 | Variable | Type | Default | Purpose | Sensitive |
@@ -133,4 +155,4 @@ The SQLite database is created automatically on first run. Migrations are versio
 
 ## Source of truth
 
-Runtime behavior in `src/config.ts`, provider host defaults in `src/agents/providerConfiguration.ts`, and application paths in `src/utils/applicationPaths.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.
+Runtime behavior in `src/config.ts`, provider host defaults in `src/agents/providerConfiguration.ts`, application paths in `src/utils/applicationPaths.ts`, and adapter-specific validation in `src/factoryFloor/config.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.

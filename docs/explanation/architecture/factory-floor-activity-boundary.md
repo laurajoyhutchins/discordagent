@@ -33,9 +33,9 @@ Discord Agent may cache linkage and synchronization metadata, but it must not re
 
 ## Adapter placement
 
-The integration belongs behind a focused `src/factoryFloor/` adapter boundary composed by the existing runtime lifecycle.
+The integration belongs behind a focused `src/factoryFloor/` adapter boundary composed by the existing project-store and runtime lifecycle.
 
-It must remain separate from:
+It remains separate from:
 
 - `AgentProvider` implementations;
 - provider sessions and worktrees;
@@ -43,13 +43,13 @@ It must remain separate from:
 - primary-agent conversation and memory contracts;
 - usage admission and provider selection.
 
-A project without an enabled Factory Floor binding must behave exactly as it does today. Claude, Codex, OpenCode, RoboRev, and direct Discord task controls remain independent of the Activity integration.
+A project without an enabled Factory Floor binding behaves exactly as it does today. Claude, Codex, OpenCode, RoboRev, scheduled loops, and direct Discord task controls remain independent of the Activity integration.
 
 The Activity broker may run in the Discord Agent process because it needs the bot connection, current Discord identity, and local project/task mapping. It is still an adapter: Factory Floor remains the application authority behind it.
 
 ## Local persistence boundary
 
-The current schema ends at migration 9. Activity work therefore starts at migration 10 or the next unused version when implementation begins.
+Scheduled-loop durability uses migration 10. Factory Floor adapter bindings and replay nonces use append-only migration 11.
 
 SQLite may contain only adapter metadata such as:
 
@@ -69,7 +69,7 @@ SQLite must not contain:
 - Factory Floor events, executions, attempts, artifacts, lineage, policy decisions, or approval state;
 - artifact contents or copied runtime projections.
 
-Existing task control cards remain the direct-task projection for Discord Agent's own provider-neutral task runtime. Factory Floor synchronization must use separate bindings and canonical Factory Floor queries rather than treating those cards as shared runtime state.
+Existing task control cards remain the direct-task projection for Discord Agent's own provider-neutral task runtime. Factory Floor synchronization uses separate bindings and canonical Factory Floor queries rather than treating those cards as shared runtime state.
 
 ## Trusted launch and identity
 
@@ -92,6 +92,8 @@ OAuth uses authorization-code exchange with S256 PKCE and one-time state. Tokens
 
 Discord Agent and Factory Floor use separate directional service-authentication keys. Requests are signed over the exact method, path, body digest, timestamp, nonce, key identifier, and protocol version. Verification requires bounded clock skew, constant-time comparison, replay protection, and key-rotation overlap.
 
+Both repositories verify the identical `contracts/discord-activity/service-auth-v1.json` bytes and fixed SHA-256 digest before the integration can be enabled. The vectors cover both key directions and bind signatures to exact body bytes, method, path, timestamp, nonce, key ID, and protocol version.
+
 Approval and cancellation are sensitive actions. Factory Floor must call Discord Agent's private revalidation boundary immediately before mutation so Discord Agent can re-fetch the active Activity instance, current guild member, location, and required role. Failure or stale identity fails closed.
 
 The browser never supplies trusted role claims. Factory Floor never receives the Discord bot token or broad Discord authority.
@@ -106,11 +108,11 @@ After restart or cursor loss, reconciliation is bounded to current linked projec
 
 ## Lifecycle and failure behavior
 
-The feature is disabled by default.
+The feature is disabled by default. After database migrations, Discord Agent may construct the local binding repository and HTTP clients without making a network request. Disabled configuration is a no-op. Invalid enabled configuration or client-construction failure is logged through the redaction boundary and leaves direct providers available; no Activity is advertised.
 
-When enabled, the runtime starts the broker only after migrations and Discord readiness, and stops HTTP intake and synchronization before closing SQLite. A configured broker that cannot start must fail startup rather than advertise a broken Activity. Synchronization failures may degrade the Discord projection, but they must not mutate or reinterpret Factory Floor state.
+The later HTTPS broker has a stricter lifecycle because it creates a public entrypoint. Once that broker is explicitly enabled, it starts only after migrations and Discord readiness, and shutdown stops HTTP intake and synchronization before closing SQLite. A configured broker that cannot bind or validate its public boundary must fail that broker enablement rather than advertise a broken Activity.
 
-Rollout begins with read-only views. Approval and cancellation require a separate feature gate and the reverse principal-revalidation boundary. Production enablement follows credentialed desktop, web, iOS, and Android acceptance and a canary project binding.
+Synchronization failures may degrade the Discord projection, but they must not mutate or reinterpret Factory Floor state. Rollout begins with read-only views. Approval and cancellation require a separate feature gate and the reverse principal-revalidation boundary. Production enablement follows credentialed desktop, web, iOS, and Android acceptance and a canary project binding.
 
 ## Invariants
 

@@ -44,11 +44,17 @@
 - **Authentication:** CLI-native; no Discord Agent involvement
 - **Behavior:** Capability-dependent; session load/resume requires ACP support
 
+## Factory Floor adapter
+
+- **HTTP contract:** `/api/v1/discord/activity/sessions` create/join, refresh, and revoke boundaries
+- **Service authentication:** Directional HMAC-SHA256 protocol version 1 with exact-body signing and bounded nonce replay protection
+- **Enablement:** Disabled by default; unbound projects and direct provider tasks remain unchanged
+
 ## SQLite
 
 - **Driver:** `better-sqlite3` ^12.4.1
 - **Migrations:** Versioned, transactional, recorded in `schema_migrations`
-- **Current schema version:** 10
+- **Current schema version:** 11
 
 ## Operating system
 

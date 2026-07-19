@@ -61,6 +61,14 @@ export class FactoryFloorLaunchConflictError extends Error {
   }
 }
 
+interface NormalizedCreateLaunchInput extends FactoryFloorLaunchContext {
+  stateId: string;
+  interactionId: string;
+  createdAt: number;
+  expiresAt: number;
+  localProjectId: string;
+}
+
 interface LaunchRow {
   state_id: string;
   interaction_id: string;
@@ -158,7 +166,7 @@ function mapLaunch(row: LaunchRow): FactoryFloorLaunchRecord {
   };
 }
 
-function sameLaunch(row: LaunchRow, input: Required<CreateFactoryFloorLaunchInput>): boolean {
+function sameLaunch(row: LaunchRow, input: NormalizedCreateLaunchInput): boolean {
   return row.state_id === input.stateId
     && row.interaction_id === input.interactionId
     && row.application_id === input.applicationId
@@ -208,80 +216,94 @@ export function createFactoryFloorLaunchRepository(
 
   function validateInput(
     input: CreateFactoryFloorLaunchInput,
-  ): Required<CreateFactoryFloorLaunchInput> & { localProjectId: string } {
+  ): NormalizedCreateLaunchInput {
     const createdAt = timestamp(input.createdAt ?? Date.now(), 'created_at');
     const expiresAt = timestamp(input.expiresAt, 'expires_at');
     if (expiresAt <= createdAt) throw new Error('launch_expiry_invalid');
     if (input.installationType !== 'guild') throw new Error('installation_type_invalid');
 
-    const normalized = {
-      stateId: required(input.stateId, 'state_id'),
-      interactionId: required(input.interactionId, 'interaction_id'),
-      applicationId: required(input.applicationId, 'application_id'),
-      installationType: input.installationType,
-      installationOwnerId: required(input.installationOwnerId, 'installation_owner_id'),
-      guildId: required(input.guildId, 'guild_id'),
-      channelId: required(input.channelId, 'channel_id'),
-      threadId: optional(input.threadId) ?? undefined,
-      principalId: required(input.principalId, 'principal_id'),
-      projectName: required(input.projectName, 'project_name'),
-      factoryFloorProjectId: required(
-        input.factoryFloorProjectId,
-        'factory_floor_project_id',
-      ),
-      surfaceId: optional(input.surfaceId) ?? undefined,
-      runId: optional(input.runId) ?? undefined,
-      contextKind: input.contextKind,
-      createdAt,
-      expiresAt,
-    };
+    const stateId = required(input.stateId, 'state_id');
+    const interactionId = required(input.interactionId, 'interaction_id');
+    const applicationId = required(input.applicationId, 'application_id');
+    const installationOwnerId = required(
+      input.installationOwnerId,
+      'installation_owner_id',
+    );
+    const guildId = required(input.guildId, 'guild_id');
+    const channelId = required(input.channelId, 'channel_id');
+    const threadId = optional(input.threadId) ?? undefined;
+    const principalId = required(input.principalId, 'principal_id');
+    const projectName = required(input.projectName, 'project_name');
+    const factoryFloorProjectId = required(
+      input.factoryFloorProjectId,
+      'factory_floor_project_id',
+    );
+    const surfaceId = optional(input.surfaceId) ?? undefined;
+    const runId = optional(input.runId) ?? undefined;
+    const contextKind = input.contextKind;
 
     if (
-      (normalized.contextKind === 'project'
-        && (normalized.surfaceId !== undefined || normalized.runId !== undefined))
-      || (normalized.contextKind === 'run'
-        && (normalized.surfaceId === undefined || normalized.runId === undefined))
+      (contextKind === 'project' && (surfaceId !== undefined || runId !== undefined))
+      || (contextKind === 'run' && (surfaceId === undefined || runId === undefined))
     ) {
       throw new Error('launch_context_invalid');
     }
 
-    const project = selectProject.get(normalized.projectName) as ProjectRow | undefined;
+    const project = selectProject.get(projectName) as ProjectRow | undefined;
     if (!project) throw new Error('project_not_found');
     const binding = selectProjectBinding.get(project.id) as ProjectBindingRow | undefined;
     if (
       !binding
       || binding.retired_at !== null
-      || binding.factory_floor_project_id !== normalized.factoryFloorProjectId
-      || binding.guild_id !== normalized.guildId
-      || binding.guild_id !== normalized.installationOwnerId
+      || binding.factory_floor_project_id !== factoryFloorProjectId
+      || binding.guild_id !== guildId
+      || binding.guild_id !== installationOwnerId
     ) {
       throw new FactoryFloorLaunchConflictError('project_binding_mismatch');
     }
 
-    if (normalized.contextKind === 'run') {
-      const surface = selectSurface.get(normalized.surfaceId) as SurfaceRow | undefined;
+    if (contextKind === 'run') {
+      const surface = selectSurface.get(surfaceId) as SurfaceRow | undefined;
       if (
         !surface
         || surface.retired_at !== null
         || surface.local_project_id !== project.id
-        || surface.guild_id !== normalized.guildId
-        || surface.channel_id !== normalized.channelId
-        || surface.thread_id !== (normalized.threadId ?? null)
+        || surface.guild_id !== guildId
+        || surface.channel_id !== channelId
+        || (threadId !== undefined && surface.thread_id !== threadId)
       ) {
         throw new FactoryFloorLaunchConflictError('surface_binding_mismatch');
       }
-      const run = selectRun.get(normalized.runId) as RunRow | undefined;
+      const run = selectRun.get(runId) as RunRow | undefined;
       if (
         !run
         || run.retired_at !== null
         || run.local_project_id !== project.id
-        || run.surface_id !== normalized.surfaceId
+        || run.surface_id !== surfaceId
       ) {
         throw new FactoryFloorLaunchConflictError('run_binding_mismatch');
       }
     }
 
-    return { ...normalized, localProjectId: project.id };
+    return {
+      stateId,
+      interactionId,
+      applicationId,
+      installationType: 'guild',
+      installationOwnerId,
+      guildId,
+      channelId,
+      threadId,
+      principalId,
+      projectName,
+      factoryFloorProjectId,
+      surfaceId,
+      runId,
+      contextKind,
+      createdAt,
+      expiresAt,
+      localProjectId: project.id,
+    };
   }
 
   return {
@@ -338,6 +360,7 @@ export function createFactoryFloorLaunchRepository(
 
     consume(input) {
       const expected = input.expected;
+      const consumedAt = timestamp(input.now, 'consumed_at');
       const result = db.raw.prepare(`
         UPDATE factory_floor_launch_states
         SET consumed_at = ?
@@ -360,9 +383,9 @@ export function createFactoryFloorLaunchRepository(
           AND run_id IS ?
           AND context_kind = ?
       `).run(
-        timestamp(input.now, 'consumed_at'),
+        consumedAt,
         required(input.stateId, 'state_id'),
-        input.now,
+        consumedAt,
         required(expected.applicationId, 'application_id'),
         expected.installationType,
         required(expected.installationOwnerId, 'installation_owner_id'),

@@ -61,7 +61,9 @@ describe('removeProject', () => {
     expect(removeProject.mock.invocationCallOrder[0]).toBeLessThan(
       deleteProjectChannels.mock.invocationCallOrder[0]!,
     );
-    expect(command.editReply).toHaveBeenCalledWith(expect.stringMatching(/archived.*loops stopped/i));
+    expect(command.editReply).toHaveBeenCalledWith(
+      expect.stringMatching(/archived.*scheduled loop.*stopped/i),
+    );
   });
 
   it('does not terminalize loops when the project does not exist', async () => {

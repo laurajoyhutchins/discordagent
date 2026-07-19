@@ -24,16 +24,22 @@ function optionalEnv(
   return env[key]?.trim() || undefined;
 }
 
-function positiveInteger(
+function boundedInteger(
   value: string | undefined,
   fallback: number,
   key: string,
+  minimum: number,
   maximum?: number,
 ): number {
   if (value === undefined || value.trim() === '') return fallback;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0 || (maximum !== undefined && parsed > maximum)) {
-    throw new Error(`${key} must be an integer between 0 and ${maximum ?? Number.MAX_SAFE_INTEGER}`);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed < minimum ||
+    (maximum !== undefined && parsed > maximum)
+  ) {
+    const upper = maximum ?? Number.MAX_SAFE_INTEGER;
+    throw new Error(`${key} must be an integer between ${minimum} and ${upper}`);
   }
   return parsed;
 }
@@ -54,7 +60,10 @@ function normalizeBaseUrl(value: string): string {
   if (url.search || url.hash) {
     throw new Error('FACTORY_FLOOR_BASE_URL must not contain a query or fragment');
   }
-  if (!url.pathname.endsWith('/')) url.pathname += '/';
+  if (url.pathname !== '/' && url.pathname !== '') {
+    throw new Error('FACTORY_FLOOR_BASE_URL must be an origin without a path');
+  }
+  url.pathname = '/';
   return url.toString();
 }
 
@@ -62,15 +71,26 @@ function assertDistinctCredentials(
   keys: ServiceAuthKeys,
   operatorToken: string | undefined,
 ): void {
-  if (keys.agentToFactoryKey === keys.factoryToAgentKey) {
-    throw new Error('Factory Floor directional service-authentication keys must be distinct');
-  }
-  const serviceKeys = [
+  const agentDirection = [
     keys.agentToFactoryKey,
-    keys.factoryToAgentKey,
     keys.previousAgentToFactoryKey,
+  ].filter((value): value is string => Boolean(value));
+  const factoryDirection = [
+    keys.factoryToAgentKey,
     keys.previousFactoryToAgentKey,
   ].filter((value): value is string => Boolean(value));
+
+  if (new Set(agentDirection).size !== agentDirection.length) {
+    throw new Error('Factory Floor current and previous agent-to-factory keys must be distinct');
+  }
+  if (new Set(factoryDirection).size !== factoryDirection.length) {
+    throw new Error('Factory Floor current and previous factory-to-agent keys must be distinct');
+  }
+  if (agentDirection.some(key => factoryDirection.includes(key))) {
+    throw new Error('Factory Floor directional service-authentication keys must be distinct');
+  }
+
+  const serviceKeys = [...agentDirection, ...factoryDirection];
   if (operatorToken && serviceKeys.includes(operatorToken)) {
     throw new Error('Factory Floor operator and service-authentication credentials must be distinct');
   }
@@ -100,15 +120,17 @@ export function factoryFloorConfigFromEnv(
     baseUrl: normalizeBaseUrl(requiredEnv(env, 'FACTORY_FLOOR_BASE_URL')),
     serviceAuthKeys,
     ...(operatorToken ? { operatorToken } : {}),
-    requestTimeoutMs: positiveInteger(
+    requestTimeoutMs: boundedInteger(
       env.FACTORY_FLOOR_REQUEST_TIMEOUT_MS,
       15_000,
       'FACTORY_FLOOR_REQUEST_TIMEOUT_MS',
+      1,
     ),
-    maxRetries: positiveInteger(
+    maxRetries: boundedInteger(
       env.FACTORY_FLOOR_MAX_RETRIES,
       1,
       'FACTORY_FLOOR_MAX_RETRIES',
+      0,
       3,
     ),
   };

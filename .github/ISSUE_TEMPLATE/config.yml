@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Public documentation
+    url: https://github.com/laurajoyhutchins/discordagent/tree/main/docs
+    about: Check setup, command, configuration, architecture, and operations documentation before filing an issue.
+  - name: Security reports
+    url: https://github.com/laurajoyhutchins/discordagent/security/policy
+    about: Follow the private reporting instructions for suspected vulnerabilities or exposed credentials.

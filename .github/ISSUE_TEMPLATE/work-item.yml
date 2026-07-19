@@ -1,0 +1,86 @@
+name: Work item
+description: Track a durable feature, maintenance task, documentation gap, or architectural change.
+title: ""
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use an issue when the work should survive beyond one coding session or pull request. Small fixes discovered and completed inside a focused PR do not require a separate issue.
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Work type
+      options:
+        - Feature
+        - Maintenance
+        - Documentation
+        - Architecture
+        - Operations
+        - Cross-repository integration
+    validations:
+      required: true
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: Describe the outcome this issue should produce, rather than only the implementation mechanism.
+      placeholder: Make it possible to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Explain the current behavior, relevant boundaries, and why the work belongs in this repository.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: List the concrete responsibilities owned by this issue.
+      placeholder: |
+        - Add...
+        - Preserve...
+        - Document...
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: Record nearby work that must not be pulled into this issue.
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Define observable completion conditions.
+      placeholder: |
+        - [ ] Existing provider-neutral behavior remains unchanged.
+        - [ ] New behavior has regression coverage.
+        - [ ] Operator-facing behavior is documented.
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and sequencing
+      description: Link prerequisite issues, pull requests, external contracts, or safe parallel work.
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: State the checks, smoke tests, or retained evidence expected before completion.
+      placeholder: |
+        - npm test
+        - npm run build
+        - npm run check:docs

@@ -24,6 +24,7 @@ function database(): DatabaseHandle {
 
 function enabledEnv(overrides: Record<string, string | undefined> = {}) {
   return {
+    DISCORD_CLIENT_ID: 'application-1',
     FACTORY_FLOOR_ENABLED: 'true',
     FACTORY_FLOOR_BASE_URL: 'https://factory-floor.example/',
     FACTORY_FLOOR_AGENT_TO_FACTORY_KEY: 'agent-key',
@@ -64,7 +65,7 @@ describe('Factory Floor runtime composition', () => {
     expect(logger.mock.calls.flat().join(' ')).not.toContain('user:secret');
   });
 
-  it('constructs local bindings, nonce storage, and clients without a startup request', async () => {
+  it('constructs local bindings, launch state, nonce storage, and clients without a startup request', async () => {
     const fetchFn = vi.fn<typeof fetch>();
 
     const runtime = initializeFactoryFloorRuntime(database(), {
@@ -74,6 +75,8 @@ describe('Factory Floor runtime composition', () => {
 
     expect(runtime).toBeDefined();
     expect(runtime?.bindings).toBeDefined();
+    expect(runtime?.launches).toBeDefined();
+    expect(runtime?.activityLaunch).toBeDefined();
     expect(runtime?.nonceStore).toBeDefined();
     expect(runtime?.serviceClient).toBeDefined();
     expect(runtime?.operatorClient).toBeUndefined();

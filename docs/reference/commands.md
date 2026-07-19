@@ -17,7 +17,7 @@ Open a message's context menu and choose **Apps → Turn into task**. The select
 | `/help` | Any guild channel | `AUTHORIZED_ROLE_IDS` | Read-only contextual guidance for the primary channel, project channel, task thread, review channel, or general workspace |
 | `/add-project` | Guild channel | `AUTHORIZED_ROLE_IDS` | Creates a project category and `#agent` channel, optionally creates `#roborev`, and persists the project |
 | `/list-projects` | Guild channel | `AUTHORIZED_ROLE_IDS` | Read-only project listing |
-| `/remove-project` | Guild channel | `AUTHORIZED_ROLE_IDS` | Archives the project and deletes its Discord category and channels; preserves historical records and worktrees |
+| `/remove-project` | Guild channel | `AUTHORIZED_ROLE_IDS` | Terminalizes active scheduled loops, archives the project, and deletes its Discord category and channels; preserves historical records and worktrees |
 | `/provider` | `#agent-chat`, project channel, or task thread | Owner in `#agent-chat`; otherwise `AUTHORIZED_ROLE_IDS` | Changes a global/project default or proposes a confirmed sibling handoff from a task thread |
 | `/model` | `#agent-chat`, project channel, or supported task context | Owner in `#agent-chat`; otherwise `AUTHORIZED_ROLE_IDS` | Changes provider-scoped defaults or supplies a one-turn override; does not convert an existing provider session |
 | `/settings` | `#agent-chat` | `AUTHORIZED_USER_ID` | Opens owner-only global settings controls and persists supported global settings |
@@ -26,8 +26,8 @@ Open a message's context menu and choose **Apps → Turn into task**. The select
 | `/agents` | Guild channel | `AUTHORIZED_ROLE_IDS` | Read-only active-task and reservation report |
 | `/usage` | Guild channel | `AUTHORIZED_ROLE_IDS` | Read-only provider-window and admission report |
 | `/cancel` | Task thread | `AUTHORIZED_ROLE_IDS` | Cancels the task while preserving its record and worktree |
-| `/loop` | Registered project channel | `AUTHORIZED_ROLE_IDS` | Starts recurring turns in one durable thread, task, session, and worktree |
-| `/stop-loop` | Project channel or loop thread | `AUTHORIZED_ROLE_IDS` | Stops the associated recurring loop |
+| `/loop` | Registered project channel | `AUTHORIZED_ROLE_IDS` | Starts recurring turns in one durable thread, task, session, worktree, and restart-reconciled schedule |
+| `/stop-loop` | Project channel or loop thread | `AUTHORIZED_ROLE_IDS` | Idempotently stops the associated durable recurring loop |
 | `/codex-auth` | `#agent-chat` | `AUTHORIZED_USER_ID` | Reads or changes host-local Codex authentication state through owner-only controls |
 | `/roborev` | Guild channel | `AUTHORIZED_ROLE_IDS` | Enables or disables RoboRev review delivery for a named project and reconciles the review-source lifecycle |
 
@@ -65,7 +65,7 @@ When RoboRev is enabled, the project receives a `#roborev` channel and the revie
 |---|---:|---|
 | `name` | Yes | Registered project name |
 
-The project is soft-archived. Its Discord category and channels are deleted. Historical SQLite records and task worktrees are preserved. Review-source configuration is reconciled after removal.
+Active scheduled loops for the project are terminalized before the project is soft-archived and its Discord category and channels are deleted. Historical SQLite records and task worktrees are preserved. Review-source configuration is reconciled after removal.
 
 ### `/provider`
 
@@ -100,7 +100,7 @@ No parameters. The command resolves the durable task from the current thread, as
 | `prompt` | Yes | Prompt to run repeatedly |
 | `interval` | No | Delay between iterations, such as `5m`, `1h`, or `30s`; default `10m` |
 
-Iterations do not overlap. The loop reuses one durable task, thread, provider session, branch, and worktree.
+Iterations do not overlap. The loop reuses one durable task, thread, provider session, branch, and worktree. Its schedule is persisted in SQLite and reconciled after restart. Future due times are preserved; an overdue loop runs once immediately rather than replaying every missed interval; a crash-interrupted provider turn is not replayed automatically.
 
 ### `/codex-auth`
 
@@ -133,7 +133,7 @@ Text commands are message prefixes interpreted in project channels or task threa
 | `/model <name> <prompt>` | Project channel or task thread | Use a model for one turn without changing the stored setting |
 | `/loop [interval] <prompt>` | Project channel | Start recurring task execution |
 | `/stop-loop` | Project channel or loop thread | Stop recurring execution |
-| `/status` | Project channel or loop thread | Show loop status |
+| `/status` | Project channel or loop thread | Show durable loop status |
 
 ## Natural-language task behavior
 

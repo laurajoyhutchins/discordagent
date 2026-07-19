@@ -6,6 +6,10 @@ import {
 } from 'discord.js';
 import type { AnyThreadChannel, Message } from 'discord.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
+import { openDatabase, type DatabaseHandle } from '../db/database.js';
+import { runMigrations } from '../db/migrations.js';
+import { createLoopRepository } from '../repositories/loopRepository.js';
+import { createProjectRepository } from '../repositories/projectRepository.js';
 import type { Project } from '../types.js';
 
 process.env.DISCORD_TOKEN = 'test';
@@ -14,10 +18,13 @@ process.env.DISCORD_GUILD_ID = 'test';
 process.env.AUTHORIZED_ROLE_IDS = 'role';
 
 const {
+  clearLoopRunner,
+  configureLoopRunner,
   startLoop,
-  stopAllLoops,
   stopLoop,
 } = await import('./loopRunner.js');
+
+const handles: DatabaseHandle[] = [];
 
 const project: Project = {
   name: 'factory-floor',
@@ -28,7 +35,10 @@ const project: Project = {
   models: { claude: 'sonnet' },
 };
 
-afterEach(() => stopAllLoops());
+afterEach(() => {
+  clearLoopRunner();
+  while (handles.length > 0) handles.pop()?.close();
+});
 
 function addChannelCapabilities(
   target: object,
@@ -73,19 +83,49 @@ function setup() {
     startInExistingThread: ReturnType<typeof vi.fn>;
     continueInThread: ReturnType<typeof vi.fn>;
   };
-  const scheduled: Array<() => Promise<void>> = [];
-  const schedule = vi.fn((callback: () => Promise<void>) => {
-    scheduled.push(callback);
-    return 1 as unknown as ReturnType<typeof setTimeout>;
+  const scheduled: Array<{ callback: () => Promise<void>; delayMs: number; active: boolean }> = [];
+  const schedule = vi.fn((callback: () => Promise<void>, delayMs: number) => {
+    scheduled.push({ callback, delayMs, active: true });
+    return scheduled.length as unknown as ReturnType<typeof setTimeout>;
   });
-  return { thread, channel, message, coordinator, scheduled, schedule };
+  const clearSchedule = vi.fn((timer: ReturnType<typeof setTimeout>) => {
+    const entry = scheduled[(timer as unknown as number) - 1];
+    if (entry) entry.active = false;
+  });
+  const logger = vi.fn();
+  const db = openDatabase(':memory:');
+  handles.push(db);
+  runMigrations(db);
+  const projects = createProjectRepository(db);
+  projects.create(project);
+  const loops = createLoopRepository(db);
+  configureLoopRunner({
+    repository: loops,
+    coordinator,
+    fetchThread: async id => id === thread.id ? thread : null,
+    findProject: name => name === project.name ? project : undefined,
+    schedule,
+    clearSchedule,
+    logger,
+  });
+  return {
+    thread,
+    channel,
+    message,
+    coordinator,
+    scheduled,
+    schedule,
+    clearSchedule,
+    logger,
+    loops,
+  };
 }
 
 describe('loopRunner durable task reuse', () => {
   it('starts one durable task and continues the same thread on later iterations', async () => {
-    const { thread, message, coordinator, scheduled, schedule } = setup();
+    const { thread, message, coordinator, scheduled, schedule, loops } = setup();
 
-    await startLoop(60_000, 'run the tests', project, message, { coordinator, schedule });
+    await startLoop(60_000, 'run the tests', project, message);
 
     expect(coordinator.startInExistingThread).toHaveBeenCalledWith({
       projectName: 'factory-floor',
@@ -95,8 +135,12 @@ describe('loopRunner durable task reuse', () => {
     });
     expect(coordinator.continueInThread).not.toHaveBeenCalled();
     expect(schedule).toHaveBeenCalledTimes(1);
+    expect(loops.findActiveByChannelId('agent-1')).toEqual(expect.objectContaining({
+      iteration: 1,
+      status: 'active',
+    }));
 
-    await scheduled[0]();
+    await scheduled[0]!.callback();
 
     expect(coordinator.continueInThread).toHaveBeenCalledWith({
       prompt: 'run the tests',
@@ -104,6 +148,7 @@ describe('loopRunner durable task reuse', () => {
     });
     expect(coordinator.startInExistingThread).toHaveBeenCalledTimes(1);
     expect(schedule).toHaveBeenCalledTimes(2);
+    expect(loops.findActiveByChannelId('agent-1')?.iteration).toBe(2);
   });
 
   it('does not schedule the next iteration until the current continuation finishes', async () => {
@@ -113,8 +158,8 @@ describe('loopRunner durable task reuse', () => {
       resolveContinuation = resolve;
     }));
 
-    await startLoop(60_000, 'run the tests', project, message, { coordinator, schedule });
-    const secondIteration = scheduled[0]();
+    await startLoop(60_000, 'run the tests', project, message);
+    const secondIteration = scheduled[0]!.callback();
     await vi.waitFor(() => expect(coordinator.continueInThread).toHaveBeenCalledTimes(1));
     expect(schedule).toHaveBeenCalledTimes(1);
 
@@ -126,10 +171,10 @@ describe('loopRunner durable task reuse', () => {
 
 describe('loopRunner capability-aware presentation', () => {
   it('uses text for start, iteration, and waiting states when embeds are unavailable', async () => {
-    const { thread, message, coordinator, schedule } = setup();
+    const { thread, message } = setup();
     addChannelCapabilities(thread, [PermissionFlagsBits.SendMessagesInThreads]);
 
-    await startLoop(60_000, 'run the tests @everyone', project, message, { coordinator, schedule });
+    await startLoop(60_000, 'run the tests @everyone', project, message);
 
     const payloads = thread.send.mock.calls.map(([payload]) => payload as {
       content?: string;
@@ -155,7 +200,7 @@ describe('loopRunner capability-aware presentation', () => {
   });
 
   it('retries each lifecycle state as text after Discord rejects its embed', async () => {
-    const { thread, message, coordinator, schedule } = setup();
+    const { thread, message } = setup();
     addChannelCapabilities(thread, [
       PermissionFlagsBits.SendMessagesInThreads,
       PermissionFlagsBits.EmbedLinks,
@@ -165,7 +210,7 @@ describe('loopRunner capability-aware presentation', () => {
       return { id: 'message-1' };
     });
 
-    await startLoop(60_000, 'run the tests', project, message, { coordinator, schedule });
+    await startLoop(60_000, 'run the tests', project, message);
 
     const payloads = thread.send.mock.calls.map(([payload]) => payload as {
       content?: string;
@@ -176,43 +221,36 @@ describe('loopRunner capability-aware presentation', () => {
     expect(payloads.filter(payload => payload.embeds?.length)).toHaveLength(3);
     const fallbacks = payloads.filter(payload => payload.content);
     expect(fallbacks).toHaveLength(3);
-    expect(fallbacks).toEqual(expect.arrayContaining([
-      expect.objectContaining({ allowedMentions: { parse: [] } }),
-    ]));
     expect(fallbacks.every(payload => payload.allowedMentions?.parse.length === 0)).toBe(true);
     expect(fallbacks[0]).toEqual(expect.objectContaining({ components: expect.any(Array) }));
     expect(fallbacks[2]).toEqual(expect.objectContaining({ components: expect.any(Array) }));
   });
 
-  it('does not start a hidden loop when neither rich nor text startup can be delivered', async () => {
-    const { thread, message, coordinator, schedule } = setup();
-    const logger = vi.fn();
+  it('does not create a durable loop when neither rich nor text startup can be delivered', async () => {
+    const { thread, message, coordinator, schedule, logger, loops } = setup();
     addChannelCapabilities(thread, [
       PermissionFlagsBits.SendMessagesInThreads,
       PermissionFlagsBits.EmbedLinks,
     ]);
     thread.send.mockRejectedValue(new Error('Cannot send messages'));
 
-    await startLoop(60_000, 'run the tests', project, message, {
-      coordinator,
-      schedule,
-      logger,
-    });
+    await startLoop(60_000, 'run the tests', project, message);
 
     expect(coordinator.startInExistingThread).not.toHaveBeenCalled();
     expect(schedule).not.toHaveBeenCalled();
+    expect(loops.findActiveByChannelId('agent-1')).toBeUndefined();
     expect(logger).toHaveBeenCalledWith(expect.stringMatching(/plain-text fallback failed/i));
   });
 
   it('uses a bounded text stopped state when the command surface cannot embed', async () => {
-    const { thread, channel, message, coordinator, schedule } = setup();
+    const { thread, channel, message } = setup();
     addChannelCapabilities(thread, [
       PermissionFlagsBits.SendMessagesInThreads,
       PermissionFlagsBits.EmbedLinks,
     ]);
     addChannelCapabilities(channel, [PermissionFlagsBits.SendMessages]);
 
-    await startLoop(60_000, 'run the tests @everyone', project, message, { coordinator, schedule });
+    await startLoop(60_000, 'run the tests @everyone', project, message);
     await stopLoop(project.agentChannelId, message);
 
     expect(message.reply).toHaveBeenLastCalledWith(expect.objectContaining({

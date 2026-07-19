@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from './database.js';
+import { LOOP_SCHEMA_MIGRATION } from './loopSchemaMigration.js';
 import { SCHEMA_MIGRATIONS } from './schema.js';
 
 export interface Migration {
@@ -22,6 +23,11 @@ const BOOTSTRAP_SQL = `
     applied_at INTEGER NOT NULL
   )
 `;
+
+const DEFAULT_MIGRATIONS: readonly Migration[] = [
+  ...SCHEMA_MIGRATIONS,
+  LOOP_SCHEMA_MIGRATION,
+];
 
 function validateMigrations(migrations: readonly Migration[]): void {
   const seen = new Set<number>();
@@ -64,7 +70,7 @@ function describeForeignKeyViolations(violations: readonly ForeignKeyViolation[]
 
 export function runMigrations(
   db: DatabaseHandle,
-  migrations: readonly Migration[] = SCHEMA_MIGRATIONS,
+  migrations: readonly Migration[] = DEFAULT_MIGRATIONS,
 ): void {
   validateMigrations(migrations);
   db.raw.exec(BOOTSTRAP_SQL);

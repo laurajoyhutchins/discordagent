@@ -46,7 +46,7 @@ function appendHeaders(target: Headers, source: IncomingHttpHeaders): void {
   }
 }
 
-async function readBody(request: IncomingMessage, limit: number): Promise<Uint8Array | undefined> {
+async function readBody(request: IncomingMessage, limit: number): Promise<string | undefined> {
   const method = request.method?.toUpperCase() ?? 'GET';
   if (method === 'GET' || method === 'HEAD') return undefined;
 
@@ -58,7 +58,7 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Uint8A
     if (total > limit) throw new NodeRequestError('body_too_large');
     chunks.push(chunk);
   }
-  return new Uint8Array(Buffer.concat(chunks));
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 async function toRequest(

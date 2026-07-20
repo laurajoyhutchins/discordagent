@@ -4,6 +4,7 @@ import {
   startOptionalActivityBootstrapBroker,
   type ActivityBootstrapGuildClient,
 } from './activityBootstrapRuntime.js';
+import type { ActivityRevalidationDependencies } from './activityRevalidationService.js';
 
 const enabledEnv = {
   FACTORY_FLOOR_ENABLED: 'true',
@@ -14,12 +15,22 @@ const enabledEnv = {
   FACTORY_FLOOR_BROKER_TLS_CERT_PATH: '/run/secrets/broker.crt',
   FACTORY_FLOOR_BROKER_TLS_KEY_PATH: '/run/secrets/broker.key',
   DISCORD_CLIENT_SECRET: 'fixture-client-secret',
+  DISCORD_GUILD_ID: 'guild-1',
 };
 
 const runtime = {
+  config: {
+    serviceAuthKeys: {
+      agentToFactoryKey: 'agent-current',
+      factoryToAgentKey: 'factory-current',
+    },
+  },
+  bindings: { findRun: vi.fn(), findProjectByFactoryFloorId: vi.fn(), findSurfaceByActivityInstance: vi.fn() },
+  activityInstances: { bind: vi.fn() },
   launchLookup: { findByInteractionId: vi.fn() },
   launches: { findByStateId: vi.fn(), consume: vi.fn() },
   oauth: { begin: vi.fn(), verifyAndConsume: vi.fn() },
+  nonceStore: { consumeNonce: vi.fn(() => true) },
   serviceClient: { createOrJoinActivitySession: vi.fn() },
 } as unknown as FactoryFloorRuntimeServices;
 
@@ -49,7 +60,7 @@ describe('optional Activity bootstrap broker composition', () => {
     expect(startServer).not.toHaveBeenCalled();
   });
 
-  it('composes the focused service and returns the server lifecycle', async () => {
+  it('composes OAuth bootstrap and service-authenticated revalidation on one server', async () => {
     const handle = { dispose: vi.fn(async () => undefined) };
     const startServer = vi.fn(async () => handle);
     const activityService = {
@@ -57,6 +68,8 @@ describe('optional Activity bootstrap broker composition', () => {
       bootstrap: vi.fn(),
     };
     const createService = vi.fn(() => activityService);
+    const revalidationService = { revalidate: vi.fn() };
+    const createRevalidationService = vi.fn(() => revalidationService);
     const discord = {
       getActivityInstance: vi.fn(),
       exchangeAuthorizationCode: vi.fn(),
@@ -72,6 +85,7 @@ describe('optional Activity bootstrap broker composition', () => {
       runtime,
       startServer,
       createService,
+      createRevalidationService,
       createDiscordClient,
     })).resolves.toBe(handle);
 
@@ -90,7 +104,18 @@ describe('optional Activity bootstrap broker composition', () => {
       launchLookup: runtime.launchLookup,
       launches: runtime.launches,
       oauth: runtime.oauth,
-      factoryFloor: runtime.serviceClient,
+      factoryFloor: expect.objectContaining({ createOrJoinActivitySession: expect.any(Function) }),
+      resolveMember: expect.any(Function),
+    }));
+    expect(createRevalidationService).toHaveBeenCalledWith(expect.objectContaining({
+      applicationId: 'application-1',
+      guildId: 'guild-1',
+      adapter: 'discord-agent',
+      timeoutMs: 10_000,
+      maxRequests: 30,
+      rateLimitWindowMs: 60_000,
+      discord,
+      bindings: runtime.bindings,
       resolveMember: expect.any(Function),
     }));
     expect(startServer).toHaveBeenCalledWith(expect.objectContaining({
@@ -99,7 +124,7 @@ describe('optional Activity bootstrap broker composition', () => {
     }));
   });
 
-  it('revalidates membership through the current guild client', async () => {
+  it('resolves current roles for bootstrap and action-specific revalidation', async () => {
     const member = { id: 'user-1' };
     const fetchMember = vi.fn(async () => member as never);
     const guildClient: ActivityBootstrapGuildClient = {
@@ -107,7 +132,8 @@ describe('optional Activity bootstrap broker composition', () => {
         fetch: vi.fn(async () => ({ members: { fetch: fetchMember } })),
       },
     };
-    let resolveMember: ((guildId: string, userId: string) => Promise<unknown>) | undefined;
+    let bootstrapResolveMember: ((guildId: string, userId: string) => Promise<unknown>) | undefined;
+    let revalidationDependencies: ActivityRevalidationDependencies | undefined;
 
     await startOptionalActivityBootstrapBroker({
       env: enabledEnv,
@@ -122,16 +148,63 @@ describe('optional Activity bootstrap broker composition', () => {
         getCurrentUser: vi.fn(),
       })),
       createService: vi.fn(dependencies => {
-        resolveMember = dependencies.resolveMember;
+        bootstrapResolveMember = dependencies.resolveMember;
         return { startOAuth: vi.fn(), bootstrap: vi.fn() };
+      }),
+      createRevalidationService: vi.fn(dependencies => {
+        revalidationDependencies = dependencies;
+        return { revalidate: vi.fn() };
       }),
       startServer: vi.fn(async () => ({ dispose: vi.fn(async () => undefined) })),
     });
 
-    await expect(resolveMember?.('guild-1', 'user-1')).resolves.toEqual({
+    await expect(bootstrapResolveMember?.('guild-1', 'user-1')).resolves.toEqual({
       userId: 'user-1',
       authorized: true,
     });
-    expect(fetchMember).toHaveBeenCalledWith('user-1');
+    await expect(
+      revalidationDependencies?.resolveMember('guild-1', 'user-1', 'approve'),
+    ).resolves.toEqual({
+      kind: 'member',
+      userId: 'user-1',
+      authorized: true,
+    });
+    expect(fetchMember).toHaveBeenCalledTimes(2);
+  });
+
+  it('distinguishes removed members from temporary Discord failures', async () => {
+    const removedClient: ActivityBootstrapGuildClient = {
+      guilds: {
+        fetch: vi.fn(async () => ({
+          members: {
+            fetch: vi.fn(async () => Promise.reject({ code: 10_007 })) as never,
+          },
+        })),
+      },
+    };
+    let revalidationDependencies: ActivityRevalidationDependencies | undefined;
+
+    await startOptionalActivityBootstrapBroker({
+      env: enabledEnv,
+      applicationId: 'application-1',
+      botToken: 'bot-token',
+      client: removedClient,
+      runtime,
+      createDiscordClient: vi.fn(() => ({
+        getActivityInstance: vi.fn(),
+        exchangeAuthorizationCode: vi.fn(),
+        getCurrentUser: vi.fn(),
+      })),
+      createService: vi.fn(() => ({ startOAuth: vi.fn(), bootstrap: vi.fn() })),
+      createRevalidationService: vi.fn(dependencies => {
+        revalidationDependencies = dependencies;
+        return { revalidate: vi.fn() };
+      }),
+      startServer: vi.fn(async () => ({ dispose: vi.fn(async () => undefined) })),
+    });
+
+    await expect(
+      revalidationDependencies?.resolveMember('guild-1', 'user-1', 'cancel'),
+    ).resolves.toEqual({ kind: 'missing' });
   });
 });

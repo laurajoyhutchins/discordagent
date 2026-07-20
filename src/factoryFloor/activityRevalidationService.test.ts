@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createActivityRevalidationService,
   type ActivityRevalidationDependencies,
+  type ActivityRevalidationMemberResolution,
   type ActivityRevalidationRequest,
 } from './activityRevalidationService.js';
 import { DiscordActivityApiError } from './discordOAuthClient.js';
@@ -111,12 +112,13 @@ describe('ActivityRevalidationService', () => {
       ...request,
       ...patch,
     } as ActivityRevalidationRequest);
+    const action = 'action' in patch ? patch.action : request.action;
 
     expect(result).toEqual({
       schemaVersion: 1,
       allowed: false,
       reasonCode,
-      action: patch.action === 'delete' ? 'delete' : 'approve',
+      action,
       revalidatedAt: 2_000,
     });
     expect(deps.discord.getActivityInstance).not.toHaveBeenCalled();
@@ -205,7 +207,7 @@ describe('ActivityRevalidationService', () => {
     try {
       const deps = dependencies({
         timeoutMs: 25,
-        resolveMember: vi.fn(() => new Promise(() => undefined)),
+        resolveMember: vi.fn(() => new Promise<ActivityRevalidationMemberResolution>(() => undefined)),
       });
       const result = createActivityRevalidationService(deps).revalidate(request);
       await vi.advanceTimersByTimeAsync(25);

@@ -5,9 +5,17 @@ import {
   type FactoryFloorBindingRepository,
 } from '../repositories/factoryFloorBindingRepository.js';
 import {
+  createFactoryFloorLaunchInteractionLookup,
+  type FactoryFloorLaunchInteractionLookup,
+} from '../repositories/factoryFloorLaunchInteractionLookup.js';
+import {
   createFactoryFloorLaunchRepository,
   type FactoryFloorLaunchRepository,
 } from '../repositories/factoryFloorLaunchRepository.js';
+import {
+  createFactoryFloorOAuthRepository,
+  type FactoryFloorOAuthRepository,
+} from '../repositories/factoryFloorOAuthRepository.js';
 import { createProjectRepository } from '../repositories/projectRepository.js';
 import { redactErrorMessage } from '../utils/redaction.js';
 import {
@@ -29,6 +37,8 @@ export interface FactoryFloorRuntimeServices {
   readonly config: FactoryFloorIntegrationConfig;
   readonly bindings: FactoryFloorBindingRepository;
   readonly launches: FactoryFloorLaunchRepository;
+  readonly launchLookup: FactoryFloorLaunchInteractionLookup;
+  readonly oauth: FactoryFloorOAuthRepository;
   readonly activityLaunch: FactoryFloorActivityLaunchService;
   readonly nonceStore: ServiceAuthNonceStore;
   readonly serviceClient: FactoryFloorServiceClient;
@@ -83,15 +93,22 @@ export function initializeFactoryFloorRuntime(
     };
     const bindings = createFactoryFloorBindingRepository(database);
     const launches = createFactoryFloorLaunchRepository(database);
+    const launchLookup = createFactoryFloorLaunchInteractionLookup(database);
+    const oauth = createFactoryFloorOAuthRepository(database);
+    const cleanedOAuth = oauth.cleanup(now());
     const cleanedLaunches = launches.cleanup(now());
-    if (cleanedLaunches > 0) {
-      logger(`[factoryFloor] Cleaned ${cleanedLaunches} terminal or expired Activity launch registration(s).`);
+    if (cleanedOAuth > 0 || cleanedLaunches > 0) {
+      logger(
+        `[factoryFloor] Cleaned ${cleanedLaunches} launch registration(s) and ${cleanedOAuth} OAuth attempt(s).`,
+      );
     }
     const projects = createProjectRepository(database);
     const runtime: FactoryFloorRuntimeServices = {
       config,
       bindings,
       launches,
+      launchLookup,
+      oauth,
       activityLaunch: createFactoryFloorActivityLaunchService({
         expectedApplicationId: applicationId,
         expectedGuildId: guildId,

@@ -5,6 +5,10 @@ import {
   createActivityBootstrapService,
   type ActivityBootstrapDependencies,
 } from './activityBootstrapService.js';
+import { DiscordActivityApiError } from './discordOAuthClient.js';
+
+const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~abc';
+const challenge = 'dYSqskoTcWrpu8GYY0XpWlzOc0c5rd9YO3uAgh_zmV4';
 
 const launch: FactoryFloorLaunchRecord = {
   stateId: 'opaque-state-1',
@@ -38,25 +42,19 @@ const instance = {
   users: ['user-1'],
 };
 
+const pendingAttempt = {
+  stateId: launch.stateId,
+  instanceId: instance.instanceId,
+  codeChallenge: challenge,
+  codeChallengeMethod: 'S256' as const,
+  createdAt: 2_000,
+  expiresAt: 62_000,
+  consumedAt: undefined,
+};
+
 function dependencies(overrides: Partial<ActivityBootstrapDependencies> = {}) {
-  const oauthBegin = vi.fn(() => ({
-    stateId: launch.stateId,
-    instanceId: instance.instanceId,
-    codeChallenge: 'challenge',
-    codeChallengeMethod: 'S256' as const,
-    createdAt: 2_000,
-    expiresAt: 62_000,
-    consumedAt: undefined,
-  }));
-  const oauthConsume = vi.fn(() => ({
-    stateId: launch.stateId,
-    instanceId: instance.instanceId,
-    codeChallenge: 'challenge',
-    codeChallengeMethod: 'S256' as const,
-    createdAt: 2_000,
-    expiresAt: 62_000,
-    consumedAt: 3_000,
-  }));
+  const oauthBegin = vi.fn(() => pendingAttempt);
+  const oauthConsume = vi.fn(() => ({ ...pendingAttempt, consumedAt: 3_000 }));
   const launchConsume = vi.fn(() => ({ ...launch, consumedAt: 3_000 }));
   const createSession = vi.fn(async () => ({
     instanceBindingId: 'binding-1',
@@ -88,6 +86,7 @@ function dependencies(overrides: Partial<ActivityBootstrapDependencies> = {}) {
     },
     oauth: {
       begin: oauthBegin,
+      findByStateId: vi.fn(() => pendingAttempt),
       verifyAndConsume: oauthConsume,
     },
     resolveMember: vi.fn(async () => ({ userId: 'user-1', authorized: true })),
@@ -98,9 +97,6 @@ function dependencies(overrides: Partial<ActivityBootstrapDependencies> = {}) {
   };
   return { deps, oauthBegin, oauthConsume, launchConsume, createSession };
 }
-
-const challenge = 'J7-8bkm7W7V9l7xZQ8F1NzXWjY9yZK9lGxT5xgYf0JQ';
-const verifier = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~abc';
 
 describe('ActivityBootstrapService', () => {
   it('starts OAuth only after validating the live instance, launch, participant, and member', async () => {
@@ -127,6 +123,17 @@ describe('ActivityBootstrapService', () => {
     });
   });
 
+  it('rejects a malformed S256 challenge before a Discord request', async () => {
+    const { deps } = dependencies();
+    await expect(createActivityBootstrapService(deps).startOAuth({
+      instanceId: instance.instanceId,
+      codeChallenge: 'not-s256',
+    })).rejects.toEqual(expect.objectContaining({
+      code: 'oauth_code_challenge_invalid',
+    }));
+    expect(deps.discord.getActivityInstance).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['application', { discord: { ...dependencies().deps.discord, getActivityInstance: vi.fn(async () => ({ ...instance, applicationId: 'other' })) } }, 'activity_application_mismatch'],
     ['launch', { launchLookup: { findByInteractionId: vi.fn(() => undefined) } }, 'activity_launch_not_found'],
@@ -145,6 +152,26 @@ describe('ActivityBootstrapService', () => {
       code,
     }));
     expect(oauthBegin).not.toHaveBeenCalled();
+  });
+
+  it('maps malformed live instance responses without leaking Discord details', async () => {
+    const { deps } = dependencies({
+      discord: {
+        ...dependencies().deps.discord,
+        getActivityInstance: vi.fn(async () => {
+          throw new DiscordActivityApiError(
+            'malformed_response',
+            'discord_activity_instance_response_invalid',
+          );
+        }),
+      },
+    });
+    await expect(createActivityBootstrapService(deps).startOAuth({
+      instanceId: instance.instanceId,
+      codeChallenge: challenge,
+    })).rejects.toEqual(expect.objectContaining({
+      code: 'activity_instance_response_invalid',
+    }));
   });
 
   it('exchanges OAuth, revalidates identity, consumes state once, and creates the session', async () => {
@@ -211,7 +238,7 @@ describe('ActivityBootstrapService', () => {
 
   it.each([
     ['OAuth user', { discord: { ...dependencies().deps.discord, getCurrentUser: vi.fn(async () => ({ id: 'user-2' })) } }, 'oauth_principal_mismatch'],
-    ['PKCE state', { oauth: { begin: vi.fn(), verifyAndConsume: vi.fn(() => undefined) } }, 'oauth_state_invalid'],
+    ['PKCE state', { oauth: { begin: vi.fn(), findByStateId: vi.fn(() => undefined), verifyAndConsume: vi.fn() } }, 'oauth_state_invalid'],
     ['launch replay', { launches: { findByStateId: vi.fn(() => launch), consume: vi.fn(() => undefined) } }, 'launch_state_invalid'],
   ])('fails closed when %s validation fails', async (_label, override, code) => {
     const { deps, createSession } = dependencies(override as Partial<ActivityBootstrapDependencies>);

@@ -29,12 +29,12 @@ const payload = {
   action: 'approve',
 };
 
-function request(body: string, authorization?: string): Request {
+function request(body: string, serviceAuth?: string): Request {
   return new Request(`https://broker.example${path}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      ...(authorization ? { authorization } : {}),
+      ...(serviceAuth ? { 'x-factory-floor-service-auth': serviceAuth } : {}),
     },
     body,
   });
@@ -115,14 +115,14 @@ describe('Activity revalidation HTTP endpoint', () => {
     ['missing signature', undefined, 'service_auth_header_required'],
     ['wrong direction', formatServiceAuthHeader(signServiceRequest(keys, 'agent-to-ff', 'POST', path, JSON.stringify(payload), 2_000, 'nonce-2')), 'service_auth_unknown_key'],
     ['tampered body', formatServiceAuthHeader(signServiceRequest(keys, 'ff-to-agent', 'POST', path, JSON.stringify(payload), 2_000, 'nonce-3')), 'service_auth_signature_mismatch'],
-  ])('rejects %s before parsing or revalidation', async (_label, authorization, code) => {
+  ])('rejects %s before parsing or revalidation', async (_label, serviceAuth, code) => {
     const signedBody = JSON.stringify(payload);
     const body = code === 'service_auth_signature_mismatch'
       ? `${signedBody} `
       : signedBody;
     const { handle, service } = handler();
 
-    const response = await handle(request(body, authorization));
+    const response = await handle(request(body, serviceAuth));
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: { code } });

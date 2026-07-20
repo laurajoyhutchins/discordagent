@@ -55,6 +55,7 @@ SQLite may contain only adapter metadata such as:
 
 - enabled project-to-installation bindings;
 - task-to-run and optional region bindings;
+- validated Activity-instance-to-surface linkage;
 - short-lived one-time launch registrations;
 - digests of short-lived OAuth state;
 - Discord message links and rendered-payload digests;
@@ -82,9 +83,10 @@ The adapter must:
 3. resolve an enabled Factory Floor project binding and, when applicable, a verified run binding;
 4. create a one-time, short-lived server-side launch registration;
 5. respond with Discord's Activity launch interaction;
-6. validate the official Activity instance, application, location, connected user, and current guild roles during bootstrap.
+6. validate the official Activity instance, application, location, connected user, and current guild roles during bootstrap;
+7. attach the validated Activity instance to the existing run surface before Factory Floor session issuance.
 
-Browser query parameters may select presentation inside an already authorized view. They may not establish project, task, run, role, or Activity-instance authority.
+An Activity instance cannot be moved to another surface, and a surface cannot be rebound to another instance. Browser query parameters may select presentation inside an already authorized view. They may not establish project, task, run, role, or Activity-instance authority.
 
 OAuth uses authorization-code exchange with S256 PKCE and one-time state. Tokens are returned with `Cache-Control: no-store` and are never persisted by Discord Agent.
 
@@ -94,7 +96,11 @@ Discord Agent and Factory Floor use separate directional service-authentication 
 
 Both repositories verify the identical `contracts/discord-activity/service-auth-v1.json` bytes and fixed SHA-256 digest before the integration can be enabled. The vectors cover both key directions and bind signatures to exact body bytes, method, path, timestamp, nonce, key ID, and protocol version.
 
-Approval and cancellation are sensitive actions. Factory Floor must call Discord Agent's private revalidation boundary immediately before mutation so Discord Agent can re-fetch the active Activity instance, current guild member, location, and required role. Failure or stale identity fails closed.
+Approval and cancellation are sensitive actions. Factory Floor calls `POST /api/v1/discord/activity/revalidate` immediately before mutation using the reverse `ff-to-agent` signature. Discord Agent re-fetches the active Activity instance and current guild member, then verifies application, installation, guild, location, participant, current role authorization, adapter, project, surface, run, and requested action. Failure or stale identity fails closed.
+
+The revalidation decision is narrow and non-durable. An allow response includes only stable action, principal, run, reason, and timestamp attribution. A deny response omits principal and run attribution. Discord roles, upstream bodies, signatures, nonces, keys, bearer tokens, and exception text never cross the boundary.
+
+Both repositories freeze the identical `contracts/discord-activity/revalidation-v1.json` bytes with SHA-256 `9e1d155cfc79f61bc373ada6a35a9157cbe557894fe58fcc7ea0ec193c9395ef` before Factory Floor invokes the endpoint.
 
 The browser never supplies trusted role claims. Factory Floor never receives the Discord bot token or broad Discord authority.
 
@@ -110,9 +116,9 @@ After restart or cursor loss, reconciliation is bounded to current linked projec
 
 The feature is disabled by default. After database migrations, Discord Agent may construct the local binding repository and HTTP clients without making a network request. Disabled configuration is a no-op. Invalid enabled configuration or client-construction failure is logged through the redaction boundary and leaves direct providers available; no Activity is advertised.
 
-The later HTTPS broker has a stricter lifecycle because it creates a public entrypoint. Once that broker is explicitly enabled, it starts only after migrations and Discord readiness, and shutdown stops HTTP intake and synchronization before closing SQLite. A configured broker that cannot bind or validate its public boundary must fail that broker enablement rather than advertise a broken Activity.
+The HTTPS broker has a stricter lifecycle because it creates a public entrypoint. Once that broker is explicitly enabled, it starts only after migrations and Discord readiness, and shutdown stops HTTP intake and synchronization before closing SQLite. A configured broker that cannot bind or validate its public boundary must fail that broker enablement rather than advertise a broken Activity.
 
-Synchronization failures may degrade the Discord projection, but they must not mutate or reinterpret Factory Floor state. Rollout begins with read-only views. Approval and cancellation require a separate feature gate and the reverse principal-revalidation boundary. Production enablement follows credentialed desktop, web, iOS, and Android acceptance and a canary project binding.
+Synchronization failures may degrade the Discord projection, but they must not mutate or reinterpret Factory Floor state. Rollout begins with read-only views. Approval and cancellation require the reverse principal-revalidation boundary. Production enablement follows credentialed desktop, web, iOS, and Android acceptance and a canary project binding.
 
 ## Invariants
 

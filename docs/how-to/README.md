@@ -30,4 +30,5 @@ Goal-oriented procedures for specific operational tasks.
 ## Integrations
 
 - [Enable the Factory Floor Activity](integrations/enable-factory-floor-activity.md)
+- [Deploy the Factory Floor bootstrap broker](integrations/deploy-factory-floor-bootstrap-broker.md)
 - [Enable or disable RoboRev](integrations/enable-roborev.md)

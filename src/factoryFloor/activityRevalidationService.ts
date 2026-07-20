@@ -100,7 +100,7 @@ interface RateLimitWindow {
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_REQUESTS = 30;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
-const TIMEOUT = Symbol('activity_revalidation_timeout');
+const TIMEOUT: unique symbol = Symbol('activity_revalidation_timeout');
 
 function positiveInteger(value: number, code: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error(code);
@@ -115,7 +115,10 @@ function sameProject(left: string, right: string): boolean {
   return left.localeCompare(right, undefined, { sensitivity: 'accent' }) === 0;
 }
 
-async function bounded<T>(promise: Promise<T>, timeoutMs: number): Promise<T | typeof TIMEOUT> {
+async function bounded<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T | typeof TIMEOUT> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -127,6 +130,23 @@ async function bounded<T>(promise: Promise<T>, timeoutMs: number): Promise<T | t
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+async function currentMember(
+  dependencies: ActivityRevalidationDependencies,
+  guildId: string,
+  userId: string,
+  action: ActivityRevalidationAction,
+  timeoutMs: number,
+): Promise<ActivityRevalidationMemberResolution | typeof TIMEOUT> {
+  try {
+    return await bounded(
+      dependencies.resolveMember(guildId, userId, action),
+      timeoutMs,
+    );
+  } catch {
+    return TIMEOUT;
   }
 }
 
@@ -281,10 +301,13 @@ export function createActivityRevalidationService(
         return finish(input, 'binding_mismatch', at);
       }
 
-      const member = await bounded(
-        dependencies.resolveMember(input.guildId, input.principalId, input.action),
+      const member = await currentMember(
+        dependencies,
+        input.guildId,
+        input.principalId,
+        input.action,
         timeoutMs,
-      ).catch(() => TIMEOUT);
+      );
       if (member === TIMEOUT || member.kind === 'unavailable') {
         return finish(input, 'member_unavailable', at);
       }

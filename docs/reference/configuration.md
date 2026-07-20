@@ -107,6 +107,29 @@ Service authentication signs the protocol version, directional key identifier, t
 
 Discord Agent SQLite stores local project/surface/run linkage, bounded replay nonces, and short-lived one-time launch registrations. It does not store HMAC keys, signatures, operator tokens, Activity session tokens, Factory Floor events, approvals, artifacts, or runtime state. Launch registrations are bound to the configured application and guild, current Discord principal and surface, and server-resolved project/run context; browser-selected authority is never persisted.
 
+### Factory Floor Activity bootstrap broker
+
+The HTTPS broker is independently disabled unless `FACTORY_FLOOR_BROKER_ENABLED=true`. It also requires the Factory Floor adapter. Broker configuration failures are logged and isolated from Discord Gateway and direct-provider operation.
+
+| Variable | Type | Default | Purpose | Sensitive |
+|---|---|---|---|---|
+| `FACTORY_FLOOR_BROKER_ENABLED` | boolean | `false` | Start the optional OAuth/bootstrap HTTPS listener | No |
+| `FACTORY_FLOOR_BROKER_HOST` | host | `127.0.0.1` | Listener bind address | No |
+| `FACTORY_FLOOR_BROKER_PORT` | integer `1`–`65535` | `8443` | Listener port | No |
+| `FACTORY_FLOOR_BROKER_PUBLIC_ORIGIN` | HTTPS origin | — | Public broker origin used to construct request URLs | No |
+| `FACTORY_FLOOR_BROKER_ALLOWED_ORIGINS` | comma-separated HTTPS origins | — | Exact Activity origins allowed by CORS | No |
+| `FACTORY_FLOOR_BROKER_REDIRECT_URIS` | comma-separated HTTPS URLs | — | Exact OAuth callback allowlist | No |
+| `FACTORY_FLOOR_BROKER_TLS_CERT_PATH` | file path | — | TLS certificate chain | Potentially |
+| `FACTORY_FLOOR_BROKER_TLS_KEY_PATH` | file path | — | TLS private key | Yes |
+| `DISCORD_CLIENT_SECRET` | string | — | Server-only Discord OAuth application credential | Yes |
+| `FACTORY_FLOOR_BROKER_OAUTH_SCOPES` | comma-separated scopes | `identify` | OAuth scopes requested by the Activity | No |
+| `FACTORY_FLOOR_BROKER_OAUTH_TTL_MS` | integer `30000`–`600000` | `60000` | PKCE attempt lifetime, capped by launch expiry | No |
+| `FACTORY_FLOOR_BROKER_REQUEST_TIMEOUT_MS` | integer `1`–`60000` | `10000` | Discord API timeout | No |
+| `FACTORY_FLOOR_BROKER_MAX_RESPONSE_BYTES` | integer `1024`–`1048576` | `32768` | Maximum Discord response body | No |
+| `FACTORY_FLOOR_BROKER_MAX_BODY_BYTES` | integer `1024`–`65536` | `8192` | Maximum browser request body | No |
+
+The broker returns JSON with no-store headers and exact-origin CORS. It does not accept browser-selected project, run, guild, channel, thread, principal, adapter, installation, or launch authority. See [Discord Activity OAuth bootstrap](discord-activity-bootstrap.md).
+
 ### Storage
 
 | Variable | Type | Default | Purpose | Sensitive |
@@ -156,4 +179,4 @@ The SQLite database is created automatically on first run. Migrations are versio
 
 ## Source of truth
 
-Runtime behavior in `src/config.ts`, provider host defaults in `src/agents/providerConfiguration.ts`, application paths in `src/utils/applicationPaths.ts`, and adapter-specific validation in `src/factoryFloor/config.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug rather than choosing one documentation file as a competing source of truth.
+Runtime behavior in `src/config.ts`, provider host defaults in `src/agents/providerConfiguration.ts`, application paths in `src/utils/applicationPaths.ts`, adapter validation in `src/factoryFloor/config.ts`, and broker validation in `src/factoryFloor/activityBootstrapConfig.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug.

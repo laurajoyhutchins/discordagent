@@ -104,7 +104,7 @@ describe('ActivityRevalidationService', () => {
     ['unsupported action', { action: 'delete' }, 'unsupported_action'],
     ['application', { applicationId: 'other' }, 'activity_application_mismatch'],
     ['installation', { installationId: 'other' }, 'installation_mismatch'],
-    ['guild', { guildId: 'other' }, 'guild_mismatch'],
+    ['guild', { installationId: 'other', guildId: 'other' }, 'guild_mismatch'],
     ['adapter', { adapter: 'other' }, 'adapter_mismatch'],
   ])('denies %s mismatches before contacting Discord', async (_label, patch, reasonCode) => {
     const deps = dependencies();

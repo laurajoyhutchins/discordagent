@@ -4,7 +4,7 @@
   "oauthStart": {
     "request": {
       "instanceId": "i-launch-1-gc-guild-1-thread-1",
-      "codeChallenge": "J7-8bkm7W7V9l7xZQ8F1NzXWjY9yZK9lGxT5xgYf0JQ"
+      "codeChallenge": "dYSqskoTcWrpu8GYY0XpWlzOc0c5rd9YO3uAgh_zmV4"
     },
     "response": {
       "state": "fixture-launch-state",

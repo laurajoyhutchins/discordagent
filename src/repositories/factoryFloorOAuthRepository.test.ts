@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase, type DatabaseHandle } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import { createFactoryFloorBindingRepository } from './factoryFloorBindingRepository.js';
+import { createFactoryFloorLaunchInteractionLookup } from './factoryFloorLaunchInteractionLookup.js';
 import { createFactoryFloorLaunchRepository } from './factoryFloorLaunchRepository.js';
 import {
   createFactoryFloorOAuthRepository,
@@ -73,8 +74,8 @@ function setup() {
   });
 
   return {
-    db,
     launches,
+    launchLookup: createFactoryFloorLaunchInteractionLookup(db),
     oauth: createFactoryFloorOAuthRepository(db),
   };
 }
@@ -100,9 +101,9 @@ function beginInput(overrides: Record<string, unknown> = {}) {
 
 describe('FactoryFloorOAuthRepository', () => {
   it('finds a DA-2 launch by Discord launch ID', () => {
-    const { launches } = setup();
+    const { launchLookup } = setup();
 
-    expect(launches.findByInteractionId('launch-1')).toEqual(
+    expect(launchLookup.findByInteractionId('launch-1')).toEqual(
       expect.objectContaining({
         stateId: 'opaque-state-1',
         principalId: 'user-1',
@@ -113,12 +114,8 @@ describe('FactoryFloorOAuthRepository', () => {
 
   it('registers one S256 challenge and keeps exact retries idempotent', () => {
     const { oauth } = setup();
-
     const first = oauth.begin(beginInput());
-    const retry = oauth.begin(beginInput({
-      createdAt: 3_000,
-      expiresAt: 63_000,
-    }));
+    const retry = oauth.begin(beginInput({ createdAt: 3_000, expiresAt: 63_000 }));
 
     expect(first).toEqual({
       stateId: 'opaque-state-1',
@@ -157,14 +154,12 @@ describe('FactoryFloorOAuthRepository', () => {
       codeVerifier: `${verifier}wrong`,
       now: 3_000,
     })).toBeUndefined();
-
     expect(oauth.verifyAndConsume({
       stateId: 'opaque-state-1',
       instanceId: 'i-launch-1-gc-guild-1-agent-1',
       codeVerifier: verifier,
       now: 3_001,
     })).toEqual(expect.objectContaining({ consumedAt: 3_001 }));
-
     expect(oauth.verifyAndConsume({
       stateId: 'opaque-state-1',
       instanceId: 'i-launch-1-gc-guild-1-agent-1',

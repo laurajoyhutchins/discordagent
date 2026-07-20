@@ -105,7 +105,7 @@ Current and previous keys within one direction must be different, and no key val
 
 Service authentication signs the protocol version, directional key identifier, timestamp, nonce, uppercase method, request path, and SHA-256 digest of the exact body bytes. The receiver enforces bounded clock skew, constant-time signature comparison, key-rotation overlap, and replay-nonce consumption.
 
-Discord Agent SQLite stores local project/surface/run linkage, bounded replay nonces, and short-lived one-time launch registrations. It does not store HMAC keys, signatures, operator tokens, Activity session tokens, Factory Floor events, approvals, artifacts, or runtime state. Launch registrations are bound to the configured application and guild, current Discord principal and surface, and server-resolved project/run context; browser-selected authority is never persisted.
+Discord Agent SQLite stores local project/surface/run linkage, validated Activity instance linkage, bounded replay nonces, and short-lived one-time launch registrations. It does not store HMAC keys, signatures, operator tokens, Activity session tokens, Factory Floor events, approvals, artifacts, or runtime state. Launch registrations are bound to the configured application and guild, current Discord principal and surface, and server-resolved project/run context; browser-selected authority is never persisted.
 
 ### Factory Floor Activity bootstrap broker
 
@@ -113,7 +113,7 @@ The HTTPS broker is independently disabled unless `FACTORY_FLOOR_BROKER_ENABLED=
 
 | Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
-| `FACTORY_FLOOR_BROKER_ENABLED` | boolean | `false` | Start the optional OAuth/bootstrap HTTPS listener | No |
+| `FACTORY_FLOOR_BROKER_ENABLED` | boolean | `false` | Start the optional OAuth/bootstrap and mutation-revalidation HTTPS listener | No |
 | `FACTORY_FLOOR_BROKER_HOST` | host | `127.0.0.1` | Listener bind address | No |
 | `FACTORY_FLOOR_BROKER_PORT` | integer `1`–`65535` | `8443` | Listener port | No |
 | `FACTORY_FLOOR_BROKER_PUBLIC_ORIGIN` | HTTPS origin | — | Public broker origin used to construct request URLs | No |
@@ -124,11 +124,13 @@ The HTTPS broker is independently disabled unless `FACTORY_FLOOR_BROKER_ENABLED=
 | `DISCORD_CLIENT_SECRET` | string | — | Server-only Discord OAuth application credential | Yes |
 | `FACTORY_FLOOR_BROKER_OAUTH_SCOPES` | comma-separated scopes | `identify` | OAuth scopes requested by the Activity | No |
 | `FACTORY_FLOOR_BROKER_OAUTH_TTL_MS` | integer `30000`–`600000` | `60000` | PKCE attempt lifetime, capped by launch expiry | No |
-| `FACTORY_FLOOR_BROKER_REQUEST_TIMEOUT_MS` | integer `1`–`60000` | `10000` | Discord API timeout | No |
+| `FACTORY_FLOOR_BROKER_REQUEST_TIMEOUT_MS` | integer `1`–`60000` | `10000` | Discord API and current-member revalidation timeout | No |
 | `FACTORY_FLOOR_BROKER_MAX_RESPONSE_BYTES` | integer `1024`–`1048576` | `32768` | Maximum Discord response body | No |
-| `FACTORY_FLOOR_BROKER_MAX_BODY_BYTES` | integer `1024`–`65536` | `8192` | Maximum browser request body | No |
+| `FACTORY_FLOOR_BROKER_MAX_BODY_BYTES` | integer `1024`–`65536` | `8192` | Maximum browser or service request body | No |
+| `FACTORY_FLOOR_BROKER_REVALIDATION_MAX_REQUESTS` | integer `1`–`1000` | `30` | Maximum revalidation requests per principal and action in one fixed window | No |
+| `FACTORY_FLOOR_BROKER_REVALIDATION_RATE_LIMIT_WINDOW_MS` | integer `1000`–`3600000` | `60000` | Fixed-window duration for principal/action revalidation limits | No |
 
-The broker returns JSON with no-store headers and exact-origin CORS. It does not accept browser-selected project, run, guild, channel, thread, principal, adapter, installation, or launch authority. See [Discord Activity OAuth bootstrap](discord-activity-bootstrap.md).
+Browser OAuth routes return JSON with no-store headers and exact-origin CORS. The reverse revalidation route does not use browser CORS; Factory Floor signs its exact request body with the `ff-to-agent` key and `x-factory-floor-service-auth` header. It re-fetches the live Activity instance and current guild member immediately before an `approve` or `cancel` mutation, then verifies application, installation, guild, Activity location and participant, role authorization, adapter, project, surface, and run bindings. The response contains only a stable reason code and minimal attribution. See [Discord Activity OAuth bootstrap](discord-activity-bootstrap.md) and [Discord Activity mutation revalidation](discord-activity-revalidation.md).
 
 ### Storage
 

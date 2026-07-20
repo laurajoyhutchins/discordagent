@@ -12,6 +12,8 @@ export interface ActivityBootstrapServerConfig {
   requestTimeoutMs: number;
   maxResponseBytes: number;
   maxBodyBytes: number;
+  revalidationMaxRequests: number;
+  revalidationRateLimitWindowMs: number;
 }
 
 function required(
@@ -155,6 +157,20 @@ export function activityBootstrapConfigFromEnv(
       'FACTORY_FLOOR_BROKER_MAX_BODY_BYTES',
       1_024,
       65_536,
+    ),
+    revalidationMaxRequests: boundedInteger(
+      env.FACTORY_FLOOR_BROKER_REVALIDATION_MAX_REQUESTS,
+      30,
+      'FACTORY_FLOOR_BROKER_REVALIDATION_MAX_REQUESTS',
+      1,
+      1_000,
+    ),
+    revalidationRateLimitWindowMs: boundedInteger(
+      env.FACTORY_FLOOR_BROKER_REVALIDATION_RATE_LIMIT_WINDOW_MS,
+      60_000,
+      'FACTORY_FLOOR_BROKER_REVALIDATION_RATE_LIMIT_WINDOW_MS',
+      1_000,
+      3_600_000,
     ),
   };
 }

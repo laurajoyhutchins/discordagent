@@ -19,6 +19,8 @@ const config: ActivityBootstrapServerConfig = {
   requestTimeoutMs: 10_000,
   maxResponseBytes: 32_768,
   maxBodyBytes: 8_192,
+  revalidationMaxRequests: 30,
+  revalidationRateLimitWindowMs: 60_000,
 };
 
 function fakeServer(): ActivityBootstrapHttpsServer & {

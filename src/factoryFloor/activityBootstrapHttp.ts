@@ -4,18 +4,33 @@ import {
   type BootstrapActivityInput,
   type StartActivityOAuthInput,
 } from './activityBootstrapService.js';
+import type {
+  ActivityRevalidationRequest,
+  ActivityRevalidationService,
+} from './activityRevalidationService.js';
+import {
+  ServiceAuthError,
+  verifyServiceRequest,
+  type VerifyServiceRequestOptions,
+} from './serviceAuth.js';
 
 export interface ActivityBootstrapHttpOptions {
   service: ActivityBootstrapService;
   allowedOrigins: readonly string[];
   maxBodyBytes?: number;
   logger?: (message: string) => void;
+  revalidation?: {
+    service: ActivityRevalidationService;
+    auth: VerifyServiceRequestOptions;
+    now?: () => number;
+  };
 }
 
 export type ActivityBootstrapHttpHandler = (request: Request) => Promise<Response>;
 
 const START_PATH = '/api/v1/discord/activity/oauth/start';
 const BOOTSTRAP_PATH = '/api/v1/discord/activity/bootstrap';
+const REVALIDATION_PATH = '/api/v1/discord/activity/revalidate';
 
 function normalizedOrigin(value: string): string | undefined {
   try {
@@ -83,7 +98,11 @@ function string(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-async function readJson(request: Request, maxBodyBytes: number): Promise<unknown> {
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+async function readText(request: Request, maxBodyBytes: number): Promise<string> {
   const declaredLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
     throw new ActivityBootstrapError('bad_request', 'body_too_large');
@@ -97,10 +116,63 @@ async function readJson(request: Request, maxBodyBytes: number): Promise<unknown
   if (Buffer.byteLength(text, 'utf8') > maxBodyBytes) {
     throw new ActivityBootstrapError('bad_request', 'body_too_large');
   }
+  return text;
+}
+
+function parseJson(text: string): unknown {
   try {
     return JSON.parse(text) as unknown;
   } catch {
     throw new ActivityBootstrapError('bad_request', 'invalid_json');
+  }
+}
+
+async function handleRevalidation(
+  request: Request,
+  options: NonNullable<ActivityBootstrapHttpOptions['revalidation']>,
+  maxBodyBytes: number,
+  logger: (message: string) => void,
+): Promise<Response> {
+  if (request.method !== 'POST') return failure(405, 'method_not_allowed');
+  const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  if (contentType !== 'application/json') return failure(415, 'content_type_required');
+
+  try {
+    const text = await readText(request, maxBodyBytes);
+    await verifyServiceRequest(
+      options.auth,
+      'ff-to-agent',
+      request.method,
+      REVALIDATION_PATH,
+      text,
+      request.headers.get('x-factory-floor-service-auth') ?? undefined,
+      options.now?.() ?? Date.now(),
+    );
+    const parsed = object(parseJson(text));
+    if (!parsed) throw new ActivityBootstrapError('bad_request', 'invalid_json_object');
+    const input: ActivityRevalidationRequest = {
+      applicationId: string(parsed.applicationId),
+      instanceId: string(parsed.instanceId),
+      installationId: string(parsed.installationId),
+      guildId: string(parsed.guildId),
+      channelId: string(parsed.channelId),
+      ...(optionalString(parsed.threadId) ? { threadId: optionalString(parsed.threadId) } : {}),
+      principalId: string(parsed.principalId),
+      adapter: string(parsed.adapter),
+      projectId: string(parsed.projectId),
+      runId: string(parsed.runId),
+      action: string(parsed.action),
+    };
+    return response(200, await options.service.revalidate(input));
+  } catch (error) {
+    if (error instanceof ServiceAuthError) {
+      return failure(error.statusCode, error.message);
+    }
+    if (error instanceof ActivityBootstrapError) {
+      return failure(error.code === 'body_too_large' ? 413 : errorStatus(error), error.code);
+    }
+    logger('[factoryFloor] Activity revalidation request failed with an internal error.');
+    return failure(500, 'internal_error');
   }
 }
 
@@ -118,9 +190,15 @@ export function createActivityBootstrapHttpHandler(
   const logger = options.logger ?? (() => undefined);
 
   return async request => {
+    const url = new URL(request.url);
+    if (url.pathname === REVALIDATION_PATH) {
+      return options.revalidation
+        ? handleRevalidation(request, options.revalidation, maxBodyBytes, logger)
+        : failure(404, 'route_not_found');
+    }
+
     const origin = request.headers.get('origin') ?? '';
     if (!allowedOrigins.has(origin)) return failure(403, 'origin_not_allowed');
-    const url = new URL(request.url);
     if (url.pathname !== START_PATH && url.pathname !== BOOTSTRAP_PATH) {
       return failure(404, 'route_not_found', origin);
     }
@@ -134,7 +212,7 @@ export function createActivityBootstrapHttpHandler(
     }
 
     try {
-      const parsed = object(await readJson(request, maxBodyBytes));
+      const parsed = object(parseJson(await readText(request, maxBodyBytes)));
       if (!parsed) throw new ActivityBootstrapError('bad_request', 'invalid_json_object');
       if (url.pathname === START_PATH) {
         const input: StartActivityOAuthInput = {

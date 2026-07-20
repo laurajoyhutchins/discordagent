@@ -39,6 +39,8 @@ describe('activityBootstrapConfigFromEnv', () => {
       requestTimeoutMs: 10_000,
       maxResponseBytes: 32_768,
       maxBodyBytes: 8_192,
+      revalidationMaxRequests: 30,
+      revalidationRateLimitWindowMs: 60_000,
     });
   });
 
@@ -52,6 +54,8 @@ describe('activityBootstrapConfigFromEnv', () => {
       FACTORY_FLOOR_BROKER_REQUEST_TIMEOUT_MS: '12000',
       FACTORY_FLOOR_BROKER_MAX_RESPONSE_BYTES: '16384',
       FACTORY_FLOOR_BROKER_MAX_BODY_BYTES: '4096',
+      FACTORY_FLOOR_BROKER_REVALIDATION_MAX_REQUESTS: '8',
+      FACTORY_FLOOR_BROKER_REVALIDATION_RATE_LIMIT_WINDOW_MS: '45000',
     })).toEqual(expect.objectContaining({
       host: '0.0.0.0',
       port: 9443,
@@ -60,6 +64,8 @@ describe('activityBootstrapConfigFromEnv', () => {
       requestTimeoutMs: 12_000,
       maxResponseBytes: 16_384,
       maxBodyBytes: 4_096,
+      revalidationMaxRequests: 8,
+      revalidationRateLimitWindowMs: 45_000,
     }));
   });
 
@@ -72,6 +78,8 @@ describe('activityBootstrapConfigFromEnv', () => {
     ['missing client secret', { ...enabled, DISCORD_CLIENT_SECRET: '' }, /DISCORD_CLIENT_SECRET is required/i],
     ['invalid port', { ...enabled, FACTORY_FLOOR_BROKER_PORT: '70000' }, /between 1 and 65535/i],
     ['invalid OAuth TTL', { ...enabled, FACTORY_FLOOR_BROKER_OAUTH_TTL_MS: '1000' }, /between 30000 and 600000/i],
+    ['invalid revalidation limit', { ...enabled, FACTORY_FLOOR_BROKER_REVALIDATION_MAX_REQUESTS: '0' }, /between 1 and 1000/i],
+    ['invalid revalidation window', { ...enabled, FACTORY_FLOOR_BROKER_REVALIDATION_RATE_LIMIT_WINDOW_MS: '500' }, /between 1000 and 3600000/i],
   ])('fails deterministic validation for %s', (_label, env, expected) => {
     expect(() => activityBootstrapConfigFromEnv(env)).toThrow(expected);
   });

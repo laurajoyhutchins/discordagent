@@ -8,10 +8,19 @@ import {
   createActivityBootstrapHttpHandler,
 } from './activityBootstrapHttp.js';
 import {
+  createActivityBootstrapSessionClient,
+} from './activityBootstrapSessionClient.js';
+import {
   createActivityBootstrapService,
   type ActivityBootstrapDependencies,
   type ActivityBootstrapService,
 } from './activityBootstrapService.js';
+import {
+  createActivityRevalidationService,
+  type ActivityRevalidationDependencies,
+  type ActivityRevalidationMemberResolution,
+  type ActivityRevalidationService,
+} from './activityRevalidationService.js';
 import {
   startActivityBootstrapServer,
   type ActivityBootstrapServerHandle,
@@ -36,6 +45,7 @@ export interface ActivityBootstrapGuildClient {
 export interface StartOptionalActivityBootstrapBrokerOptions {
   env?: Record<string, string | undefined>;
   applicationId: string;
+  guildId?: string;
   botToken: string;
   client: ActivityBootstrapGuildClient;
   runtime: FactoryFloorRuntimeServices;
@@ -50,6 +60,9 @@ export interface StartOptionalActivityBootstrapBrokerOptions {
   createService?: (
     dependencies: ActivityBootstrapDependencies,
   ) => ActivityBootstrapService;
+  createRevalidationService?: (
+    dependencies: ActivityRevalidationDependencies,
+  ) => ActivityRevalidationService;
   startServer?: (
     options: StartActivityBootstrapServerOptions,
   ) => Promise<ActivityBootstrapServerHandle>;
@@ -69,21 +82,61 @@ function discordClientOptions(
   };
 }
 
+function errorStatus(error: unknown): number | undefined {
+  if (error === null || typeof error !== 'object') return undefined;
+  const value = error as { status?: unknown; code?: unknown };
+  if (typeof value.status === 'number') return value.status;
+  if (typeof value.code === 'number') return value.code;
+  if (typeof value.code === 'string' && /^\d+$/.test(value.code)) {
+    return Number(value.code);
+  }
+  return undefined;
+}
+
 export async function startOptionalActivityBootstrapBroker(
   options: StartOptionalActivityBootstrapBrokerOptions,
 ): Promise<ActivityBootstrapServerHandle | undefined> {
-  const config = activityBootstrapConfigFromEnv(options.env ?? process.env);
+  const env = options.env ?? process.env;
+  const config = activityBootstrapConfigFromEnv(env);
   if (!config) return undefined;
+  const guildId = (options.guildId ?? env.DISCORD_GUILD_ID)?.trim();
+  if (!guildId) throw new Error('DISCORD_GUILD_ID is required for Activity revalidation');
 
   const createDiscordClient = options.createDiscordClient
     ?? (clientOptions => new DiscordActivityApiClient(clientOptions));
   const createService = options.createService ?? createActivityBootstrapService;
+  const createRevalidation = options.createRevalidationService
+    ?? createActivityRevalidationService;
   const startServer = options.startServer ?? startActivityBootstrapServer;
   const authorize = options.authorize ?? isAuthorized;
   const logger = options.logger ?? (message => console.warn(message));
   const discord = createDiscordClient(
     discordClientOptions(config, options.applicationId, options.botToken),
   );
+  const resolveCurrentMember = async (
+    requestedGuildId: string,
+    userId: string,
+  ): Promise<
+    | { kind: 'member'; member: GuildMember }
+    | { kind: 'missing' }
+    | { kind: 'unavailable' }
+  > => {
+    try {
+      const guild = await options.client.guilds.fetch(requestedGuildId);
+      const member = await guild.members.fetch(userId);
+      return { kind: 'member', member };
+    } catch (error) {
+      const status = errorStatus(error);
+      return status === 404 || status === 10_007
+        ? { kind: 'missing' }
+        : { kind: 'unavailable' };
+    }
+  };
+  const bootstrapFactoryFloor = createActivityBootstrapSessionClient({
+    bindings: options.runtime.bindings,
+    activityInstances: options.runtime.activityInstances,
+    factoryFloor: options.runtime.serviceClient,
+  });
   const service = createService({
     applicationId: options.applicationId,
     oauthScopes: config.oauthScopes,
@@ -93,18 +146,44 @@ export async function startOptionalActivityBootstrapBroker(
     launchLookup: options.runtime.launchLookup,
     launches: options.runtime.launches,
     oauth: options.runtime.oauth,
-    factoryFloor: options.runtime.serviceClient,
-    async resolveMember(guildId, userId) {
-      try {
-        const guild = await options.client.guilds.fetch(guildId);
-        const member = await guild.members.fetch(userId);
-        return {
-          userId: member.id,
-          authorized: authorize(member),
+    factoryFloor: bootstrapFactoryFloor,
+    async resolveMember(requestedGuildId, userId) {
+      const resolution = await resolveCurrentMember(requestedGuildId, userId);
+      return resolution.kind === 'member'
+        ? {
+            userId: resolution.member.id,
+            authorized: authorize(resolution.member),
+          }
+        : undefined;
+    },
+  });
+  const revalidationService = createRevalidation({
+    applicationId: options.applicationId,
+    guildId,
+    adapter: 'discord-agent',
+    timeoutMs: config.requestTimeoutMs,
+    maxRequests: config.revalidationMaxRequests,
+    rateLimitWindowMs: config.revalidationRateLimitWindowMs,
+    discord,
+    bindings: options.runtime.bindings,
+    async resolveMember(requestedGuildId, userId) {
+      const resolution = await resolveCurrentMember(requestedGuildId, userId);
+      let result: ActivityRevalidationMemberResolution;
+      if (resolution.kind === 'member') {
+        result = {
+          kind: 'member',
+          userId: resolution.member.id,
+          authorized: authorize(resolution.member),
         };
-      } catch {
-        return undefined;
+      } else {
+        result = resolution;
       }
+      return result;
+    },
+    onDecision(decision) {
+      logger(
+        `[factoryFloor] Activity ${decision.action || 'unknown'} revalidation ${decision.allowed ? 'allowed' : 'denied'} (${decision.reasonCode}).`,
+      );
     },
   });
   const handler = createActivityBootstrapHttpHandler({
@@ -112,6 +191,13 @@ export async function startOptionalActivityBootstrapBroker(
     allowedOrigins: config.allowedOrigins,
     maxBodyBytes: config.maxBodyBytes,
     logger,
+    revalidation: {
+      service: revalidationService,
+      auth: {
+        keys: options.runtime.config.serviceAuthKeys,
+        nonceStore: options.runtime.nonceStore,
+      },
+    },
   });
   return startServer({ config, handler, logger });
 }

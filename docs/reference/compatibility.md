@@ -15,6 +15,7 @@
 - **Version:** 14.x (^14.24.0)
 - **Intents:** Guilds, GuildMembers, GuildMessages, MessageContent
 - **Partials:** Message, Channel
+- **Activity launch:** Global `PRIMARY_ENTRY_POINT` with `APP_HANDLER`; accepted launches use `LAUNCH_ACTIVITY`
 
 ## Git
 
@@ -48,13 +49,14 @@
 
 - **HTTP contract:** `/api/v1/discord/activity/sessions` create/join, refresh, and revoke boundaries
 - **Service authentication:** Directional HMAC-SHA256 protocol version 1 with exact-body signing and bounded nonce replay protection
+- **Activity command:** One guild-installed, guild-context global Primary Entry Point reconciled at startup
 - **Enablement:** Disabled by default; unbound projects and direct provider tasks remain unchanged
 
 ## SQLite
 
 - **Driver:** `better-sqlite3` ^12.4.1
 - **Migrations:** Versioned, transactional, recorded in `schema_migrations`
-- **Current schema version:** 11
+- **Current schema version:** 12
 
 ## Operating system
 

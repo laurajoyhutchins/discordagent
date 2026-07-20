@@ -22,6 +22,7 @@ describe('factoryFloorConfigFromEnv', () => {
       FACTORY_FLOOR_OPERATOR_TOKEN: 'operator-token',
       FACTORY_FLOOR_REQUEST_TIMEOUT_MS: '12000',
       FACTORY_FLOOR_MAX_RETRIES: '2',
+      FACTORY_FLOOR_LAUNCH_TTL_MS: '90000',
     });
 
     expect(config).toEqual({
@@ -35,6 +36,7 @@ describe('factoryFloorConfigFromEnv', () => {
       operatorToken: 'operator-token',
       requestTimeoutMs: 12000,
       maxRetries: 2,
+      launchTtlMs: 90000,
     });
 
     expect(() => factoryFloorConfigFromEnv({
@@ -58,6 +60,10 @@ describe('factoryFloorConfigFromEnv', () => {
     })).toThrow(/operator.*distinct/i);
   });
 
+  it('uses a two-minute launch-state lifetime by default', () => {
+    expect(factoryFloorConfigFromEnv(enabled)?.launchTtlMs).toBe(120_000);
+  });
+
   it('fails deterministic validation when enabled configuration is incomplete', () => {
     expect(() => factoryFloorConfigFromEnv({
       FACTORY_FLOOR_ENABLED: 'true',
@@ -74,5 +80,9 @@ describe('factoryFloorConfigFromEnv', () => {
       ...enabled,
       FACTORY_FLOOR_REQUEST_TIMEOUT_MS: '0',
     })).toThrow(/between 1/i);
+    expect(() => factoryFloorConfigFromEnv({
+      ...enabled,
+      FACTORY_FLOOR_LAUNCH_TTL_MS: '1000',
+    })).toThrow(/between 30000 and 600000/i);
   });
 });

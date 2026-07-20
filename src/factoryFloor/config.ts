@@ -6,6 +6,7 @@ export interface FactoryFloorIntegrationConfig {
   operatorToken?: string;
   requestTimeoutMs: number;
   maxRetries: number;
+  launchTtlMs: number;
 }
 
 function requiredEnv(
@@ -132,6 +133,13 @@ export function factoryFloorConfigFromEnv(
       'FACTORY_FLOOR_MAX_RETRIES',
       0,
       3,
+    ),
+    launchTtlMs: boundedInteger(
+      env.FACTORY_FLOOR_LAUNCH_TTL_MS,
+      120_000,
+      'FACTORY_FLOOR_LAUNCH_TTL_MS',
+      30_000,
+      600_000,
     ),
   };
 }

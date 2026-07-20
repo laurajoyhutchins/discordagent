@@ -1,5 +1,6 @@
 import type { DatabaseHandle } from './database.js';
 import { FACTORY_FLOOR_BINDINGS_MIGRATION } from './factoryFloorBindingsMigration.js';
+import { FACTORY_FLOOR_LAUNCH_MIGRATION } from './factoryFloorLaunchMigration.js';
 import { LOOP_SCHEMA_MIGRATION } from './loopSchemaMigration.js';
 import { SCHEMA_MIGRATIONS } from './schema.js';
 
@@ -29,6 +30,7 @@ const DEFAULT_MIGRATIONS: readonly Migration[] = [
   ...SCHEMA_MIGRATIONS,
   LOOP_SCHEMA_MIGRATION,
   FACTORY_FLOOR_BINDINGS_MIGRATION,
+  FACTORY_FLOOR_LAUNCH_MIGRATION,
 ];
 
 function validateMigrations(migrations: readonly Migration[]): void {

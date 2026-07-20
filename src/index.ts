@@ -28,6 +28,13 @@ import { createRoborevReviewSource, deliverRoborevNotification } from './integra
 import type { Disposable, ReviewNotification } from './integrations/reviewSource.js';
 import { Repl } from './terminal/repl.js';
 import { activatePrimaryProvider } from './services/agentRuntimeService.js';
+import {
+  createActivityCommandOwnershipStore,
+  createDiscordActivityCommandApi,
+  reconcileFactoryFloorEntryPoint,
+  type DiscordActivityCommandRestClient,
+} from './factoryFloor/activityEntryPoint.js';
+import { getFactoryFloorRuntime } from './factoryFloor/runtime.js';
 
 // ── Single-instance lock ─────────────────────────────────────────────
 // Multiple bot processes sharing one token cause duplicate message
@@ -108,9 +115,10 @@ client.once('clientReady', async () => {
   client.on('messageCreate', handleMessage);
   client.on('threadDelete', handleThreadDelete);
 
-  // Register slash commands on startup
+  const rest = new REST().setToken(config.discordToken);
+
+  // Guild commands remain independent from the optional global Activity Entry Point.
   try {
-    const rest = new REST().setToken(config.discordToken);
     await rest.put(
       Routes.applicationGuildCommands(config.clientId, config.guildId),
       { body: commands.map(c => c.toJSON()) }
@@ -118,6 +126,25 @@ client.once('clientReady', async () => {
     console.log('Slash commands registered.');
   } catch (err) {
     console.error('Failed to register slash commands:', redactErrorMessage(err));
+  }
+
+  try {
+    const activityResult = await reconcileFactoryFloorEntryPoint({
+      enabled: Boolean(getFactoryFloorRuntime()),
+      api: createDiscordActivityCommandApi(
+        rest as unknown as DiscordActivityCommandRestClient,
+        config.clientId,
+      ),
+      ownership: createActivityCommandOwnershipStore(runtime.settings),
+    });
+    if (activityResult.action !== 'none') {
+      console.log(`[factoryFloor] Activity Entry Point ${activityResult.action}.`);
+    }
+  } catch (error) {
+    console.error(
+      '[factoryFloor] Failed to reconcile Activity Entry Point; direct providers remain available:',
+      redactErrorMessage(error),
+    );
   }
 
   // Start review sources through the generic lifecycle boundary

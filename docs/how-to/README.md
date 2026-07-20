@@ -29,4 +29,5 @@ Goal-oriented procedures for specific operational tasks.
 
 ## Integrations
 
+- [Enable the Factory Floor Activity](integrations/enable-factory-floor-activity.md)
 - [Enable or disable RoboRev](integrations/enable-roborev.md)

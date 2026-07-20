@@ -1,18 +1,23 @@
+import { createHash } from 'node:crypto';
 import type {
   FactoryFloorLaunchContext,
   FactoryFloorLaunchRecord,
   FactoryFloorLaunchRepository,
 } from '../repositories/factoryFloorLaunchRepository.js';
 import type { FactoryFloorLaunchInteractionLookup } from '../repositories/factoryFloorLaunchInteractionLookup.js';
-import type { FactoryFloorOAuthRepository } from '../repositories/factoryFloorOAuthRepository.js';
+import {
+  FactoryFloorOAuthConflictError,
+  type FactoryFloorOAuthRepository,
+} from '../repositories/factoryFloorOAuthRepository.js';
 import type {
   ActivitySessionResponse,
   FactoryFloorServiceClient,
 } from './client.js';
-import type {
-  DiscordActivityApiClient,
-  DiscordActivityInstance,
-  DiscordOAuthToken,
+import {
+  DiscordActivityApiError,
+  type DiscordActivityApiClient,
+  type DiscordActivityInstance,
+  type DiscordOAuthToken,
 } from './discordOAuthClient.js';
 
 export type ActivityBootstrapErrorKind =
@@ -83,7 +88,10 @@ export interface ActivityBootstrapDependencies {
   >;
   launchLookup: FactoryFloorLaunchInteractionLookup;
   launches: Pick<FactoryFloorLaunchRepository, 'findByStateId' | 'consume'>;
-  oauth: Pick<FactoryFloorOAuthRepository, 'begin' | 'verifyAndConsume'>;
+  oauth: Pick<
+    FactoryFloorOAuthRepository,
+    'begin' | 'findByStateId' | 'verifyAndConsume'
+  >;
   resolveMember(
     guildId: string,
     userId: string,
@@ -95,6 +103,9 @@ export interface ActivityBootstrapService {
   startOAuth(input: StartActivityOAuthInput): Promise<StartActivityOAuthResponse>;
   bootstrap(input: BootstrapActivityInput): Promise<BootstrapActivityResponse>;
 }
+
+const CODE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const CODE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
 
 function required(value: string, code: string): string {
   const normalized = value.trim();
@@ -129,7 +140,10 @@ function launchContext(launch: FactoryFloorLaunchRecord): FactoryFloorLaunchCont
   };
 }
 
-function currentLaunch(launch: FactoryFloorLaunchRecord | undefined, now: number): FactoryFloorLaunchRecord {
+function currentLaunch(
+  launch: FactoryFloorLaunchRecord | undefined,
+  now: number,
+): FactoryFloorLaunchRecord {
   if (!launch) throw new ActivityBootstrapError('not_found', 'activity_launch_not_found');
   if (launch.consumedAt !== undefined || launch.invalidatedAt !== undefined) {
     throw new ActivityBootstrapError('conflict', 'launch_state_invalid');
@@ -140,22 +154,73 @@ function currentLaunch(launch: FactoryFloorLaunchRecord | undefined, now: number
   return launch;
 }
 
+async function getActivityInstance(
+  dependencies: ActivityBootstrapDependencies,
+  instanceId: string,
+): Promise<DiscordActivityInstance> {
+  try {
+    return await dependencies.discord.getActivityInstance(instanceId);
+  } catch (error) {
+    if (error instanceof DiscordActivityApiError) {
+      if (error.kind === 'not_found') {
+        throw new ActivityBootstrapError('not_found', 'activity_instance_not_found');
+      }
+      if (error.kind === 'malformed_response') {
+        throw new ActivityBootstrapError('upstream', 'activity_instance_response_invalid');
+      }
+    }
+    throw new ActivityBootstrapError('upstream', 'activity_instance_unavailable');
+  }
+}
+
+async function exchangeOAuth(
+  dependencies: ActivityBootstrapDependencies,
+  input: { code: string; codeVerifier: string; redirectUri: string },
+): Promise<DiscordOAuthToken> {
+  try {
+    return await dependencies.discord.exchangeAuthorizationCode(input);
+  } catch (error) {
+    if (
+      error instanceof DiscordActivityApiError
+      && (error.kind === 'unauthorized' || error.status === 400)
+    ) {
+      throw new ActivityBootstrapError('unauthorized', 'oauth_exchange_failed');
+    }
+    throw new ActivityBootstrapError('upstream', 'oauth_exchange_unavailable');
+  }
+}
+
+async function currentOAuthUser(
+  dependencies: ActivityBootstrapDependencies,
+  accessToken: string,
+): Promise<{ id: string }> {
+  try {
+    return await dependencies.discord.getCurrentUser(accessToken);
+  } catch {
+    throw new ActivityBootstrapError('upstream', 'oauth_identity_unavailable');
+  }
+}
+
 async function validateInstanceContext(
   dependencies: ActivityBootstrapDependencies,
   instance: DiscordActivityInstance,
   launch: FactoryFloorLaunchRecord,
 ): Promise<void> {
-  if (instance.applicationId !== dependencies.applicationId
-    || launch.applicationId !== dependencies.applicationId) {
+  if (
+    instance.applicationId !== dependencies.applicationId
+    || launch.applicationId !== dependencies.applicationId
+  ) {
     throw new ActivityBootstrapError('forbidden', 'activity_application_mismatch');
   }
   if (instance.launchId !== launch.interactionId) {
     throw new ActivityBootstrapError('forbidden', 'activity_launch_mismatch');
   }
   const expectedChannelId = launch.threadId ?? launch.channelId;
-  if (instance.location.kind !== 'gc'
+  if (
+    instance.location.kind !== 'gc'
     || instance.location.guildId !== launch.guildId
-    || instance.location.channelId !== expectedChannelId) {
+    || instance.location.channelId !== expectedChannelId
+  ) {
     throw new ActivityBootstrapError('forbidden', 'activity_location_mismatch');
   }
   if (!instance.users.includes(launch.principalId)) {
@@ -177,6 +242,28 @@ function verifyScopes(token: DiscordOAuthToken, scopes: readonly string[]): void
   }
 }
 
+function verifyPendingOAuth(
+  dependencies: ActivityBootstrapDependencies,
+  stateId: string,
+  instanceId: string,
+  codeVerifier: string,
+  now: number,
+): void {
+  const attempt = dependencies.oauth.findByStateId(stateId);
+  const expectedChallenge = createHash('sha256')
+    .update(codeVerifier)
+    .digest('base64url');
+  if (
+    !attempt
+    || attempt.instanceId !== instanceId
+    || attempt.consumedAt !== undefined
+    || attempt.expiresAt <= now
+    || attempt.codeChallenge !== expectedChallenge
+  ) {
+    throw new ActivityBootstrapError('conflict', 'oauth_state_invalid');
+  }
+}
+
 export function createActivityBootstrapService(
   dependencies: ActivityBootstrapDependencies,
 ): ActivityBootstrapService {
@@ -191,21 +278,32 @@ export function createActivityBootstrapService(
     async startOAuth(input) {
       const instanceId = required(input.instanceId, 'activity_instance_id_required');
       const codeChallenge = required(input.codeChallenge, 'oauth_code_challenge_required');
+      if (!CODE_CHALLENGE_PATTERN.test(codeChallenge)) {
+        throw new ActivityBootstrapError('bad_request', 'oauth_code_challenge_invalid');
+      }
       const at = now();
-      const instance = await dependencies.discord.getActivityInstance(instanceId);
+      const instance = await getActivityInstance(dependencies, instanceId);
       const launch = currentLaunch(
         dependencies.launchLookup.findByInteractionId(instance.launchId),
         at,
       );
       await validateInstanceContext(dependencies, instance, launch);
       const expiresAt = Math.min(launch.expiresAt, at + dependencies.oauthTtlMs);
-      const attempt = dependencies.oauth.begin({
-        stateId: launch.stateId,
-        instanceId: instance.instanceId,
-        codeChallenge,
-        createdAt: at,
-        expiresAt,
-      });
+      let attempt;
+      try {
+        attempt = dependencies.oauth.begin({
+          stateId: launch.stateId,
+          instanceId: instance.instanceId,
+          codeChallenge,
+          createdAt: at,
+          expiresAt,
+        });
+      } catch (error) {
+        if (error instanceof FactoryFloorOAuthConflictError) {
+          throw new ActivityBootstrapError('conflict', 'oauth_state_invalid');
+        }
+        throw new ActivityBootstrapError('upstream', 'oauth_state_unavailable');
+      }
       return {
         state: attempt.stateId,
         clientId: dependencies.applicationId,
@@ -222,18 +320,23 @@ export function createActivityBootstrapService(
       if (allowedRedirects && !allowedRedirects.has(redirectUri)) {
         throw new ActivityBootstrapError('forbidden', 'oauth_redirect_uri_mismatch');
       }
+      const codeVerifier = required(input.codeVerifier, 'oauth_code_verifier_required');
+      if (!CODE_VERIFIER_PATTERN.test(codeVerifier)) {
+        throw new ActivityBootstrapError('bad_request', 'oauth_code_verifier_invalid');
+      }
       const at = now();
       const launch = currentLaunch(dependencies.launches.findByStateId(stateId), at);
-      const instance = await dependencies.discord.getActivityInstance(instanceId);
+      verifyPendingOAuth(dependencies, stateId, instanceId, codeVerifier, at);
+      const instance = await getActivityInstance(dependencies, instanceId);
       await validateInstanceContext(dependencies, instance, launch);
 
-      const token = await dependencies.discord.exchangeAuthorizationCode({
+      const token = await exchangeOAuth(dependencies, {
         code: required(input.code, 'oauth_authorization_code_required'),
-        codeVerifier: required(input.codeVerifier, 'oauth_code_verifier_required'),
+        codeVerifier,
         redirectUri,
       });
       verifyScopes(token, dependencies.oauthScopes);
-      const user = await dependencies.discord.getCurrentUser(token.accessToken);
+      const user = await currentOAuthUser(dependencies, token.accessToken);
       if (user.id !== launch.principalId) {
         throw new ActivityBootstrapError('forbidden', 'oauth_principal_mismatch');
       }
@@ -241,7 +344,7 @@ export function createActivityBootstrapService(
       const oauthAttempt = dependencies.oauth.verifyAndConsume({
         stateId,
         instanceId,
-        codeVerifier: input.codeVerifier,
+        codeVerifier,
         now: at,
       });
       if (!oauthAttempt) {

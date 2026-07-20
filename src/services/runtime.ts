@@ -134,7 +134,7 @@ export async function startRuntime(
   client: Client,
   options: RuntimeOptions = {},
 ): Promise<RuntimeServices> {
-  resetRuntimeRegistries();
+  resetAllRuntimeRegistries();
   const lifecycle = new RuntimeLifecycle({
     onError: ({ owner, error }) => {
       console.warn(`[runtime] Failed to stop ${owner}:`, redactErrorMessage(error));
@@ -263,7 +263,7 @@ export async function startRuntime(
       ...(providerRuntime.codexAuth ? { codexAuth: providerRuntime.codexAuth } : {}),
     });
     setUsageAdmissionService(usage);
-    lifecycle.defer('runtime service registries', () => resetRuntimeRegistries());
+    lifecycle.defer('runtime service registries', () => clearCoreRuntimeRegistries());
 
     const primaryRuntime = await components.primaryAgent({
       client,
@@ -351,9 +351,13 @@ export async function stopRuntime(runtime: RuntimeServices): Promise<void> {
   await runtime.lifecycle.stop();
 }
 
-function resetRuntimeRegistries(): void {
+function clearCoreRuntimeRegistries(): void {
   clearTaskCoordinator();
   clearAgentRuntimeServices();
-  clearPrimaryAgentService();
   clearUsageAdmissionService();
+}
+
+function resetAllRuntimeRegistries(): void {
+  clearCoreRuntimeRegistries();
+  clearPrimaryAgentService();
 }

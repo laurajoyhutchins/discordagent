@@ -6,6 +6,9 @@ import { openDatabase, type DatabaseHandle } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import { createProjectRepository } from './projectRepository.js';
 import {
+  createFactoryFloorActivityInstanceBindingRepository,
+} from './factoryFloorActivityInstanceBindingRepository.js';
+import {
   createFactoryFloorBindingRepository,
   FactoryFloorBindingConflictError,
 } from './factoryFloorBindingRepository.js';
@@ -36,7 +39,9 @@ afterEach(() => {
 
 describe('Factory Floor Activity instance binding', () => {
   it('attaches a validated Activity instance to the existing run surface', () => {
-    const bindings = createFactoryFloorBindingRepository(database());
+    const db = database();
+    const bindings = createFactoryFloorBindingRepository(db);
+    const activityInstances = createFactoryFloorActivityInstanceBindingRepository(db);
     bindings.bindProject({
       projectName: 'factory-floor',
       factoryFloorProjectId: 'ff-project-1',
@@ -54,7 +59,7 @@ describe('Factory Floor Activity instance binding', () => {
       runId: 'run-1',
     });
 
-    const attached = bindings.bindActivityInstance(surface.id, 'instance-1');
+    const attached = activityInstances.bind(surface.id, 'instance-1');
 
     expect(attached).toMatchObject({
       id: surface.id,
@@ -66,28 +71,32 @@ describe('Factory Floor Activity instance binding', () => {
   });
 
   it('is idempotent for the same surface and instance', () => {
-    const bindings = createFactoryFloorBindingRepository(database());
+    const db = database();
+    const bindings = createFactoryFloorBindingRepository(db);
+    const activityInstances = createFactoryFloorActivityInstanceBindingRepository(db);
     bindings.bindProject({ projectName: 'factory-floor', factoryFloorProjectId: 'ff-project-1', guildId: 'guild-1' });
     const surface = bindings.bindSurface({ projectName: 'factory-floor', guildId: 'guild-1', channelId: 'channel-1', threadId: 'thread-1' });
 
-    expect(bindings.bindActivityInstance(surface.id, 'instance-1')).toEqual(
-      bindings.bindActivityInstance(surface.id, 'instance-1'),
+    expect(activityInstances.bind(surface.id, 'instance-1')).toEqual(
+      activityInstances.bind(surface.id, 'instance-1'),
     );
   });
 
   it('fails closed when an instance or surface is already bound elsewhere', () => {
-    const bindings = createFactoryFloorBindingRepository(database());
+    const db = database();
+    const bindings = createFactoryFloorBindingRepository(db);
+    const activityInstances = createFactoryFloorActivityInstanceBindingRepository(db);
     bindings.bindProject({ projectName: 'factory-floor', factoryFloorProjectId: 'ff-project-1', guildId: 'guild-1' });
     const one = bindings.bindSurface({ projectName: 'factory-floor', guildId: 'guild-1', channelId: 'channel-1', threadId: 'thread-1' });
     const two = bindings.bindSurface({ projectName: 'factory-floor', guildId: 'guild-1', channelId: 'channel-1', threadId: 'thread-2' });
-    bindings.bindActivityInstance(one.id, 'instance-1');
+    activityInstances.bind(one.id, 'instance-1');
 
-    expect(() => bindings.bindActivityInstance(one.id, 'instance-2')).toThrowError(
+    expect(() => activityInstances.bind(one.id, 'instance-2')).toThrowError(
       expect.objectContaining<Partial<FactoryFloorBindingConflictError>>({
         code: 'surface_activity_instance_conflict',
       }),
     );
-    expect(() => bindings.bindActivityInstance(two.id, 'instance-1')).toThrowError(
+    expect(() => activityInstances.bind(two.id, 'instance-1')).toThrowError(
       expect.objectContaining<Partial<FactoryFloorBindingConflictError>>({
         code: 'activity_instance_already_bound',
       }),

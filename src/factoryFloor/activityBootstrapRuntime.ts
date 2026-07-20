@@ -45,7 +45,7 @@ export interface ActivityBootstrapGuildClient {
 export interface StartOptionalActivityBootstrapBrokerOptions {
   env?: Record<string, string | undefined>;
   applicationId: string;
-  guildId: string;
+  guildId?: string;
   botToken: string;
   client: ActivityBootstrapGuildClient;
   runtime: FactoryFloorRuntimeServices;
@@ -96,8 +96,11 @@ function errorStatus(error: unknown): number | undefined {
 export async function startOptionalActivityBootstrapBroker(
   options: StartOptionalActivityBootstrapBrokerOptions,
 ): Promise<ActivityBootstrapServerHandle | undefined> {
-  const config = activityBootstrapConfigFromEnv(options.env ?? process.env);
+  const env = options.env ?? process.env;
+  const config = activityBootstrapConfigFromEnv(env);
   if (!config) return undefined;
+  const guildId = (options.guildId ?? env.DISCORD_GUILD_ID)?.trim();
+  if (!guildId) throw new Error('DISCORD_GUILD_ID is required for Activity revalidation');
 
   const createDiscordClient = options.createDiscordClient
     ?? (clientOptions => new DiscordActivityApiClient(clientOptions));
@@ -111,7 +114,7 @@ export async function startOptionalActivityBootstrapBroker(
     discordClientOptions(config, options.applicationId, options.botToken),
   );
   const resolveCurrentMember = async (
-    guildId: string,
+    requestedGuildId: string,
     userId: string,
   ): Promise<
     | { kind: 'member'; member: GuildMember }
@@ -119,7 +122,7 @@ export async function startOptionalActivityBootstrapBroker(
     | { kind: 'unavailable' }
   > => {
     try {
-      const guild = await options.client.guilds.fetch(guildId);
+      const guild = await options.client.guilds.fetch(requestedGuildId);
       const member = await guild.members.fetch(userId);
       return { kind: 'member', member };
     } catch (error) {
@@ -144,8 +147,8 @@ export async function startOptionalActivityBootstrapBroker(
     launches: options.runtime.launches,
     oauth: options.runtime.oauth,
     factoryFloor: bootstrapFactoryFloor,
-    async resolveMember(guildId, userId) {
-      const resolution = await resolveCurrentMember(guildId, userId);
+    async resolveMember(requestedGuildId, userId) {
+      const resolution = await resolveCurrentMember(requestedGuildId, userId);
       return resolution.kind === 'member'
         ? {
             userId: resolution.member.id,
@@ -156,15 +159,15 @@ export async function startOptionalActivityBootstrapBroker(
   });
   const revalidationService = createRevalidation({
     applicationId: options.applicationId,
-    guildId: options.guildId,
+    guildId,
     adapter: 'discord-agent',
     timeoutMs: config.requestTimeoutMs,
     maxRequests: config.revalidationMaxRequests,
     rateLimitWindowMs: config.revalidationRateLimitWindowMs,
     discord,
     bindings: options.runtime.bindings,
-    async resolveMember(guildId, userId) {
-      const resolution = await resolveCurrentMember(guildId, userId);
+    async resolveMember(requestedGuildId, userId) {
+      const resolution = await resolveCurrentMember(requestedGuildId, userId);
       let result: ActivityRevalidationMemberResolution;
       if (resolution.kind === 'member') {
         result = {

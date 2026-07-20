@@ -35,6 +35,11 @@ import {
   type DiscordActivityCommandRestClient,
 } from './factoryFloor/activityEntryPoint.js';
 import { getFactoryFloorRuntime } from './factoryFloor/runtime.js';
+import {
+  startOptionalActivityBootstrapBroker,
+  type ActivityBootstrapGuildClient,
+} from './factoryFloor/activityBootstrapRuntime.js';
+import type { ActivityBootstrapServerHandle } from './factoryFloor/activityBootstrapServer.js';
 
 // ── Single-instance lock ─────────────────────────────────────────────
 // Multiple bot processes sharing one token cause duplicate message
@@ -60,6 +65,7 @@ lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
 
 let runtime: RuntimeServices | null = null;
 let reviewSourceDisposable: Disposable | undefined;
+let activityBootstrapServer: ActivityBootstrapServerHandle | undefined;
 let repl: Repl | undefined;
 let shuttingDown = false;
 
@@ -143,6 +149,31 @@ client.once('clientReady', async () => {
   } catch (error) {
     console.error(
       '[factoryFloor] Failed to reconcile Activity Entry Point; direct providers remain available:',
+      redactErrorMessage(error),
+    );
+  }
+
+  try {
+    const factoryFloorRuntime = getFactoryFloorRuntime();
+    if (factoryFloorRuntime) {
+      activityBootstrapServer = await startOptionalActivityBootstrapBroker({
+        applicationId: config.clientId,
+        botToken: config.discordToken,
+        client: client as unknown as ActivityBootstrapGuildClient,
+        runtime: factoryFloorRuntime,
+        logger: message => console.warn(message),
+      });
+      if (activityBootstrapServer) {
+        console.log('[factoryFloor] Activity bootstrap broker started.');
+      }
+    } else if (process.env.FACTORY_FLOOR_BROKER_ENABLED === 'true') {
+      console.error(
+        '[factoryFloor] Activity bootstrap broker is enabled but the Factory Floor adapter is unavailable.',
+      );
+    }
+  } catch (error) {
+    console.error(
+      '[factoryFloor] Activity bootstrap broker failed to start; direct providers remain available:',
       redactErrorMessage(error),
     );
   }
@@ -268,6 +299,14 @@ async function shutdown(): Promise<void> {
   stopAllLoops();
   clearLoopRunner();
   if (reviewSourceDisposable) await reviewSourceDisposable.dispose();
+  if (activityBootstrapServer) {
+    await activityBootstrapServer.dispose().catch(error => {
+      console.warn(
+        '[factoryFloor] Failed to stop Activity bootstrap broker:',
+        redactErrorMessage(error),
+      );
+    });
+  }
   if (runtime) await stopRuntime(runtime);
   client.destroy();
   process.exit(0);

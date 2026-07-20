@@ -25,6 +25,7 @@ function fakeServer(): ActivityBootstrapHttpsServer & {
   listen: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   once: ReturnType<typeof vi.fn>;
+  emitError(error: Error): void;
 } {
   let errorHandler: ((error: Error) => void) | undefined;
   return {

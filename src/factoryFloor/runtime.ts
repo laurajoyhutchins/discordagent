@@ -1,5 +1,9 @@
 import type { DatabaseHandle } from '../db/database.js';
 import {
+  createFactoryFloorActivityInstanceBindingRepository,
+  type FactoryFloorActivityInstanceBindingRepository,
+} from '../repositories/factoryFloorActivityInstanceBindingRepository.js';
+import {
   createFactoryFloorBindingRepository,
   createFactoryFloorNonceStore,
   type FactoryFloorBindingRepository,
@@ -36,6 +40,7 @@ import type { ServiceAuthNonceStore } from './serviceAuth.js';
 export interface FactoryFloorRuntimeServices {
   readonly config: FactoryFloorIntegrationConfig;
   readonly bindings: FactoryFloorBindingRepository;
+  readonly activityInstances: FactoryFloorActivityInstanceBindingRepository;
   readonly launches: FactoryFloorLaunchRepository;
   readonly launchLookup: FactoryFloorLaunchInteractionLookup;
   readonly oauth: FactoryFloorOAuthRepository;
@@ -92,6 +97,7 @@ export function initializeFactoryFloorRuntime(
       ...(options.fetchFn ? { fetchFn: options.fetchFn } : {}),
     };
     const bindings = createFactoryFloorBindingRepository(database);
+    const activityInstances = createFactoryFloorActivityInstanceBindingRepository(database);
     const launches = createFactoryFloorLaunchRepository(database);
     const launchLookup = createFactoryFloorLaunchInteractionLookup(database);
     const oauth = createFactoryFloorOAuthRepository(database);
@@ -106,6 +112,7 @@ export function initializeFactoryFloorRuntime(
     const runtime: FactoryFloorRuntimeServices = {
       config,
       bindings,
+      activityInstances,
       launches,
       launchLookup,
       oauth,

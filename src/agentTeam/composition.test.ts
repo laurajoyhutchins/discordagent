@@ -6,6 +6,10 @@ import {
   type AgentTeamConfiguration,
 } from "./composition.js";
 
+function replaceAt<T>(values: readonly T[], index: number, value: T): void {
+  (values as T[])[index] = value;
+}
+
 function configuration(memberCount = 1): AgentTeamConfiguration {
   const identities = Array.from({ length: memberCount }, (_, index) => ({
     id: `agent-${index + 1}`,
@@ -70,10 +74,10 @@ describe("composeEffectiveAgents", () => {
 
   it("fails closed for broken references", () => {
     const input = configuration();
-    input.topology.members[0] = {
-      ...input.topology.members[0],
+    replaceAt(input.topology.members, 0, {
+      ...input.topology.members[0]!,
       roleId: "missing-role",
-    };
+    });
 
     expect(() => composeEffectiveAgents(input)).toThrow(
       "references missing role missing-role",
@@ -82,24 +86,24 @@ describe("composeEffectiveAgents", () => {
 
   it("rejects duplicate stable ids", () => {
     const input = configuration(2);
-    input.identities[1] = { ...input.identities[1], id: "agent-1" };
+    replaceAt(input.identities, 1, { ...input.identities[1]!, id: "agent-1" });
 
     expect(() => composeEffectiveAgents(input)).toThrow("duplicate identity id");
   });
 
   it("rejects invalid revisions", () => {
     const input = configuration();
-    input.assignments[0] = { ...input.assignments[0], revision: 0 };
+    replaceAt(input.assignments, 0, { ...input.assignments[0]!, revision: 0 });
 
     expect(() => composeEffectiveAgents(input)).toThrow("invalid revision 0");
   });
 
   it("rejects attempted authority broadening", () => {
     const input = configuration();
-    input.bindings[0] = {
-      ...input.bindings[0],
+    replaceAt(input.bindings, 0, {
+      ...input.bindings[0]!,
       eligibleCapabilities: ["read", "delete-repository"],
-    };
+    });
 
     expect(() => composeEffectiveAgents(input)).toThrow(
       "attempts to broaden authority",
@@ -108,10 +112,10 @@ describe("composeEffectiveAgents", () => {
 
   it("uses a fail-closed safe default when operator eligibility is omitted", () => {
     const input = configuration();
-    input.operatorProfiles[0] = {
+    replaceAt(input.operatorProfiles, 0, {
       id: "operator-default",
       revision: 1,
-    };
+    });
 
     const [agent] = composeEffectiveAgents(input);
     expect(agent?.effectiveAuthority.capabilities).toEqual([]);
@@ -127,10 +131,10 @@ describe("composeEffectiveAgents", () => {
 
   it("rejects a Discord binding that conflicts with stable topology ids", () => {
     const input = configuration(2);
-    input.bindings[1] = {
-      ...input.bindings[1],
+    replaceAt(input.bindings, 1, {
+      ...input.bindings[1]!,
       assignmentId: "assignment-1",
-    };
+    });
 
     expect(() => composeEffectiveAgents(input)).toThrow(
       AgentTeamConfigurationError,

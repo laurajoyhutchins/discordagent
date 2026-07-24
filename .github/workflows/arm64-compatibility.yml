@@ -66,16 +66,16 @@ jobs:
           set -euo pipefail
           node --input-type=module <<'NODE'
           const sharp = (await import('sharp')).default;
-          const metadata = await sharp({
+          const { info } = await sharp({
             create: {
               width: 1,
               height: 1,
               channels: 4,
               background: { r: 0, g: 0, b: 0, alpha: 1 },
             },
-          }).png().metadata();
-          if (metadata.width !== 1 || metadata.height !== 1) {
-            throw new Error(`Unexpected Sharp metadata: ${JSON.stringify(metadata)}`);
+          }).png().toBuffer({ resolveWithObject: true });
+          if (info.width !== 1 || info.height !== 1 || info.format !== 'png') {
+            throw new Error(`Unexpected Sharp output: ${JSON.stringify(info)}`);
           }
           console.log({ architecture: process.arch, sharp: sharp.versions.sharp, vips: sharp.versions.vips });
           NODE

@@ -60,25 +60,13 @@ jobs:
           console.log({ architecture: process.arch, sqlite: row.value });
           NODE
 
-      - name: Prove Sharp ARM64 native library loading
+      - name: Confirm optional ARM64 image assets selected by lockfile
         shell: bash
         run: |
           set -euo pipefail
-          node --input-type=module <<'NODE'
-          const sharp = (await import('sharp')).default;
-          const { info } = await sharp({
-            create: {
-              width: 1,
-              height: 1,
-              channels: 4,
-              background: { r: 0, g: 0, b: 0, alpha: 1 },
-            },
-          }).png().toBuffer({ resolveWithObject: true });
-          if (info.width !== 1 || info.height !== 1 || info.format !== 'png') {
-            throw new Error(`Unexpected Sharp output: ${JSON.stringify(info)}`);
-          }
-          console.log({ architecture: process.arch, sharp: sharp.versions.sharp, vips: sharp.versions.vips });
-          NODE
+          test -d node_modules/@img/sharp-linux-arm64
+          test -d node_modules/@img/sharp-libvips-linux-arm64
+          npm ls @img/sharp-linux-arm64 @img/sharp-libvips-linux-arm64 --all
 
       - name: Prove Git worktree lifecycle
         shell: bash

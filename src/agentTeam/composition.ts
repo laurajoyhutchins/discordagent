@@ -161,7 +161,11 @@ function requireReference<T extends { readonly id: string; readonly revision: Re
   reference: ContractReference,
   index: ReadonlyMap<string, T>,
 ): T {
-  requirePositiveRevision(`${kind} ${ownerId} ${referenceKind} reference`, reference.id, reference.revision);
+  requirePositiveRevision(
+    `${kind} ${ownerId} ${referenceKind} reference`,
+    reference.id,
+    reference.revision,
+  );
   const value = index.get(reference.id);
   if (value === undefined) {
     throw new AgentTeamConfigurationError(
@@ -179,12 +183,23 @@ function requireReference<T extends { readonly id: string; readonly revision: Re
 export function composeEffectiveAgents(
   configuration: AgentTeamConfiguration,
 ): readonly EffectiveAgent[] {
-  requirePositiveRevision("team topology", configuration.topology.id, configuration.topology.revision);
-  requirePositiveRevision("runtime safety policy", "runtime", configuration.runtimeSafety.revision);
+  requirePositiveRevision(
+    "team topology",
+    configuration.topology.id,
+    configuration.topology.revision,
+  );
+  requirePositiveRevision(
+    "runtime safety policy",
+    "runtime",
+    configuration.runtimeSafety.revision,
+  );
 
   const identities = indexUnique("identity", configuration.identities);
   const roles = indexUnique("role", configuration.roles);
-  const operatorProfiles = indexUnique("operator profile", configuration.operatorProfiles);
+  const operatorProfiles = indexUnique(
+    "operator profile",
+    configuration.operatorProfiles,
+  );
   const assignments = indexUnique("assignment", configuration.assignments);
   const bindings = indexUnique("Discord binding", configuration.bindings);
 
@@ -193,6 +208,102 @@ export function composeEffectiveAgents(
     "runtime",
     configuration.runtimeSafety.allowedCapabilities,
   );
+
+  const roleCapabilities = new Map<string, Set<string>>();
+  for (const role of roles.values()) {
+    requireReference("role", role.id, "identity", role.identity, identities);
+    roleCapabilities.set(
+      role.id,
+      normalizedCapabilities("role", role.id, role.authority.capabilities),
+    );
+  }
+
+  const operatorCapabilities = new Map<string, Set<string>>();
+  for (const operatorProfile of operatorProfiles.values()) {
+    operatorCapabilities.set(
+      operatorProfile.id,
+      normalizedCapabilities(
+        "operator profile",
+        operatorProfile.id,
+        operatorProfile.eligibleCapabilities ?? [],
+      ),
+    );
+  }
+
+  const assignmentCapabilities = new Map<string, Set<string>>();
+  for (const assignment of assignments.values()) {
+    const role = requireReference(
+      "assignment",
+      assignment.id,
+      "role",
+      assignment.role,
+      roles,
+    );
+    const operatorProfile = requireReference(
+      "assignment",
+      assignment.id,
+      "operator profile",
+      assignment.operatorProfile,
+      operatorProfiles,
+    );
+    const roleAuthority = roleCapabilities.get(role.id)!;
+    const operatorAuthority = operatorCapabilities.get(operatorProfile.id)!;
+    const assignmentAuthority = normalizedCapabilities(
+      "assignment",
+      assignment.id,
+      assignment.allowedCapabilities,
+    );
+    assertSubset(
+      "operator profile",
+      operatorProfile.id,
+      operatorAuthority,
+      roleAuthority,
+    );
+    assertSubset("assignment", assignment.id, assignmentAuthority, roleAuthority);
+    assignmentCapabilities.set(assignment.id, assignmentAuthority);
+  }
+
+  const bindingCapabilities = new Map<string, Set<string>>();
+  for (const binding of bindings.values()) {
+    const identity = requireReference(
+      "Discord binding",
+      binding.id,
+      "identity",
+      binding.identity,
+      identities,
+    );
+    const assignment = requireReference(
+      "Discord binding",
+      binding.id,
+      "assignment",
+      binding.assignment,
+      assignments,
+    );
+    const role = requireReference(
+      "assignment",
+      assignment.id,
+      "role",
+      assignment.role,
+      roles,
+    );
+    if (role.identity.id !== identity.id) {
+      throw new AgentTeamConfigurationError(
+        `Discord binding ${binding.id} conflicts with assignment ${assignment.id}`,
+      );
+    }
+    const bindingAuthority = normalizedCapabilities(
+      "Discord binding",
+      binding.id,
+      binding.eligibleCapabilities,
+    );
+    assertSubset(
+      "Discord binding",
+      binding.id,
+      bindingAuthority,
+      roleCapabilities.get(role.id)!,
+    );
+    bindingCapabilities.set(binding.id, bindingAuthority);
+  }
 
   const topologyIdentityIds = new Set<string>();
   const topologyBindingIds = new Set<string>();
@@ -247,11 +358,6 @@ export function composeEffectiveAgents(
       operatorProfiles,
     );
 
-    requireReference("role", role.id, "identity", role.identity, identities);
-    requireReference("assignment", assignment.id, "role", assignment.role, roles);
-    requireReference("Discord binding", binding.id, "identity", binding.identity, identities);
-    requireReference("Discord binding", binding.id, "assignment", binding.assignment, assignments);
-
     if (role.identity.id !== identity.id) {
       throw new AgentTeamConfigurationError(
         `role ${role.id} is bound to identity ${role.identity.id}, not ${identity.id}`,
@@ -262,43 +368,21 @@ export function composeEffectiveAgents(
         `assignment ${assignment.id} is bound to role ${assignment.role.id}, not ${role.id}`,
       );
     }
-    if (binding.identity.id !== identity.id || binding.assignment.id !== assignment.id) {
+    if (
+      binding.identity.id !== identity.id ||
+      binding.assignment.id !== assignment.id
+    ) {
       throw new AgentTeamConfigurationError(
         `Discord binding ${binding.id} conflicts with topology member ${identity.id}`,
       );
     }
 
-    const roleCapabilities = normalizedCapabilities(
-      "role",
-      role.id,
-      role.authority.capabilities,
-    );
-    const operatorCapabilities = normalizedCapabilities(
-      "operator profile",
-      operatorProfile.id,
-      operatorProfile.eligibleCapabilities ?? [],
-    );
-    const assignmentCapabilities = normalizedCapabilities(
-      "assignment",
-      assignment.id,
-      assignment.allowedCapabilities,
-    );
-    const bindingCapabilities = normalizedCapabilities(
-      "Discord binding",
-      binding.id,
-      binding.eligibleCapabilities,
-    );
-
-    assertSubset("operator profile", operatorProfile.id, operatorCapabilities, roleCapabilities);
-    assertSubset("assignment", assignment.id, assignmentCapabilities, roleCapabilities);
-    assertSubset("Discord binding", binding.id, bindingCapabilities, roleCapabilities);
-
     const effective = [
-      operatorCapabilities,
-      assignmentCapabilities,
-      bindingCapabilities,
+      operatorCapabilities.get(operatorProfile.id)!,
+      assignmentCapabilities.get(assignment.id)!,
+      bindingCapabilities.get(binding.id)!,
       runtimeCapabilities,
-    ].reduce(intersect, roleCapabilities);
+    ].reduce(intersect, roleCapabilities.get(role.id)!);
 
     return {
       identity,

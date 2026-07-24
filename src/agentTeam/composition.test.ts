@@ -156,4 +156,63 @@ describe("composeEffectiveAgents", () => {
       AgentTeamConfigurationError,
     );
   });
+
+  it("rejects an orphan assignment with a missing reference", () => {
+    const input = configuration();
+    (input.assignments as typeof input.assignments[number][]).push({
+      id: "orphan-assignment",
+      revision: 1,
+      role: reference("missing-role"),
+      operatorProfile: reference("operator-default"),
+      allowedCapabilities: ["read"],
+    });
+
+    expect(() => composeEffectiveAgents(input)).toThrow(
+      "assignment orphan-assignment references missing role missing-role",
+    );
+  });
+
+  it("rejects an orphan role with a stale identity reference", () => {
+    const input = configuration();
+    (input.roles as typeof input.roles[number][]).push({
+      id: "orphan-role",
+      revision: 1,
+      identity: reference("agent-1", 2),
+      authority: { capabilities: ["read"] },
+    });
+
+    expect(() => composeEffectiveAgents(input)).toThrow(
+      "role orphan-role references stale identity agent-1 revision 2",
+    );
+  });
+
+  it("rejects an orphan binding that conflicts with its assignment", () => {
+    const input = configuration(2);
+    (input.bindings as typeof input.bindings[number][]).push({
+      id: "orphan-binding",
+      revision: 1,
+      identity: reference("agent-1"),
+      assignment: reference("assignment-2"),
+      eligibleCapabilities: ["read"],
+    });
+
+    expect(() => composeEffectiveAgents(input)).toThrow(
+      "Discord binding orphan-binding conflicts with assignment assignment-2",
+    );
+  });
+
+  it("rejects authority broadening in an orphan binding", () => {
+    const input = configuration();
+    (input.bindings as typeof input.bindings[number][]).push({
+      id: "orphan-binding",
+      revision: 1,
+      identity: reference("agent-1"),
+      assignment: reference("assignment-1"),
+      eligibleCapabilities: ["delete-repository"],
+    });
+
+    expect(() => composeEffectiveAgents(input)).toThrow(
+      "Discord binding orphan-binding attempts to broaden authority",
+    );
+  });
 });

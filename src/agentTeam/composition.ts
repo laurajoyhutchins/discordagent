@@ -4,6 +4,11 @@ export interface AuthoritySet {
   readonly capabilities: readonly string[];
 }
 
+export interface ContractReference {
+  readonly id: string;
+  readonly revision: Revision;
+}
+
 export interface AgentIdentity {
   readonly id: string;
   readonly revision: Revision;
@@ -13,7 +18,7 @@ export interface AgentIdentity {
 export interface RoleContract {
   readonly id: string;
   readonly revision: Revision;
-  readonly identityId: string;
+  readonly identity: ContractReference;
   readonly authority: AuthoritySet;
 }
 
@@ -27,16 +32,16 @@ export interface OperatorProfile {
 export interface AssignmentContext {
   readonly id: string;
   readonly revision: Revision;
-  readonly roleId: string;
-  readonly operatorProfileId: string;
+  readonly role: ContractReference;
+  readonly operatorProfile: ContractReference;
   readonly allowedCapabilities: readonly string[];
 }
 
 export interface DiscordBinding {
   readonly id: string;
   readonly revision: Revision;
-  readonly identityId: string;
-  readonly assignmentId: string;
+  readonly identity: ContractReference;
+  readonly assignment: ContractReference;
   readonly eligibleCapabilities: readonly string[];
 }
 
@@ -46,10 +51,10 @@ export interface RuntimeSafetyPolicy {
 }
 
 export interface TeamTopologyMember {
-  readonly identityId: string;
-  readonly roleId: string;
-  readonly assignmentId: string;
-  readonly bindingId: string;
+  readonly identity: ContractReference;
+  readonly role: ContractReference;
+  readonly assignment: ContractReference;
+  readonly binding: ContractReference;
 }
 
 export interface TeamTopology {
@@ -149,17 +154,23 @@ function assertSubset(
   }
 }
 
-function requireReference<T>(
+function requireReference<T extends { readonly id: string; readonly revision: Revision }>(
   kind: string,
   ownerId: string,
   referenceKind: string,
-  referenceId: string,
+  reference: ContractReference,
   index: ReadonlyMap<string, T>,
 ): T {
-  const value = index.get(referenceId);
+  requirePositiveRevision(`${kind} ${ownerId} ${referenceKind} reference`, reference.id, reference.revision);
+  const value = index.get(reference.id);
   if (value === undefined) {
     throw new AgentTeamConfigurationError(
-      `${kind} ${ownerId} references missing ${referenceKind} ${referenceId}`,
+      `${kind} ${ownerId} references missing ${referenceKind} ${reference.id}`,
+    );
+  }
+  if (value.revision !== reference.revision) {
+    throw new AgentTeamConfigurationError(
+      `${kind} ${ownerId} references stale ${referenceKind} ${reference.id} revision ${reference.revision}; current revision is ${value.revision}`,
     );
   }
   return value;
@@ -187,66 +198,71 @@ export function composeEffectiveAgents(
   const topologyBindingIds = new Set<string>();
 
   return configuration.topology.members.map((member) => {
-    if (topologyIdentityIds.has(member.identityId)) {
+    if (topologyIdentityIds.has(member.identity.id)) {
       throw new AgentTeamConfigurationError(
-        `team topology repeats identity ${member.identityId}`,
+        `team topology repeats identity ${member.identity.id}`,
       );
     }
-    if (topologyBindingIds.has(member.bindingId)) {
+    if (topologyBindingIds.has(member.binding.id)) {
       throw new AgentTeamConfigurationError(
-        `team topology repeats Discord binding ${member.bindingId}`,
+        `team topology repeats Discord binding ${member.binding.id}`,
       );
     }
-    topologyIdentityIds.add(member.identityId);
-    topologyBindingIds.add(member.bindingId);
+    topologyIdentityIds.add(member.identity.id);
+    topologyBindingIds.add(member.binding.id);
 
     const identity = requireReference(
       "team topology",
       configuration.topology.id,
       "identity",
-      member.identityId,
+      member.identity,
       identities,
     );
     const role = requireReference(
       "team topology",
       configuration.topology.id,
       "role",
-      member.roleId,
+      member.role,
       roles,
     );
     const assignment = requireReference(
       "team topology",
       configuration.topology.id,
       "assignment",
-      member.assignmentId,
+      member.assignment,
       assignments,
     );
     const binding = requireReference(
       "team topology",
       configuration.topology.id,
       "Discord binding",
-      member.bindingId,
+      member.binding,
       bindings,
     );
     const operatorProfile = requireReference(
       "assignment",
       assignment.id,
       "operator profile",
-      assignment.operatorProfileId,
+      assignment.operatorProfile,
       operatorProfiles,
     );
 
-    if (role.identityId !== identity.id) {
+    requireReference("role", role.id, "identity", role.identity, identities);
+    requireReference("assignment", assignment.id, "role", assignment.role, roles);
+    requireReference("Discord binding", binding.id, "identity", binding.identity, identities);
+    requireReference("Discord binding", binding.id, "assignment", binding.assignment, assignments);
+
+    if (role.identity.id !== identity.id) {
       throw new AgentTeamConfigurationError(
-        `role ${role.id} is bound to identity ${role.identityId}, not ${identity.id}`,
+        `role ${role.id} is bound to identity ${role.identity.id}, not ${identity.id}`,
       );
     }
-    if (assignment.roleId !== role.id) {
+    if (assignment.role.id !== role.id) {
       throw new AgentTeamConfigurationError(
-        `assignment ${assignment.id} is bound to role ${assignment.roleId}, not ${role.id}`,
+        `assignment ${assignment.id} is bound to role ${assignment.role.id}, not ${role.id}`,
       );
     }
-    if (binding.identityId !== identity.id || binding.assignmentId !== assignment.id) {
+    if (binding.identity.id !== identity.id || binding.assignment.id !== assignment.id) {
       throw new AgentTeamConfigurationError(
         `Discord binding ${binding.id} conflicts with topology member ${identity.id}`,
       );

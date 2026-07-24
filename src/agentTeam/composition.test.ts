@@ -10,6 +10,10 @@ function replaceAt<T>(values: readonly T[], index: number, value: T): void {
   (values as T[])[index] = value;
 }
 
+function reference(id: string, revision = 1) {
+  return { id, revision };
+}
+
 function configuration(memberCount = 1): AgentTeamConfiguration {
   const identities = Array.from({ length: memberCount }, (_, index) => ({
     id: `agent-${index + 1}`,
@@ -22,7 +26,7 @@ function configuration(memberCount = 1): AgentTeamConfiguration {
     roles: identities.map((identity, index) => ({
       id: `role-${index + 1}`,
       revision: 1,
-      identityId: identity.id,
+      identity: reference(identity.id, identity.revision),
       authority: { capabilities: ["read", "propose", "admin"] },
     })),
     operatorProfiles: [
@@ -36,25 +40,25 @@ function configuration(memberCount = 1): AgentTeamConfiguration {
     assignments: identities.map((_, index) => ({
       id: `assignment-${index + 1}`,
       revision: 1,
-      roleId: `role-${index + 1}`,
-      operatorProfileId: "operator-default",
+      role: reference(`role-${index + 1}`),
+      operatorProfile: reference("operator-default"),
       allowedCapabilities: ["read", "propose"],
     })),
     bindings: identities.map((identity, index) => ({
       id: `binding-${index + 1}`,
       revision: 1,
-      identityId: identity.id,
-      assignmentId: `assignment-${index + 1}`,
+      identity: reference(identity.id, identity.revision),
+      assignment: reference(`assignment-${index + 1}`),
       eligibleCapabilities: ["read"],
     })),
     topology: {
       id: "team",
       revision: 1,
       members: identities.map((identity, index) => ({
-        identityId: identity.id,
-        roleId: `role-${index + 1}`,
-        assignmentId: `assignment-${index + 1}`,
-        bindingId: `binding-${index + 1}`,
+        identity: reference(identity.id, identity.revision),
+        role: reference(`role-${index + 1}`),
+        assignment: reference(`assignment-${index + 1}`),
+        binding: reference(`binding-${index + 1}`),
       })),
     },
     runtimeSafety: {
@@ -76,7 +80,7 @@ describe("composeEffectiveAgents", () => {
     const input = configuration();
     replaceAt(input.topology.members, 0, {
       ...input.topology.members[0]!,
-      roleId: "missing-role",
+      role: reference("missing-role"),
     });
 
     expect(() => composeEffectiveAgents(input)).toThrow(
@@ -96,6 +100,18 @@ describe("composeEffectiveAgents", () => {
     replaceAt(input.assignments, 0, { ...input.assignments[0]!, revision: 0 });
 
     expect(() => composeEffectiveAgents(input)).toThrow("invalid revision 0");
+  });
+
+  it("rejects stale referenced revisions", () => {
+    const input = configuration();
+    replaceAt(input.topology.members, 0, {
+      ...input.topology.members[0]!,
+      role: reference("role-1", 2),
+    });
+
+    expect(() => composeEffectiveAgents(input)).toThrow(
+      "references stale role role-1 revision 2; current revision is 1",
+    );
   });
 
   it("rejects attempted authority broadening", () => {
@@ -133,7 +149,7 @@ describe("composeEffectiveAgents", () => {
     const input = configuration(2);
     replaceAt(input.bindings, 1, {
       ...input.bindings[1]!,
-      assignmentId: "assignment-1",
+      assignment: reference("assignment-1"),
     });
 
     expect(() => composeEffectiveAgents(input)).toThrow(

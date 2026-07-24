@@ -1,0 +1,114 @@
+name: ARM64 compatibility
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/arm64-compatibility.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src/**'
+      - 'scripts/**'
+      - 'tsconfig.json'
+      - 'vitest.config.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-arm64:
+    name: Native Ubuntu ARM64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Confirm native ARM64 runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          test "$(uname -m)" = "aarch64"
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Prove native Node and SQLite operation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p 'process.arch')" = "arm64"
+          node --input-type=module <<'NODE'
+          import Database from 'better-sqlite3';
+
+          const db = new Database(':memory:');
+          db.exec('CREATE TABLE probe (value TEXT NOT NULL)');
+          db.prepare('INSERT INTO probe (value) VALUES (?)').run('arm64-ok');
+          const row = db.prepare('SELECT value FROM probe').get();
+          db.close();
+          if (row?.value !== 'arm64-ok') {
+            throw new Error(`Unexpected SQLite result: ${JSON.stringify(row)}`);
+          }
+          console.log({ architecture: process.arch, sqlite: row.value });
+          NODE
+
+      - name: Prove Sharp ARM64 native library loading
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const sharp = (await import('sharp')).default;
+          const metadata = await sharp({
+            create: {
+              width: 1,
+              height: 1,
+              channels: 4,
+              background: { r: 0, g: 0, b: 0, alpha: 1 },
+            },
+          }).png().metadata();
+          if (metadata.width !== 1 || metadata.height !== 1) {
+            throw new Error(`Unexpected Sharp metadata: ${JSON.stringify(metadata)}`);
+          }
+          console.log({ architecture: process.arch, sharp: sharp.versions.sharp, vips: sharp.versions.vips });
+          NODE
+
+      - name: Prove Git worktree lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          repo="$root/repo"
+          worktree="$root/worktree"
+          git init "$repo"
+          git -C "$repo" config user.name 'ARM64 compatibility probe'
+          git -C "$repo" config user.email 'arm64-probe@example.invalid'
+          printf 'probe\n' > "$repo/README.md"
+          git -C "$repo" add README.md
+          git -C "$repo" commit -m 'probe'
+          git -C "$repo" worktree add -b arm64-probe "$worktree"
+          test -f "$worktree/README.md"
+          git -C "$repo" worktree remove "$worktree"
+
+      - name: Run complete deterministic repository validation
+        run: npm run check:ci
+
+      - name: Install official Codex CLI ARM64 package
+        run: npm install --global @openai/codex@0.145.0
+
+      - name: Prove Codex CLI and app-server on ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          codex --version
+          schema_dir="$RUNNER_TEMP/codex-app-server-schema"
+          codex app-server generate-json-schema --out "$schema_dir"
+          find "$schema_dir" -type f -print
+          test -n "$(find "$schema_dir" -type f -print -quit)"

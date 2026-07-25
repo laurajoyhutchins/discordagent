@@ -111,7 +111,7 @@ describe("MissionRepository", () => {
       repository.transition(binding.missionId, {
         state: "CLAIMED",
       }),
-    ).toThrow(/claim/);
+    ).toThrow(/fresh claim evidence/);
   });
 
   it("does not treat a claim receipt as material execution", () => {
@@ -135,7 +135,64 @@ describe("MissionRepository", () => {
       repository.transition(binding.missionId, {
         state: "IN_PROGRESS",
       }),
-    ).toThrow(/execution/);
+    ).toThrow(/fresh execution evidence/);
+  });
+
+  it("requires fresh execution evidence after changes are requested", () => {
+    const repository = captured();
+    progressToInProgress(repository);
+    repository.transition(binding.missionId, {
+      state: "CHANGES_REQUESTED",
+      evidence: evidence("verification", "first-verification"),
+    });
+
+    expect(() =>
+      repository.transition(binding.missionId, {
+        state: "IN_PROGRESS",
+      }),
+    ).toThrow(/fresh execution evidence/);
+  });
+
+  it.each(["VERIFIED", "CHANGES_REQUESTED"] as const)(
+    "requires fresh verification evidence for IN_PROGRESS -> %s",
+    (state) => {
+      const repository = captured();
+      progressToInProgress(repository);
+
+      expect(() =>
+        repository.transition(binding.missionId, {
+          state,
+        }),
+      ).toThrow(/fresh verification evidence/);
+    },
+  );
+
+  it("cannot reuse historical execution and verification receipts across a cycle", () => {
+    const repository = captured();
+    progressToInProgress(repository);
+    repository.transition(binding.missionId, {
+      state: "CHANGES_REQUESTED",
+      evidence: evidence("verification", "first-verification"),
+    });
+
+    expect(() =>
+      repository.transition(binding.missionId, {
+        state: "IN_PROGRESS",
+        evidence: evidence("verification", "stale-kind"),
+      }),
+    ).toThrow(/fresh execution evidence/);
+
+    repository.transition(binding.missionId, {
+      state: "IN_PROGRESS",
+      evidence: evidence("execution", "fresh-correction"),
+    });
+
+    expect(() =>
+      repository.transition(binding.missionId, {
+        state: "VERIFIED",
+        evidence: evidence("execution", "stale-kind-again"),
+      }),
+    ).toThrow(/fresh verification evidence/);
   });
 
   it("preserves evidence across verification return and completion", () => {
@@ -186,7 +243,7 @@ describe("MissionRepository", () => {
         owner: "Ariadne",
         evidence: evidence("route", "unsupported-owner-change"),
       }),
-    ).toThrow(/Re-routing/);
+    ).toThrow(/fresh reroute evidence/);
 
     const rerouted = repository.transition(binding.missionId, {
       state: "ROUTED",

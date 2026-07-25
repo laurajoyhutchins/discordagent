@@ -71,7 +71,9 @@ const cloneMission = (mission: MissionRecord): MissionRecord => ({
   evidence: mission.evidence.map((item) => ({ ...item })),
 });
 
-const evidenceKinds = (mission: MissionRecord): ReadonlySet<MissionEvidenceKind> =>
+const evidenceKinds = (
+  mission: MissionRecord,
+): ReadonlySet<MissionEvidenceKind> =>
   new Set(mission.evidence.map((item) => item.kind));
 
 const requireEvidence = (
@@ -117,7 +119,9 @@ const validateRecord = (mission: MissionRecord): void => {
       return;
     case "AWAITING_CLAIM":
       if (!mission.currentOwner) {
-        throw new MissionTransitionError("AWAITING_CLAIM requires a selected owner");
+        throw new MissionTransitionError(
+          "AWAITING_CLAIM requires a selected owner",
+        );
       }
       requireEvidence(mission, "route", "wake");
       return;
@@ -221,7 +225,9 @@ export class MissionRepository {
 
   static fromSnapshot(snapshot: MissionSnapshot): MissionRepository {
     if (snapshot.version !== 1) {
-      throw new MissionConflictError(`Unsupported mission snapshot version: ${snapshot.version}`);
+      throw new MissionConflictError(
+        `Unsupported mission snapshot version: ${snapshot.version}`,
+      );
     }
 
     const repository = new MissionRepository();
@@ -232,7 +238,10 @@ export class MissionRepository {
     return repository;
   }
 
-  promote(binding: MissionBinding, captureEvidence: MissionEvidence): MissionRecord {
+  promote(
+    binding: MissionBinding,
+    captureEvidence: MissionEvidence,
+  ): MissionRecord {
     if (captureEvidence.kind !== "capture") {
       throw new MissionTransitionError("Promotion requires capture evidence");
     }
@@ -267,7 +276,10 @@ export class MissionRepository {
       );
     }
 
-    const requiredEvidence = requiredTransitionEvidence(current.state, transition.state);
+    const requiredEvidence = requiredTransitionEvidence(
+      current.state,
+      transition.state,
+    );
     if (transition.evidence?.kind !== requiredEvidence) {
       throw new MissionTransitionError(
         `${current.state} -> ${transition.state} requires fresh ${requiredEvidence} evidence`,
@@ -322,7 +334,10 @@ export class MissionRepository {
     return candidates.values().next().value;
   }
 
-  private sameBinding(existing: MissionRecord, binding: MissionBinding): boolean {
+  private sameBinding(
+    existing: MissionRecord,
+    binding: MissionBinding,
+  ): boolean {
     return (
       existing.missionId === binding.missionId &&
       existing.promotionIdempotencyKey === binding.promotionIdempotencyKey &&

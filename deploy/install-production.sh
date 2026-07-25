@@ -13,7 +13,7 @@ DATA_ROOT="${DATA_ROOT:-/var/lib/discordagent}"
 CONFIG_ROOT="${CONFIG_ROOT:-/etc/discordagent}"
 SOURCE_DIR="${SOURCE_DIR:-$(pwd)}"
 
-for command in node npm systemctl; do
+for command in node npm systemctl flock; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Required command is unavailable: ${command}" >&2
     exit 1

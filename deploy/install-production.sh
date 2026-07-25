@@ -13,7 +13,7 @@ DATA_ROOT="${DATA_ROOT:-/var/lib/discordagent}"
 CONFIG_ROOT="${CONFIG_ROOT:-/etc/discordagent}"
 SOURCE_DIR="${SOURCE_DIR:-$(pwd)}"
 
-for command in node npm systemctl flock; do
+for command in node npm systemctl flock readlink mv ln; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Required command is unavailable: ${command}" >&2
     exit 1
@@ -63,12 +63,31 @@ if [[ ! -f "${release_dir}/dist/index.js" || ! -f "${release_dir}/dist/smoke/hos
 fi
 
 chown -R root:root "${release_dir}"
-ln -sfn "${release_dir}" "${APP_ROOT}/current"
+
+current_release="$(readlink -f "${APP_ROOT}/current" 2>/dev/null || true)"
+current_next="${APP_ROOT}/.current.install.$$"
+previous_next="${APP_ROOT}/.previous.install.$$"
+cleanup() {
+  rm -f "${current_next}" "${previous_next}"
+}
+trap cleanup EXIT
+
+ln -s "${release_dir}" "${current_next}"
+if [[ -n "${current_release}" && -d "${current_release}" && "${current_release}" != "${release_dir}" ]]; then
+  ln -s "${current_release}" "${previous_next}"
+  mv -Tf "${previous_next}" "${APP_ROOT}/previous"
+fi
+mv -Tf "${current_next}" "${APP_ROOT}/current"
 
 install -m 0644 "${SOURCE_DIR}/deploy/systemd/discordagent.service" \
   /etc/systemd/system/discordagent.service
+install -m 0755 "${SOURCE_DIR}/deploy/rollback-production.sh" \
+  /usr/local/sbin/discordagent-rollback
 systemctl daemon-reload
 systemctl enable discordagent.service
 
 echo "Installed and built release at ${release_dir}."
+if [[ -n "${current_release}" && -d "${current_release}" ]]; then
+  echo "Previous release retained at ${current_release}; run discordagent-rollback as root to restore it."
+fi
 echo "Next: configure ${CONFIG_ROOT}/discordagent.env, authenticate Codex as ${APP_USER}, then run npm run smoke:host before starting the service."

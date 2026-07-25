@@ -12,6 +12,7 @@ WorkingDirectory=/opt/discordagent/current
 RuntimeDirectory=discordagent
 RuntimeDirectoryMode=0750
 ExecStartPre=/usr/bin/node /opt/discordagent/current/dist/smoke/hostPreflight.js
+ExecStartPre=/usr/bin/node /opt/discordagent/current/dist/smoke/resourceAdmission.js
 ExecStart=/usr/bin/flock --nonblock /run/discordagent/instance.lock /usr/bin/node /opt/discordagent/current/dist/index.js
 Restart=on-failure
 RestartSec=5s

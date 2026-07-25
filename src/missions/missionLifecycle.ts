@@ -185,6 +185,34 @@ export interface MissionTransition {
   lauraNeeded?: boolean;
 }
 
+const requiredTransitionEvidence = (
+  currentState: MissionState,
+  nextState: MissionState,
+): MissionEvidenceKind => {
+  if (nextState === "ROUTED") {
+    return currentState === "CAPTURED" ? "route" : "reroute";
+  }
+
+  switch (nextState) {
+    case "AWAITING_CLAIM":
+      return "wake";
+    case "CLAIMED":
+      return "claim";
+    case "IN_PROGRESS":
+      return "execution";
+    case "VERIFIED":
+    case "CHANGES_REQUESTED":
+    case "AWAITING_LAURA":
+      return "verification";
+    case "DONE":
+      return "completion";
+    case "CANCELLED":
+      return "cancellation";
+    case "CAPTURED":
+      return "capture";
+  }
+};
+
 export class MissionRepository {
   private readonly missionsById = new Map<string, MissionRecord>();
   private readonly missionIdByPromotionKey = new Map<string, string>();
@@ -239,27 +267,23 @@ export class MissionRepository {
       );
     }
 
-    const nextEvidence = transition.evidence
-      ? [...current.evidence, { ...transition.evidence }]
-      : [...current.evidence];
+    const requiredEvidence = requiredTransitionEvidence(current.state, transition.state);
+    if (transition.evidence?.kind !== requiredEvidence) {
+      throw new MissionTransitionError(
+        `${current.state} -> ${transition.state} requires fresh ${requiredEvidence} evidence`,
+      );
+    }
 
     const next: MissionRecord = {
       ...current,
       state: transition.state,
       currentOwner: transition.owner ?? current.currentOwner,
-      evidence: nextEvidence,
+      evidence: [...current.evidence, { ...transition.evidence }],
       blocker: transition.blocker,
       retryTrigger: transition.retryTrigger,
       nextAction: transition.nextAction,
       lauraNeeded: transition.lauraNeeded ?? false,
     };
-
-    if (transition.state === "ROUTED" && current.state !== "CAPTURED") {
-      if (transition.evidence?.kind !== "reroute") {
-        throw new MissionTransitionError("Re-routing requires reroute evidence");
-      }
-      next.evidence = [...current.evidence, { ...transition.evidence }];
-    }
 
     validateRecord(next);
     this.missionsById.set(missionId, cloneMission(next));

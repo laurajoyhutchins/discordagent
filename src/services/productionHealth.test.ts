@@ -57,6 +57,30 @@ describe('production health lifecycle', () => {
     }
   });
 
+  it('lowers and restores readiness when a required provider changes state', async () => {
+    const health = await startProductionHealth({ host: '127.0.0.1', port: 0 });
+
+    try {
+      health.markRuntimeReady(true);
+      health.markDiscordReady();
+      expect(health.server.snapshot().ready).toBe(true);
+
+      health.markProviderReady(false);
+      expect(health.server.snapshot()).toMatchObject({
+        ready: false,
+        providerReady: false,
+        recoveryReady: true,
+        storageReady: true,
+        discordReady: true,
+      });
+
+      health.markProviderReady(true);
+      expect(health.server.snapshot().ready).toBe(true);
+    } finally {
+      await health.close();
+    }
+  });
+
   it('lowers every readiness dependency before graceful shutdown', async () => {
     const health = await startProductionHealth({ host: '127.0.0.1', port: 0 });
 

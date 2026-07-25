@@ -13,6 +13,7 @@ export interface ProviderAvailabilitySource {
 export interface ProductionHealthHandle {
   readonly server: HealthServerHandle;
   markRuntimeReady(providerReady: boolean): void;
+  markProviderReady(providerReady: boolean): void;
   markDiscordReady(): void;
   markDiscordUnavailable(): void;
   beginShutdown(): void;
@@ -88,6 +89,9 @@ export async function startProductionHealth(
         storageReady: true,
         providerReady,
       });
+    },
+    markProviderReady(providerReady: boolean): void {
+      server.update({ providerReady });
     },
     markDiscordReady(): void {
       server.update({ discordReady: true });

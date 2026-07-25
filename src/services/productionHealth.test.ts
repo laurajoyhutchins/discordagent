@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { startProductionHealth } from './productionHealth.js';
+import type { AgentProviderId, ProviderAvailability } from '../agents/contracts.js';
+import {
+  areRequiredProvidersReady,
+  parseRequiredProviders,
+  startProductionHealth,
+  type ProviderAvailabilitySource,
+} from './productionHealth.js';
+
+function providerSource(
+  registered: AgentProviderId[],
+  availability: Partial<Record<AgentProviderId, ProviderAvailability | Error>>,
+): ProviderAvailabilitySource {
+  return {
+    list: () => registered,
+    availability: async provider => {
+      const result = availability[provider];
+      if (result instanceof Error) throw result;
+      return result ?? { available: false };
+    },
+  };
+}
 
 describe('production health lifecycle', () => {
   it('holds readiness false until runtime, provider, and Discord are ready', async () => {
@@ -57,5 +77,38 @@ describe('production health lifecycle', () => {
     } finally {
       await health.close();
     }
+  });
+});
+
+describe('required provider readiness', () => {
+  it('normalizes and deduplicates the production provider contract', () => {
+    expect(parseRequiredProviders(' codex,CLAUDE,codex ')).toEqual(['codex', 'claude']);
+  });
+
+  it('rejects unsupported provider names', () => {
+    expect(() => parseRequiredProviders('codex,typo')).toThrow(
+      'REQUIRED_PROVIDERS contains unsupported provider "typo".',
+    );
+  });
+
+  it('reports ready only when every required provider is registered and available', async () => {
+    const providers = providerSource(
+      ['codex', 'claude'],
+      {
+        codex: { available: true },
+        claude: { available: true },
+      },
+    );
+
+    await expect(areRequiredProvidersReady(providers, ['codex', 'claude'])).resolves.toBe(true);
+    await expect(areRequiredProvidersReady(providers, ['codex', 'opencode'])).resolves.toBe(false);
+  });
+
+  it('fails closed when an availability probe throws or reports unavailable', async () => {
+    const throwing = providerSource(['codex'], { codex: new Error('probe failed') });
+    const unavailable = providerSource(['codex'], { codex: { available: false } });
+
+    await expect(areRequiredProvidersReady(throwing, ['codex'])).resolves.toBe(false);
+    await expect(areRequiredProvidersReady(unavailable, ['codex'])).resolves.toBe(false);
   });
 });

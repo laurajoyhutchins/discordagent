@@ -29,6 +29,11 @@ import type { Disposable, ReviewNotification } from './integrations/reviewSource
 import { Repl } from './terminal/repl.js';
 import { activatePrimaryProvider } from './services/agentRuntimeService.js';
 import {
+  areRequiredProvidersReady,
+  startProductionHealth,
+  type ProductionHealthHandle,
+} from './services/productionHealth.js';
+import {
   createActivityCommandOwnershipStore,
   createDiscordActivityCommandApi,
   reconcileFactoryFloorEntryPoint,
@@ -58,15 +63,13 @@ lockServer.on('error', (err: NodeJS.ErrnoException) => {
   }
   process.exit(1);
 });
-lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
-  console.log(`Instance lock acquired on port ${LOCK_PORT}.`);
-  client.login(config.discordToken);
-});
 
 let runtime: RuntimeServices | null = null;
 let reviewSourceDisposable: Disposable | undefined;
 let activityBootstrapServer: ActivityBootstrapServerHandle | undefined;
 let repl: Repl | undefined;
+let productionHealth: ProductionHealthHandle | undefined;
+let providerHealthPoll: ReturnType<typeof setInterval> | undefined;
 let shuttingDown = false;
 
 async function handleReviewNotification(
@@ -95,6 +98,28 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel],
 });
 
+async function refreshProviderHealth(): Promise<void> {
+  if (!productionHealth || !runtime) return;
+  productionHealth.markProviderReady(await areRequiredProvidersReady(runtime.providers));
+}
+
+async function startProcess(): Promise<void> {
+  if (process.env.NODE_ENV === 'production') {
+    productionHealth = await startProductionHealth();
+    console.log(
+      `Health server listening on http://${productionHealth.server.host}:${productionHealth.server.port}.`,
+    );
+  }
+
+  lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
+    console.log(`Instance lock acquired on port ${LOCK_PORT}.`);
+    void client.login(config.discordToken).catch(error => {
+      console.error('Discord login failed:', redactErrorMessage(error));
+      process.exit(1);
+    });
+  });
+}
+
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user!.tag}`);
 
@@ -108,8 +133,21 @@ client.once('clientReady', async () => {
       logger: message => console.warn(message),
     });
     await reconcileScheduledLoops();
+    const providerReady = await areRequiredProvidersReady(runtime.providers);
+    productionHealth?.markRuntimeReady(providerReady);
+    productionHealth?.markDiscordReady();
+    if (productionHealth) {
+      providerHealthPoll = setInterval(() => {
+        void refreshProviderHealth().catch(error => {
+          productionHealth?.markProviderReady(false);
+          console.warn('[health] Required-provider probe failed:', redactErrorMessage(error));
+        });
+      }, 30_000);
+      providerHealthPoll.unref();
+    }
   } catch (error) {
     console.error('Failed to initialize Discord Agent runtime:', redactErrorMessage(error));
+    productionHealth?.markDiscordUnavailable();
     clearLoopRunner();
     if (runtime) await stopRuntime(runtime).catch(() => undefined);
     process.exit(1);
@@ -236,18 +274,22 @@ client.on('error', (err) => {
 // and log disconnects/reconnects so we can diagnose message pickup delays.
 
 client.on('shardDisconnect', (event, shardId) => {
+  productionHealth?.markDiscordUnavailable();
   console.warn(`[shard ${shardId}] Disconnected (code ${event.code}). Waiting for reconnect...`);
 });
 
 client.on('shardReconnecting', (shardId) => {
+  productionHealth?.markDiscordUnavailable();
   console.log(`[shard ${shardId}] Reconnecting...`);
 });
 
 client.on('shardResume', (shardId, replayedEvents) => {
+  productionHealth?.markDiscordReady();
   console.log(`[shard ${shardId}] Resumed. Replayed ${replayedEvents} events.`);
 });
 
 client.on('shardReady', (shardId) => {
+  productionHealth?.markDiscordReady();
   console.log(`[shard ${shardId}] Ready.`);
 });
 
@@ -271,6 +313,7 @@ setInterval(async () => {
       stalePingCount = 0;
       lastKnownPing = -1;
       reconnecting = true;
+      productionHealth?.markDiscordUnavailable();
       try {
         await client.destroy();
         await client.login(config.discordToken);
@@ -295,6 +338,8 @@ async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('Shutting down...');
+  productionHealth?.beginShutdown();
+  if (providerHealthPoll) clearInterval(providerHealthPoll);
   if (repl) await repl.stop();
   stopAllLoops();
   clearLoopRunner();
@@ -309,10 +354,14 @@ async function shutdown(): Promise<void> {
   }
   if (runtime) await stopRuntime(runtime);
   client.destroy();
+  if (productionHealth) await productionHealth.close();
   process.exit(0);
 }
 
 process.on('SIGINT', () => { void shutdown(); });
 process.on('SIGTERM', () => { void shutdown(); });
-// Login happens in the lockServer.listen callback above, once the
-// single-instance lock is held.
+
+void startProcess().catch(error => {
+  console.error('Failed to start Discord Agent process:', redactErrorMessage(error));
+  process.exit(1);
+});

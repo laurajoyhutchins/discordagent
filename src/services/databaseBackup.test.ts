@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,7 +6,10 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  activateStagedRestore,
   createOnlineBackup,
+  recoverInterruptedRestore,
+  RESTORE_CONFIRMATION,
   stageVerifiedRestore,
   verifyBackupArtifact,
 } from "./databaseBackup.js";
@@ -17,6 +20,14 @@ function openDatabase(path: string): Database.Database {
   const database = new Database(path);
   databases.push(database);
   return database;
+}
+
+function closeDatabase(database: Database.Database): void {
+  const index = databases.indexOf(database);
+  if (index >= 0) {
+    databases.splice(index, 1);
+  }
+  database.close();
 }
 
 afterEach(() => {
@@ -196,5 +207,104 @@ describe("database backup", () => {
       }),
     ).rejects.toThrow("Backup schema version 9 exceeds supported version 8");
     await expect(stat(stagingPath)).rejects.toThrow();
+  });
+
+  it("requires an offline service or explicit confirmation before activation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "discordagent-backup-"));
+    const activePath = join(root, "active.sqlite");
+    const stagingPath = join(root, "candidate.sqlite");
+    const rollbackPath = join(root, "active.sqlite.rollback");
+
+    const active = openDatabase(activePath);
+    active.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_migrations (version) VALUES (6);
+      CREATE TABLE durable_state (value TEXT NOT NULL);
+      INSERT INTO durable_state (value) VALUES ('active');
+    `);
+    const candidate = openDatabase(stagingPath);
+    candidate.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_migrations (version) VALUES (6);
+      CREATE TABLE durable_state (value TEXT NOT NULL);
+      INSERT INTO durable_state (value) VALUES ('candidate');
+    `);
+    closeDatabase(active);
+    closeDatabase(candidate);
+
+    await expect(
+      activateStagedRestore({
+        stagingPath,
+        activePath,
+        rollbackPath,
+        expectedSchemaVersion: 6,
+      }),
+    ).rejects.toThrow(`confirmation ${RESTORE_CONFIRMATION}`);
+
+    const unchanged = openDatabase(activePath);
+    expect(unchanged.prepare("SELECT value FROM durable_state").get()).toEqual({ value: "active" });
+    expect((await stat(stagingPath)).isFile()).toBe(true);
+  });
+
+  it("atomically activates a staged restore and retains the previous database", async () => {
+    const root = await mkdtemp(join(tmpdir(), "discordagent-backup-"));
+    const activePath = join(root, "active.sqlite");
+    const stagingPath = join(root, "candidate.sqlite");
+    const rollbackPath = join(root, "active.sqlite.rollback");
+
+    const active = openDatabase(activePath);
+    active.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_migrations (version) VALUES (6);
+      CREATE TABLE durable_state (value TEXT NOT NULL);
+      INSERT INTO durable_state (value) VALUES ('active');
+    `);
+    const candidate = openDatabase(stagingPath);
+    candidate.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_migrations (version) VALUES (6);
+      CREATE TABLE durable_state (value TEXT NOT NULL);
+      INSERT INTO durable_state (value) VALUES ('restored');
+    `);
+    closeDatabase(active);
+    closeDatabase(candidate);
+
+    const activated = await activateStagedRestore({
+      stagingPath,
+      activePath,
+      rollbackPath,
+      expectedSchemaVersion: 6,
+      serviceOffline: true,
+    });
+
+    expect(activated).toEqual({ activePath, rollbackPath });
+    const restored = openDatabase(activePath);
+    const rollback = openDatabase(rollbackPath);
+    expect(restored.prepare("SELECT value FROM durable_state").get()).toEqual({ value: "restored" });
+    expect(rollback.prepare("SELECT value FROM durable_state").get()).toEqual({ value: "active" });
+    expect((await stat(activePath)).mode & 0o777).toBe(0o600);
+    expect((await stat(rollbackPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it("recovers the previous database after an interrupted activation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "discordagent-backup-"));
+    const activePath = join(root, "active.sqlite");
+    const rollbackPath = join(root, "active.sqlite.rollback");
+    const active = openDatabase(activePath);
+    active.exec(`
+      CREATE TABLE durable_state (value TEXT NOT NULL);
+      INSERT INTO durable_state (value) VALUES ('previous');
+    `);
+    closeDatabase(active);
+    await rename(activePath, rollbackPath);
+
+    await expect(recoverInterruptedRestore({ activePath, rollbackPath })).resolves.toBe(
+      "rollback-restored",
+    );
+    const recovered = openDatabase(activePath);
+    expect(recovered.prepare("SELECT value FROM durable_state").get()).toEqual({
+      value: "previous",
+    });
+    await expect(stat(rollbackPath)).rejects.toThrow();
   });
 });

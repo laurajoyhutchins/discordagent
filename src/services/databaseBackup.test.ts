@@ -81,6 +81,33 @@ describe("database backup", () => {
     );
   });
 
+  it("rejects a manifest schema version that does not match the snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "discordagent-backup-"));
+    const database = openDatabase(join(root, "source.sqlite"));
+    database.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_migrations (version) VALUES (4);
+    `);
+
+    const artifact = await createOnlineBackup({
+      database,
+      destinationDirectory: join(root, "backups"),
+      applicationVersion: "1.0.0-test",
+      artifactName: "schema-mismatch",
+    });
+
+    const manifest = JSON.parse(await readFile(artifact.manifestPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    manifest.schemaVersion = 5;
+    await writeFile(artifact.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    await expect(verifyBackupArtifact(artifact.directory)).rejects.toThrow(
+      "Backup database schema does not match manifest",
+    );
+  });
+
   it("rejects a manifest that attempts to escape the artifact directory", async () => {
     const root = await mkdtemp(join(tmpdir(), "discordagent-backup-"));
     const database = openDatabase(join(root, "source.sqlite"));

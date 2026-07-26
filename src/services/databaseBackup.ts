@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 const ARTIFACT_MODE = 0o600;
 const DIRECTORY_MODE = 0o700;
 const MANIFEST_VERSION = 1;
+const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm"] as const;
 export const RESTORE_CONFIRMATION = "RESTORE_DISCORD_AGENT";
 
 export interface BackupManifest {
@@ -113,12 +114,110 @@ function assertDistinctPaths(paths: Record<string, string>): void {
   }
 }
 
+function databaseGenerationPaths(path: string): string[] {
+  const mainPath = resolve(path);
+  return [mainPath, ...SQLITE_SIDECAR_SUFFIXES.map(suffix => `${mainPath}${suffix}`)];
+}
+
+function assertDistinctDatabaseGenerations(paths: Record<string, string>): void {
+  assertDistinctPaths(paths);
+  const entries = Object.entries(paths).flatMap(([label, path]) =>
+    databaseGenerationPaths(path).map((generationPath, index) => ({
+      label: index === 0 ? label : `${label}${SQLITE_SIDECAR_SUFFIXES[index - 1]}`,
+      path: generationPath,
+    })),
+  );
+
+  for (let index = 0; index < entries.length; index += 1) {
+    for (let comparison = index + 1; comparison < entries.length; comparison += 1) {
+      if (entries[index].path === entries[comparison].path) {
+        throw new Error(
+          `${entries[index].label} and ${entries[comparison].label} must not overlap SQLite generations`,
+        );
+      }
+    }
+  }
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
     return true;
   } catch {
     return false;
+  }
+}
+
+async function existingDatabaseSidecars(path: string): Promise<string[]> {
+  const mainPath = resolve(path);
+  const sidecars = SQLITE_SIDECAR_SUFFIXES.map(suffix => `${mainPath}${suffix}`);
+  const existing: string[] = [];
+  for (const sidecar of sidecars) {
+    if (await pathExists(sidecar)) {
+      existing.push(sidecar);
+    }
+  }
+  return existing;
+}
+
+async function assertNoDatabaseSidecars(path: string, label: string): Promise<void> {
+  const sidecars = await existingDatabaseSidecars(path);
+  if (sidecars.length > 0) {
+    throw new Error(`${label} must not include SQLite sidecars: ${sidecars.join(", ")}`);
+  }
+}
+
+async function removeDatabaseGeneration(path: string): Promise<void> {
+  for (const generationPath of databaseGenerationPaths(path)) {
+    await rm(generationPath, { force: true });
+  }
+}
+
+async function moveDatabaseSidecars(sourcePath: string, destinationPath: string): Promise<void> {
+  const source = resolve(sourcePath);
+  const destination = resolve(destinationPath);
+
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+    const sourceSidecar = `${source}${suffix}`;
+    const destinationSidecar = `${destination}${suffix}`;
+    if (!(await pathExists(sourceSidecar))) {
+      continue;
+    }
+    if (await pathExists(destinationSidecar)) {
+      throw new Error(`SQLite sidecar destination already exists: ${destinationSidecar}`);
+    }
+    await rename(sourceSidecar, destinationSidecar);
+    await chmod(destinationSidecar, ARTIFACT_MODE);
+  }
+}
+
+async function moveDatabaseGeneration(sourcePath: string, destinationPath: string): Promise<void> {
+  const source = resolve(sourcePath);
+  const destination = resolve(destinationPath);
+  await rename(source, destination);
+  await chmod(destination, ARTIFACT_MODE);
+  await moveDatabaseSidecars(source, destination);
+}
+
+async function restoreMissingSidecars(sourcePath: string, destinationPath: string): Promise<void> {
+  const source = resolve(sourcePath);
+  const destination = resolve(destinationPath);
+
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+    const sourceSidecar = `${source}${suffix}`;
+    const destinationSidecar = `${destination}${suffix}`;
+    const sourceExists = await pathExists(sourceSidecar);
+    const destinationExists = await pathExists(destinationSidecar);
+
+    if (sourceExists && destinationExists) {
+      throw new Error(
+        `Interrupted restore has ambiguous SQLite sidecar ${suffix} at both ${sourceSidecar} and ${destinationSidecar}`,
+      );
+    }
+    if (sourceExists) {
+      await rename(sourceSidecar, destinationSidecar);
+      await chmod(destinationSidecar, ARTIFACT_MODE);
+    }
   }
 }
 
@@ -279,14 +378,15 @@ export async function stageVerifiedRestore(
   const sourcePath = resolveBackupDatabasePath(options.artifactDirectory, manifest);
   const stagingPath = resolve(options.stagingPath);
   await mkdir(dirname(stagingPath), { recursive: true, mode: DIRECTORY_MODE });
-  await rm(stagingPath, { force: true });
+  await removeDatabaseGeneration(stagingPath);
   await copyFile(sourcePath, stagingPath);
   await chmod(stagingPath, ARTIFACT_MODE);
 
   try {
+    await assertNoDatabaseSidecars(stagingPath, "Staged restore");
     validateDatabaseFile(stagingPath, manifest.schemaVersion, "Staged restore");
   } catch (error) {
-    await rm(stagingPath, { force: true });
+    await removeDatabaseGeneration(stagingPath);
     throw error;
   }
 
@@ -298,16 +398,35 @@ export async function recoverInterruptedRestore(
 ): Promise<"active-present" | "rollback-restored" | "no-database"> {
   const activePath = resolve(options.activePath);
   const rollbackPath = resolve(options.rollbackPath);
-  assertDistinctPaths({ activePath, rollbackPath });
+  assertDistinctDatabaseGenerations({ activePath, rollbackPath });
 
-  if (await pathExists(activePath)) {
+  const activeExists = await pathExists(activePath);
+  const rollbackExists = await pathExists(rollbackPath);
+
+  if (activeExists && rollbackExists) {
     return "active-present";
   }
-  if (!(await pathExists(rollbackPath))) {
+
+  if (activeExists) {
+    await restoreMissingSidecars(rollbackPath, activePath);
+    return "active-present";
+  }
+
+  if (!rollbackExists) {
+    const orphanedSidecars = [
+      ...(await existingDatabaseSidecars(activePath)),
+      ...(await existingDatabaseSidecars(rollbackPath)),
+    ];
+    if (orphanedSidecars.length > 0) {
+      throw new Error(
+        `Interrupted restore has SQLite sidecars without a main database: ${orphanedSidecars.join(", ")}`,
+      );
+    }
     return "no-database";
   }
 
   await mkdir(dirname(activePath), { recursive: true, mode: DIRECTORY_MODE });
+  await restoreMissingSidecars(rollbackPath, activePath);
   await rename(rollbackPath, activePath);
   await chmod(activePath, ARTIFACT_MODE);
   return "rollback-restored";
@@ -326,17 +445,22 @@ export async function activateStagedRestore(
   const stagingPath = resolve(options.stagingPath);
   const activePath = resolve(options.activePath);
   const rollbackPath = resolve(options.rollbackPath);
-  assertDistinctPaths({ stagingPath, activePath, rollbackPath });
+  assertDistinctDatabaseGenerations({ stagingPath, activePath, rollbackPath });
 
+  await assertNoDatabaseSidecars(stagingPath, "Staged restore");
   validateDatabaseFile(stagingPath, options.expectedSchemaVersion, "Staged restore");
   await recoverInterruptedRestore({ activePath, rollbackPath });
   await mkdir(dirname(activePath), { recursive: true, mode: DIRECTORY_MODE });
 
   const hadActiveDatabase = await pathExists(activePath);
   if (hadActiveDatabase) {
-    await rm(rollbackPath, { force: true });
-    await rename(activePath, rollbackPath);
-    await chmod(rollbackPath, ARTIFACT_MODE);
+    await removeDatabaseGeneration(rollbackPath);
+    try {
+      await moveDatabaseGeneration(activePath, rollbackPath);
+    } catch (error) {
+      await recoverInterruptedRestore({ activePath, rollbackPath });
+      throw error;
+    }
   }
 
   try {
@@ -344,10 +468,9 @@ export async function activateStagedRestore(
     await chmod(activePath, ARTIFACT_MODE);
     validateDatabaseFile(activePath, options.expectedSchemaVersion, "Activated restore");
   } catch (error) {
-    await rm(activePath, { force: true });
-    if (hadActiveDatabase && (await pathExists(rollbackPath))) {
-      await rename(rollbackPath, activePath);
-      await chmod(activePath, ARTIFACT_MODE);
+    await removeDatabaseGeneration(activePath);
+    if (hadActiveDatabase) {
+      await recoverInterruptedRestore({ activePath, rollbackPath });
     }
     throw error;
   }

@@ -55,10 +55,12 @@ describe('restored runtime startup', () => {
   it('runs idempotent migrations and recovery exactly once without starting a provider turn', async () => {
     const databasePath = restoredDatabasePath();
     const provider = fakeProvider();
-    const recovery = vi.fn(async ({ tasks }: Parameters<NonNullable<Parameters<typeof startRuntime>[1]['components']>['recovery']>[0]) => {
-      const migrationCount = tasks.database.raw
+    const recovery = vi.fn(async () => {
+      const restoredDatabase = openDatabase(databasePath);
+      const migrationCount = restoredDatabase.raw
         .prepare('SELECT COUNT(*) AS count FROM schema_migrations')
         .get() as { count: number };
+      restoredDatabase.close();
       expect(migrationCount.count).toBeGreaterThan(0);
       return { stop: vi.fn(async () => undefined) };
     });

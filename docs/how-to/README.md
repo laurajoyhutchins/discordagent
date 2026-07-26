@@ -22,6 +22,7 @@ Goal-oriented procedures for specific operational tasks.
 
 ## Operations
 
+- [Back up and restore durable state](operations/back-up-and-restore-state.md)
 - [Recover an interrupted task](operations/recover-an-interrupted-task.md)
 - [Select the application data directory](operations/select-application-data.md)
 - [Use the terminal REPL](operations/use-the-terminal-repl.md)

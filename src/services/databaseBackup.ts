@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 
 import Database from "better-sqlite3";
@@ -34,6 +34,17 @@ export interface BackupArtifact {
   manifest: BackupManifest;
 }
 
+export interface StageVerifiedRestoreOptions {
+  artifactDirectory: string;
+  stagingPath: string;
+  maxSupportedSchemaVersion: number;
+}
+
+export interface StagedRestore {
+  stagingPath: string;
+  manifest: BackupManifest;
+}
+
 function sha256(content: Buffer): string {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -63,6 +74,19 @@ function assertSafeArtifactName(name: string): void {
   if (!/^[a-zA-Z0-9._-]+$/.test(name) || name === "." || name === "..") {
     throw new Error(`Unsafe backup artifact name: ${name}`);
   }
+}
+
+function resolveBackupDatabasePath(directory: string, manifest: BackupManifest): string {
+  const artifactDirectory = resolve(directory);
+  if (basename(manifest.databaseFile) !== manifest.databaseFile) {
+    throw new Error("Backup manifest database path escapes the artifact directory");
+  }
+
+  const databasePath = join(artifactDirectory, manifest.databaseFile);
+  if (dirname(databasePath) !== artifactDirectory) {
+    throw new Error("Backup database path escapes the artifact directory");
+  }
+  return databasePath;
 }
 
 export async function createOnlineBackup(
@@ -153,20 +177,13 @@ export async function verifyBackupArtifact(directory: string): Promise<BackupMan
     throw new Error("Backup manifest is invalid or unsupported");
   }
 
-  if (basename(manifest.databaseFile) !== manifest.databaseFile) {
-    throw new Error("Backup manifest database path escapes the artifact directory");
-  }
-
-  const databasePath = join(artifactDirectory, manifest.databaseFile);
-  if (dirname(databasePath) !== artifactDirectory) {
-    throw new Error("Backup database path escapes the artifact directory");
-  }
-
+  const verifiedManifest = manifest as BackupManifest;
+  const databasePath = resolveBackupDatabasePath(artifactDirectory, verifiedManifest);
   const databaseContent = await readFile(databasePath);
-  if (databaseContent.byteLength !== manifest.databaseBytes) {
+  if (databaseContent.byteLength !== verifiedManifest.databaseBytes) {
     throw new Error("Backup database size does not match manifest");
   }
-  if (sha256(databaseContent) !== manifest.databaseSha256) {
+  if (sha256(databaseContent) !== verifiedManifest.databaseSha256) {
     throw new Error("Backup database checksum does not match manifest");
   }
 
@@ -176,12 +193,54 @@ export async function verifyBackupArtifact(directory: string): Promise<BackupMan
     if (quickCheck !== "ok") {
       throw new Error(`SQLite backup integrity check failed: ${String(quickCheck)}`);
     }
-    if (readSchemaVersion(backup) !== manifest.schemaVersion) {
+    if (readSchemaVersion(backup) !== verifiedManifest.schemaVersion) {
       throw new Error("Backup database schema does not match manifest");
     }
   } finally {
     backup.close();
   }
 
-  return manifest as BackupManifest;
+  return verifiedManifest;
+}
+
+export async function stageVerifiedRestore(
+  options: StageVerifiedRestoreOptions,
+): Promise<StagedRestore> {
+  if (!Number.isInteger(options.maxSupportedSchemaVersion) || options.maxSupportedSchemaVersion < 0) {
+    throw new Error("Maximum supported schema version must be a non-negative integer");
+  }
+
+  const manifest = await verifyBackupArtifact(options.artifactDirectory);
+  if (manifest.schemaVersion > options.maxSupportedSchemaVersion) {
+    throw new Error(
+      `Backup schema version ${manifest.schemaVersion} exceeds supported version ${options.maxSupportedSchemaVersion}`,
+    );
+  }
+
+  const sourcePath = resolveBackupDatabasePath(options.artifactDirectory, manifest);
+  const stagingPath = resolve(options.stagingPath);
+  await mkdir(dirname(stagingPath), { recursive: true, mode: DIRECTORY_MODE });
+  await rm(stagingPath, { force: true });
+  await copyFile(sourcePath, stagingPath);
+  await chmod(stagingPath, ARTIFACT_MODE);
+
+  try {
+    const staged = new Database(stagingPath, { readonly: true, fileMustExist: true });
+    try {
+      const quickCheck = staged.pragma("quick_check", { simple: true });
+      if (quickCheck !== "ok") {
+        throw new Error(`Staged restore integrity check failed: ${String(quickCheck)}`);
+      }
+      if (readSchemaVersion(staged) !== manifest.schemaVersion) {
+        throw new Error("Staged restore schema does not match manifest");
+      }
+    } finally {
+      staged.close();
+    }
+  } catch (error) {
+    await rm(stagingPath, { force: true });
+    throw error;
+  }
+
+  return { stagingPath, manifest };
 }

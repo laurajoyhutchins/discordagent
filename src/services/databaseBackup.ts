@@ -90,11 +90,13 @@ export async function createOnlineBackup(
     await chmod(databasePath, ARTIFACT_MODE);
 
     const backup = new Database(databasePath, { readonly: true, fileMustExist: true });
+    let schemaVersion: number;
     try {
       const quickCheck = backup.pragma("quick_check", { simple: true });
       if (quickCheck !== "ok") {
         throw new Error(`SQLite backup integrity check failed: ${String(quickCheck)}`);
       }
+      schemaVersion = readSchemaVersion(backup);
     } finally {
       backup.close();
     }
@@ -103,7 +105,7 @@ export async function createOnlineBackup(
     const manifest: BackupManifest = {
       manifestVersion: MANIFEST_VERSION,
       applicationVersion: options.applicationVersion,
-      schemaVersion: readSchemaVersion(options.database),
+      schemaVersion,
       createdAt: now.toISOString(),
       databaseFile,
       databaseSha256: sha256(databaseContent),
@@ -173,6 +175,9 @@ export async function verifyBackupArtifact(directory: string): Promise<BackupMan
     const quickCheck = backup.pragma("quick_check", { simple: true });
     if (quickCheck !== "ok") {
       throw new Error(`SQLite backup integrity check failed: ${String(quickCheck)}`);
+    }
+    if (readSchemaVersion(backup) !== manifest.schemaVersion) {
+      throw new Error("Backup database schema does not match manifest");
     }
   } finally {
     backup.close();

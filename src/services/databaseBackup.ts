@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 
 import Database from "better-sqlite3";
@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 const ARTIFACT_MODE = 0o600;
 const DIRECTORY_MODE = 0o700;
 const MANIFEST_VERSION = 1;
+export const RESTORE_CONFIRMATION = "RESTORE_DISCORD_AGENT";
 
 export interface BackupManifest {
   manifestVersion: 1;
@@ -45,6 +46,25 @@ export interface StagedRestore {
   manifest: BackupManifest;
 }
 
+export interface ActivateStagedRestoreOptions {
+  stagingPath: string;
+  activePath: string;
+  rollbackPath: string;
+  expectedSchemaVersion: number;
+  serviceOffline?: boolean;
+  confirmation?: string;
+}
+
+export interface ActivatedRestore {
+  activePath: string;
+  rollbackPath: string | null;
+}
+
+export interface RecoverInterruptedRestoreOptions {
+  activePath: string;
+  rollbackPath: string;
+}
+
 function sha256(content: Buffer): string {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -73,6 +93,47 @@ function readJournalMode(database: Database.Database): string {
 function assertSafeArtifactName(name: string): void {
   if (!/^[a-zA-Z0-9._-]+$/.test(name) || name === "." || name === "..") {
     throw new Error(`Unsafe backup artifact name: ${name}`);
+  }
+}
+
+function assertNonNegativeInteger(value: number, label: string): void {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+}
+
+function assertDistinctPaths(paths: Record<string, string>): void {
+  const entries = Object.entries(paths).map(([label, path]) => [label, resolve(path)] as const);
+  for (let index = 0; index < entries.length; index += 1) {
+    for (let comparison = index + 1; comparison < entries.length; comparison += 1) {
+      if (entries[index][1] === entries[comparison][1]) {
+        throw new Error(`${entries[index][0]} and ${entries[comparison][0]} must be different paths`);
+      }
+    }
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validateDatabaseFile(path: string, expectedSchemaVersion: number, label: string): void {
+  const database = new Database(path, { readonly: true, fileMustExist: true });
+  try {
+    const quickCheck = database.pragma("quick_check", { simple: true });
+    if (quickCheck !== "ok") {
+      throw new Error(`${label} integrity check failed: ${String(quickCheck)}`);
+    }
+    if (readSchemaVersion(database) !== expectedSchemaVersion) {
+      throw new Error(`${label} schema does not match expected version ${expectedSchemaVersion}`);
+    }
+  } finally {
+    database.close();
   }
 }
 
@@ -206,9 +267,7 @@ export async function verifyBackupArtifact(directory: string): Promise<BackupMan
 export async function stageVerifiedRestore(
   options: StageVerifiedRestoreOptions,
 ): Promise<StagedRestore> {
-  if (!Number.isInteger(options.maxSupportedSchemaVersion) || options.maxSupportedSchemaVersion < 0) {
-    throw new Error("Maximum supported schema version must be a non-negative integer");
-  }
+  assertNonNegativeInteger(options.maxSupportedSchemaVersion, "Maximum supported schema version");
 
   const manifest = await verifyBackupArtifact(options.artifactDirectory);
   if (manifest.schemaVersion > options.maxSupportedSchemaVersion) {
@@ -225,22 +284,76 @@ export async function stageVerifiedRestore(
   await chmod(stagingPath, ARTIFACT_MODE);
 
   try {
-    const staged = new Database(stagingPath, { readonly: true, fileMustExist: true });
-    try {
-      const quickCheck = staged.pragma("quick_check", { simple: true });
-      if (quickCheck !== "ok") {
-        throw new Error(`Staged restore integrity check failed: ${String(quickCheck)}`);
-      }
-      if (readSchemaVersion(staged) !== manifest.schemaVersion) {
-        throw new Error("Staged restore schema does not match manifest");
-      }
-    } finally {
-      staged.close();
-    }
+    validateDatabaseFile(stagingPath, manifest.schemaVersion, "Staged restore");
   } catch (error) {
     await rm(stagingPath, { force: true });
     throw error;
   }
 
   return { stagingPath, manifest };
+}
+
+export async function recoverInterruptedRestore(
+  options: RecoverInterruptedRestoreOptions,
+): Promise<"active-present" | "rollback-restored" | "no-database"> {
+  const activePath = resolve(options.activePath);
+  const rollbackPath = resolve(options.rollbackPath);
+  assertDistinctPaths({ activePath, rollbackPath });
+
+  if (await pathExists(activePath)) {
+    return "active-present";
+  }
+  if (!(await pathExists(rollbackPath))) {
+    return "no-database";
+  }
+
+  await mkdir(dirname(activePath), { recursive: true, mode: DIRECTORY_MODE });
+  await rename(rollbackPath, activePath);
+  await chmod(activePath, ARTIFACT_MODE);
+  return "rollback-restored";
+}
+
+export async function activateStagedRestore(
+  options: ActivateStagedRestoreOptions,
+): Promise<ActivatedRestore> {
+  assertNonNegativeInteger(options.expectedSchemaVersion, "Expected schema version");
+  if (!options.serviceOffline && options.confirmation !== RESTORE_CONFIRMATION) {
+    throw new Error(
+      `Destructive restore requires an offline service or confirmation ${RESTORE_CONFIRMATION}`,
+    );
+  }
+
+  const stagingPath = resolve(options.stagingPath);
+  const activePath = resolve(options.activePath);
+  const rollbackPath = resolve(options.rollbackPath);
+  assertDistinctPaths({ stagingPath, activePath, rollbackPath });
+
+  validateDatabaseFile(stagingPath, options.expectedSchemaVersion, "Staged restore");
+  await recoverInterruptedRestore({ activePath, rollbackPath });
+  await mkdir(dirname(activePath), { recursive: true, mode: DIRECTORY_MODE });
+
+  const hadActiveDatabase = await pathExists(activePath);
+  if (hadActiveDatabase) {
+    await rm(rollbackPath, { force: true });
+    await rename(activePath, rollbackPath);
+    await chmod(rollbackPath, ARTIFACT_MODE);
+  }
+
+  try {
+    await rename(stagingPath, activePath);
+    await chmod(activePath, ARTIFACT_MODE);
+    validateDatabaseFile(activePath, options.expectedSchemaVersion, "Activated restore");
+  } catch (error) {
+    await rm(activePath, { force: true });
+    if (hadActiveDatabase && (await pathExists(rollbackPath))) {
+      await rename(rollbackPath, activePath);
+      await chmod(activePath, ARTIFACT_MODE);
+    }
+    throw error;
+  }
+
+  return {
+    activePath,
+    rollbackPath: hadActiveDatabase ? rollbackPath : null,
+  };
 }

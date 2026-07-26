@@ -5,7 +5,11 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createOnlineBackup, verifyBackupArtifact } from "./databaseBackup.js";
+import {
+  createOnlineBackup,
+  stageVerifiedRestore,
+  verifyBackupArtifact,
+} from "./databaseBackup.js";
 
 const databases: Database.Database[] = [];
 
@@ -130,5 +134,67 @@ describe("database backup", () => {
     await expect(verifyBackupArtifact(artifact.directory)).rejects.toThrow(
       "Backup manifest database path escapes the artifact directory",
     );
+  });
+
+  it("stages a verified restore without modifying the active database", async () => {
+    const root = await mkdtemp(join(tmpdir(), "discordagent-backup-"));
+    const activePath = join(root, "active.sqlite");
+    const database = openDatabase(activePath);
+    database.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_migrations (version) VALUES (6);
+      CREATE TABLE durable_state (value TEXT NOT NULL);
+      INSERT INTO durable_state (value) VALUES ('backup value');
+    `);
+
+    const artifact = await createOnlineBackup({
+      database,
+      destinationDirectory: join(root, "backups"),
+      applicationVersion: "1.0.0-test",
+      artifactName: "restore",
+    });
+    database.prepare("UPDATE durable_state SET value = ?").run("active value");
+
+    const stagingPath = join(root, "restore", "candidate.sqlite");
+    const staged = await stageVerifiedRestore({
+      artifactDirectory: artifact.directory,
+      stagingPath,
+      maxSupportedSchemaVersion: 6,
+    });
+
+    const stagedDatabase = openDatabase(staged.stagingPath);
+    expect(stagedDatabase.prepare("SELECT value FROM durable_state").get()).toEqual({
+      value: "backup value",
+    });
+    expect(database.prepare("SELECT value FROM durable_state").get()).toEqual({
+      value: "active value",
+    });
+    expect((await stat(stagingPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it("rejects a future-schema backup before creating restore staging", async () => {
+    const root = await mkdtemp(join(tmpdir(), "discordagent-backup-"));
+    const database = openDatabase(join(root, "source.sqlite"));
+    database.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_migrations (version) VALUES (9);
+    `);
+
+    const artifact = await createOnlineBackup({
+      database,
+      destinationDirectory: join(root, "backups"),
+      applicationVersion: "1.0.0-test",
+      artifactName: "future",
+    });
+    const stagingPath = join(root, "restore", "candidate.sqlite");
+
+    await expect(
+      stageVerifiedRestore({
+        artifactDirectory: artifact.directory,
+        stagingPath,
+        maxSupportedSchemaVersion: 8,
+      }),
+    ).rejects.toThrow("Backup schema version 9 exceeds supported version 8");
+    await expect(stat(stagingPath)).rejects.toThrow();
   });
 });

@@ -10,10 +10,11 @@ APP_USER="${APP_USER:-discordagent}"
 APP_GROUP="${APP_GROUP:-discordagent}"
 APP_ROOT="${APP_ROOT:-/opt/discordagent}"
 DATA_ROOT="${DATA_ROOT:-/var/lib/discordagent}"
+BACKUP_ROOT="${BACKUP_ROOT:-${DATA_ROOT}/backups}"
 CONFIG_ROOT="${CONFIG_ROOT:-/etc/discordagent}"
 SOURCE_DIR="${SOURCE_DIR:-$(pwd)}"
 
-for command in node npm systemctl flock readlink mv ln; do
+for command in node npm systemctl flock readlink mv ln runuser; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Required command is unavailable: ${command}" >&2
     exit 1
@@ -35,7 +36,7 @@ fi
 
 install -d -m 0755 "${APP_ROOT}"
 install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" \
-  "${DATA_ROOT}" "${DATA_ROOT}/repos" "${DATA_ROOT}/worktrees"
+  "${DATA_ROOT}" "${DATA_ROOT}/repos" "${DATA_ROOT}/worktrees" "${BACKUP_ROOT}"
 install -d -m 0750 -o root -g "${APP_GROUP}" "${CONFIG_ROOT}"
 
 if [[ ! -f "${CONFIG_ROOT}/discordagent.env" ]]; then
@@ -56,11 +57,23 @@ cp -a "${SOURCE_DIR}/." "${release_dir}/"
   npm prune --omit=dev
 )
 
-if [[ ! -f "${release_dir}/dist/index.js" || ! -f "${release_dir}/dist/smoke/hostPreflight.js" ]]; then
-  echo "Production build did not emit required entrypoints." >&2
-  rm -rf "${release_dir}"
-  exit 1
-fi
+required_entrypoints=(
+  "dist/index.js"
+  "dist/commands/databaseMaintenance.js"
+  "dist/commands/register.js"
+  "dist/discord/capabilities/calculator.js"
+  "dist/smoke/agentRoundTrip.js"
+  "dist/smoke/discordConnectivity.js"
+  "dist/smoke/hostPreflight.js"
+  "dist/smoke/resourceAdmission.js"
+)
+for entrypoint in "${required_entrypoints[@]}"; do
+  if [[ ! -f "${release_dir}/${entrypoint}" ]]; then
+    echo "Production build did not emit required entrypoint: ${entrypoint}" >&2
+    rm -rf "${release_dir}"
+    exit 1
+  fi
+done
 
 chown -R root:root "${release_dir}"
 
@@ -90,4 +103,6 @@ echo "Installed and built release at ${release_dir}."
 if [[ -n "${current_release}" && -d "${current_release}" ]]; then
   echo "Previous release retained at ${current_release}; run discordagent-rollback as root to restore it."
 fi
-echo "Next: configure ${CONFIG_ROOT}/discordagent.env, authenticate Codex as ${APP_USER}, then run npm run smoke:host before starting the service."
+echo "Backup artifacts will be written under ${BACKUP_ROOT} by default."
+echo "Next: configure ${CONFIG_ROOT}/discordagent.env, authenticate Codex as ${APP_USER}, then run:"
+echo "  runuser -u ${APP_USER} -- /usr/bin/node --env-file=${CONFIG_ROOT}/discordagent.env ${APP_ROOT}/current/dist/smoke/hostPreflight.js"

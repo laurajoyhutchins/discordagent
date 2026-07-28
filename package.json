@@ -10,6 +10,10 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "register": "tsx src/commands/register.ts",
+    "database:backup": "tsx src/commands/databaseMaintenance.ts backup",
+    "database:verify": "tsx src/commands/databaseMaintenance.ts verify",
+    "database:stage-restore": "tsx src/commands/databaseMaintenance.ts stage",
+    "database:activate-restore": "tsx src/commands/databaseMaintenance.ts activate",
     "discord:permissions": "tsx src/discord/capabilities/calculator.ts",
     "test": "vitest run && npm run test:scripts",
     "test:watch": "vitest",
@@ -49,8 +53,7 @@
     "codex",
     "opencode",
     "ai",
-    "git-worktree",
-    "typescript"
+    "git-worktree"
   ],
   "license": "MIT",
   "repository": {

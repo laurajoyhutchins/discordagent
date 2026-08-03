@@ -42,6 +42,8 @@ Architecture, rationale, tradeoffs, and durable design decisions.
 - **Product** — [Why Discord Agent](explanation/product/why-discord-agent.md)
 - **Archaeology** — [Causal decision history and current architecture](archaeology/README.md)
 
+The archaeology pages are generated from the canonical graph under `.deciduous/graph/`; update the graph rather than editing those projections directly.
+
 [All explanation](explanation/README.md)
 
 ## Contribute

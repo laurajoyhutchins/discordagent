@@ -5,6 +5,7 @@ Understanding-oriented documentation covering architecture, security, and design
 ## Architecture
 
 - [Provider-neutral runtime](architecture/provider-neutral-runtime.md) — runtime topology, task lifecycle, provider contracts, primary agent isolation
+- [Discord product and execution authority](architecture/execution-authority.md) — current hybrid, Factory Floor migration gates, compatibility retirement, owner decisions
 - [Primary agent boundary](architecture/primary-agent-boundary.md) — why the PM-style agent has no coding tools
 - [Task isolation and Git worktrees](architecture/task-isolation-and-git-worktrees.md) — branch naming, base resolution, safety guarantees
 - [Durable state and recovery](architecture/durable-state-and-recovery.md) — SQLite persistence, startup recovery, interrupted task handling

@@ -11,6 +11,7 @@ const view: TaskControlCardView = {
   objective: 'Implement api_key=sk-proj-1234567890 safely',
   projectName: 'factory-floor',
   provider: 'claude',
+  executionBackend: 'local_provider',
   model: 'claude-sonnet',
   status: 'running',
   branchName: 'agent/claude/factory-floor-123',
@@ -34,6 +35,7 @@ describe('task control card rendering', () => {
     expect(embed).toMatchObject({ title: 'Task · Running' });
     expect(serialized).toContain('factory-floor');
     expect(serialized).toContain('Claude');
+    expect(serialized).toContain('Local provider');
     expect(serialized).toContain('claude-sonnet');
     expect(serialized).toContain('agent/claude/factory-floor-123');
     expect(serialized).toContain('[REDACTED]');
@@ -49,6 +51,7 @@ describe('task control card rendering', () => {
     expect(text).toContain('Objective:');
     expect(text).toContain('State: running');
     expect(text).toContain('Provider: claude');
+    expect(text).toContain('Execution backend: local_provider');
     expect(text).toContain('Session: active');
     expect(text).not.toContain('task-1');
     expect(text).not.toContain('sk-proj-1234567890');

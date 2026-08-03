@@ -52,7 +52,7 @@ export interface TaskRecord {
   id: string;
   projectName: string;
   provider: AgentProviderId;
-  /** Persisted repository records always include this; optionality preserves legacy projection fixtures. */
+  /** Legacy and synthetic projections may omit this; persisted records never do. */
   executionBackend?: ExecutionBackend;
   status: TaskStatus;
   channelId: string;
@@ -65,6 +65,10 @@ export interface TaskRecord {
   providerSessionId?: string;
   settings?: AgentTaskSettings;
   settingsMalformed?: boolean;
+}
+
+export interface PersistedTaskRecord extends TaskRecord {
+  executionBackend: ExecutionBackend;
 }
 
 export interface WorktreeRecord {

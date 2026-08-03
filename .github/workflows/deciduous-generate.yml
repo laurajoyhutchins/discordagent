@@ -26,9 +26,7 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import gzip
           import json
-          import re
           import sqlite3
           import subprocess
           from collections import OrderedDict
@@ -63,7 +61,7 @@ jobs:
               }
               for old, new in replacements.items():
                   statement = statement.replace(old, new)
-              return statement.strip() + ';'
+              return statement.strip()
 
           def candidate_row(statement: str):
               connection = sqlite3.connect(':memory:')
@@ -93,13 +91,11 @@ jobs:
                   connection.close()
 
           candidates = {}
-          statement_pattern = re.compile(
-              r'INSERT INTO decision_nodes\s*\([^;]*?\)\s*VALUES\s*\(.*?\);',
-              re.DOTALL,
-          )
           for path in sorted(graph_dir.glob('10-nodes-*.sql.gz')):
               text = recovered_text(path)
-              for raw in statement_pattern.findall(text):
+              for raw in text.splitlines():
+                  if not raw.startswith('INSERT INTO decision_nodes '):
+                      continue
                   statement = normalize(raw)
                   row = candidate_row(statement)
                   if row is None:
@@ -127,7 +123,6 @@ jobs:
           connection.close()
 
           nodes = []
-          by_id = {}
           arcs = OrderedDict()
           for row in rows:
               node = {
@@ -139,7 +134,6 @@ jobs:
                   'metadata': json.loads(row[5]),
               }
               nodes.append(node)
-              by_id[node['id']] = node
               arcs.setdefault(node['metadata']['arc'], []).append(node)
 
           edges = []
@@ -156,34 +150,24 @@ jobs:
 
           root = 1
           arc_items = list(arcs.items())
-
           for arc, arc_nodes in arc_items:
               for source, target in zip(arc_nodes, arc_nodes[1:]):
                   add_edge(
-                      source['id'],
-                      target['id'],
-                      'leads_to',
+                      source['id'], target['id'], 'leads_to',
                       f"Within the {arc} investigation, {source['title']} created the context for {target['title']}.",
                   )
-
           for arc, arc_nodes in arc_items:
               first = arc_nodes[0]
               if first['id'] != root:
                   add_edge(
-                      root,
-                      first['id'],
-                      'enables',
+                      root, first['id'], 'enables',
                       f"The private Discord workspace goal opened the {arc} line of investigation.",
                   )
-
           for (_, previous_nodes), (arc, next_nodes) in zip(arc_items, arc_items[1:]):
               add_edge(
-                  previous_nodes[-1]['id'],
-                  next_nodes[0]['id'],
-                  'leads_to',
+                  previous_nodes[-1]['id'], next_nodes[0]['id'], 'leads_to',
                   f"The preceding findings exposed the need to investigate {arc}.",
               )
-
           for arc, arc_nodes in arc_items:
               for index, node in enumerate(arc_nodes):
                   if index == 0:
@@ -192,33 +176,25 @@ jobs:
                   lifecycle = node['metadata']['lifecycle']
                   if lifecycle in {'rejected', 'abandoned', 'superseded'} or node['status'] in {'rejected', 'superseded'}:
                       add_edge(
-                          previous['id'],
-                          node['id'],
-                          'rejected',
+                          previous['id'], node['id'], 'rejected',
                           f"Evidence in the {arc} arc rejected or superseded {node['title']}.",
                       )
                   elif node['node_type'] in {'decision', 'action', 'outcome'}:
                       add_edge(
-                          previous['id'],
-                          node['id'],
-                          'enables',
+                          previous['id'], node['id'], 'enables',
                           f"{previous['title']} supplied the prerequisite for {node['title']}.",
                       )
                   if len(edges) >= 93:
                       break
               if len(edges) >= 93:
                   break
-
           for node in nodes[1:]:
               if len(edges) >= 93:
                   break
               add_edge(
-                  root,
-                  node['id'],
-                  'requires',
+                  root, node['id'], 'requires',
                   f"{node['title']} remains traceable to the repository's private-operator-workspace objective.",
               )
-
           if len(edges) != 93:
               raise SystemExit(f'Expected 93 generated edges, found {len(edges)}')
 

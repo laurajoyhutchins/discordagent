@@ -91,7 +91,7 @@ export function risks(graph) {
     'abandoned',
     'compatibility-only',
   ]);
-  const nodes = graph.nodes.filter((node) => risky.has(node.metada.lifecycle));
+  const nodes = graph.nodes.filter((node) => risky.has(node.metadata.lifecycle));
   return `# Unresolved evidence and reliability-risk register
 
 ## Open evidence

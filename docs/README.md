@@ -14,7 +14,7 @@ Step-by-step procedures for common operational goals.
 
 - **Discord** — [Create and install the bot](how-to/discord/create-and-install-the-bot.md), [configure permissions and intents](how-to/discord/configure-permissions-and-intents.md), [diagnose Discord connectivity](how-to/discord/diagnose-discord-connectivity.md)
 - **Providers** — [Configure Claude](how-to/providers/configure-claude.md), [Codex](how-to/providers/configure-codex.md), [OpenCode](how-to/providers/configure-opencode.md)
-- **Projects** — [Register a project](how-to/projects/register-a-project.md), [change a project provider](how-to/projects/change-a-project-provider.md), [remove a project](how-to/projects/remove-a-project.md)
+- **Projects** — [Register a project](how-to/projects/register-a-project.md), [change a project provider](how-to/projects/change-a-project-provider.md), [remove a project](how-to/projects/remove-project.md)
 - **Operations** — [Recover an interrupted task](how-to/operations/recover-an-interrupted-task.md), [enable Roborev](how-to/integrations/enable-roborev.md)
 
 [All how-to guides](how-to/README.md)
@@ -49,7 +49,7 @@ The archaeology pages are generated from the canonical graph under `.deciduous/g
 ## Contribute
 
 - [Contributing guide](../CONTRIBUTING.md) — for human contributors
-- [Development environment](contributing/development.md) — setup, commands, tooling
+- [Development environment](contributing/development-environment.md) — setup, commands, tooling
 - [Testing](contributing/testing.md) — testing strategy and patterns
 - [Repository structure](contributing/repository-structure.md) — source layout and conventions
 - [Release process](contributing/release-process.md) — versioning and publishing

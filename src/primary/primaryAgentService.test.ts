@@ -89,6 +89,69 @@ describe('primary agent service', () => {
     expect(reply).toHaveBeenCalledWith('We will use the full scope.');
   });
 
+  it('rejects a malformed decision component without selecting the first option', async () => {
+    const update = vi.fn(async () => undefined);
+    const sent = {
+      awaitMessageComponent: vi.fn(async () => ({
+        id: 'interaction-invalid', user: { id: 'owner' }, values: ['999'],
+        customId: 'primary_decision_select', isStringSelectMenu: () => true, update,
+      })),
+      edit: vi.fn(async () => undefined),
+    };
+    const reply = vi.fn(async (payload: unknown) => typeof payload === 'object' ? sent : undefined);
+    const resolveDecision = vi.fn();
+    const service = createPrimaryAgentService({
+      channelId: 'primary', ownerId: 'owner', model: { respond: vi.fn() }, context: { assemble: () => '' },
+      messages: { append: vi.fn() } as never, memories: { put: vi.fn() } as never,
+      projects: {} as never, coordinator: {} as never, fetchProjectChannel: async () => null,
+      conversationService: {
+        process: vi.fn(async () => ({
+          kind: 'decision', text: 'Choose a path.',
+          decision: { kind: 'select', prompt: 'Which scope?', options: ['Small', 'Full'] },
+        })),
+        resolveDecision,
+      } as never,
+    });
+
+    await service.handleMessage(message(reply, 'Help me choose.'));
+
+    expect(update).toHaveBeenCalledWith({
+      content: 'Decision rejected: stale or invalid control. No decision was recorded.',
+      components: [],
+    });
+    expect(resolveDecision).not.toHaveBeenCalled();
+  });
+
+  it('records an explicit no-decision outcome when the control expires', async () => {
+    const edit = vi.fn(async () => undefined);
+    const sent = {
+      awaitMessageComponent: vi.fn(async () => { throw new Error('collector expired'); }),
+      edit,
+    };
+    const reply = vi.fn(async (payload: unknown) => typeof payload === 'object' ? sent : undefined);
+    const resolveDecision = vi.fn();
+    const service = createPrimaryAgentService({
+      channelId: 'primary', ownerId: 'owner', model: { respond: vi.fn() }, context: { assemble: () => '' },
+      messages: { append: vi.fn() } as never, memories: { put: vi.fn() } as never,
+      projects: {} as never, coordinator: {} as never, fetchProjectChannel: async () => null,
+      conversationService: {
+        process: vi.fn(async () => ({
+          kind: 'decision', text: 'Choose a path.',
+          decision: { kind: 'confirm', prompt: 'Proceed?', options: ['Proceed', 'Cancel'] },
+        })),
+        resolveDecision,
+      } as never,
+    });
+
+    await service.handleMessage(message(reply, 'Should we proceed?'));
+
+    expect(edit).toHaveBeenCalledWith({
+      content: 'Decision expired. No decision was recorded.',
+      components: [],
+    });
+    expect(resolveDecision).not.toHaveBeenCalled();
+  });
+
   it('renders structured provider failures as an error card instead of raw JSON', async () => {
     const rawError = JSON.stringify({
       type: 'error',

@@ -18,6 +18,7 @@ const task: TaskRecord = {
   id: 'task-1',
   projectName: project.name,
   provider: 'opencode',
+  executionBackend: 'local_provider',
   status: 'starting',
   channelId: project.agentChannelId,
   threadId: 'thread-1',

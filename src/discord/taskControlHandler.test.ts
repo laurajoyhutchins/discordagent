@@ -10,6 +10,7 @@ const task: TaskRecord = {
   id: 'task-secret-id',
   projectName: 'discord-agent',
   provider: 'codex',
+  executionBackend: 'local_provider',
   status: 'running',
   channelId: 'agent-1',
   threadId: 'thread-1',

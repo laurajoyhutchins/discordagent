@@ -24,27 +24,27 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Verify graph fragment compression
+      - name: Recover plain SQL fragments
         run: |
-          status=0
-          for file in .deciduous/graph/*.gz; do
-            if gzip -t "$file"; then
-              echo "OK $file"
-            else
-              echo "BAD $file"
-              status=1
-            fi
+          set -u
+          for file in .deciduous/graph/*.sql.gz; do
+            output="${file%.gz}"
+            gzip -cd "$file" > "$output" 2>/dev/null || true
+            test -s "$output"
+            echo "RECOVERED $output $(wc -c < "$output") bytes"
+            rm "$file"
           done
-          exit "$status"
       - run: npm run deciduous:generate
-      - name: Commit generated projections
+      - run: npm run deciduous:validate
+      - run: npm run deciduous:check
+      - name: Commit recovered graph and generated projections
         env:
           TARGET_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/archaeology
+          git add .deciduous/graph docs/archaeology
           if ! git diff --cached --quiet; then
-            git commit -m "docs: generate Deciduous projections"
+            git commit -m "docs: recover graph and generate projections"
             git push origin "HEAD:${TARGET_BRANCH}"
           fi

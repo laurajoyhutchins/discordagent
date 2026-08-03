@@ -1,65 +1,72 @@
 # Discord Agent
 
-Run local coding agents from a private Discord workspace.
+Operate coding-agent work from a private Discord workspace.
 
-Discord Agent provides a persistent PM-style primary agent, isolated task threads, durable provider sessions, and safe Git worktrees across Claude, Codex, and OpenCode.
+Discord Agent provides a persistent PM-style primary agent, isolated task threads, provider-neutral controls, durable projections, and least-privilege operator workflows across Claude, Codex, OpenCode, and Factory Floor integrations.
 
 **Status:** Active development. Breaking changes may occur. The project is derived from [DiscordClaude](https://github.com/NicolaiLolansen/DiscordClaude) (MIT).
 
 ## What it does
 
-Discord Agent turns a private Discord server into a secure orchestration surface for AI coding agents. A PM-style primary agent in `#agent-chat` discusses priorities, retrieves relevant history, and delegates approved coding tasks into provider-fixed threads. Each task gets:
+Discord Agent turns a private Discord server into a secure operator surface for coding agents. A PM-style primary agent in `#agent-chat` discusses priorities, retrieves relevant history, and delegates approved coding tasks into provider-fixed threads. A current direct-provider task gets:
 
 - a dedicated Discord thread for streaming output and decisions;
 - one immutable provider session (Claude, Codex, or OpenCode);
+- an explicit `local_provider` execution-backend identity;
 - an isolated Git branch and worktree;
 - durable SQLite state for recovery, journaling, and memory.
 
+The direct-provider runtime remains supported compatibility behavior. Factory Floor is the target authority for executions, attempts, workers, artifacts, retries, cancellation fencing, and runtime recovery once a complete Discord coding-task contract exists.
+
 ## Who this is for
 
-Operators who want a shared, auditable, least-privilege workspace where trusted team members can run coding agents against local repositories without sharing terminal access, provider credentials, or API keys.
+Operators who want a shared, auditable, least-privilege workspace where trusted team members can run or inspect coding-agent work without sharing terminal access, provider credentials, or API keys.
 
 ## Not intended for
 
 - Public-facing bots or multi-tenant SaaS hosting.
 - Automated CI/CD pipeline execution.
 - Untrusted Discord members (every command is gated by role authorization).
+- A competing portfolio demand or dependency graph.
+- A second canonical source of engineering-agent identity.
 
 ## Core differentiators
 
-- **PM-style primary agent** — one natural-language point of contact in `#agent-chat` for planning, delegation, and concise reporting. The primary agent has no repository tools and cannot bypass the task coordinator.
-- **Provider-neutral runtime** — Claude, Codex, and OpenCode adapters feed the same durable task contract and normalized event model. Provider switching is a confirmed sibling handoff, not an in-place session conversion.
-- **Isolated Git worktrees** — every Git-backed task runs on its own branch in a separate worktree. Dirty worktrees are never force-removed.
-- **Durable state and recovery** — projects, tasks, sessions, events, and results live in SQLite. Nonterminal tasks become `interrupted` after a restart; no provider turn is replayed automatically.
-- **Discord-native decisions** — buttons, select menus, and native polls collect approvals and input without command syntax.
-- **Quiet usage admission** — provider windows, calibrated task estimates, and active reservations are managed internally. The coordinator only surfaces constraints when capacity is critical.
+- **PM-style primary agent** — one natural-language point of contact in `#agent-chat` for conversation, delegation, decisions, and concise reporting. The primary agent has no repository tools and cannot bypass the execution boundary.
+- **Provider-neutral operator experience** — Claude, Codex, and OpenCode adapters feed the same local compatibility contract and normalized event model. Provider switching is a confirmed sibling handoff, not an in-place session conversion.
+- **Explicit execution authority** — every durable task records its backend. Local tasks cannot claim Factory Floor identity, and an unavailable external backend may not silently fall back to local execution.
+- **Isolated Git worktrees** — every current local Git-backed task runs on its own branch in a separate worktree. Dirty worktrees are never force-removed.
+- **Durable projections and recovery** — projects, local tasks, sessions, events, results, Discord mappings, and Factory Floor bindings live in SQLite under distinct authority rules. Nonterminal local tasks become `interrupted` after a restart; no provider turn is replayed automatically.
+- **Discord-native decisions** — buttons, select menus, and native polls collect approvals and input without command syntax. Invalid or expired decision controls record no decision.
+- **Quiet usage admission** — local-provider windows, calibrated task estimates, and active reservations are managed internally while that compatibility runtime remains active.
 - **Least-privilege Discord model** — the bot runs with minimal permissions and a capability registry that provides diagnostics and graceful fallbacks.
 
 ## Architecture
 
 ```text
-Discord messages / commands
-            │
-            ▼
-      TaskCoordinator
-       │     │      │
-       │     │      └── DiscordTaskRenderer + DiscordInteractionBroker
-       │     └───────── Task/Event/Project repositories → SQLite
-       └─────────────── WorktreeManager → isolated Git worktree
-            │
-            ▼
-      ProviderRegistry
-            │
-            ├── ClaudeProvider   → Claude Agent SDK
-            ├── CodexProvider    → Codex App Server
-            └── OpenCodeProvider → OpenCode ACP
+Trusted Discord members
+          │
+          ▼
+Discord commands, messages, threads and controls
+          │
+          ├── Primary-agent conversation and operator workflows
+          ├── Discord task rendering and local projections
+          ├── Factory Floor Activity client and trusted bindings
+          │
+          └── local_provider compatibility backend
+                ├── TaskCoordinator
+                ├── SQLite task, event, result and session records
+                ├── WorktreeManager
+                └── Claude, Codex and OpenCode adapters
 ```
 
-`TaskCoordinator` owns lifecycle ordering. Handlers never call provider SDKs directly.
+`TaskCoordinator` owns lifecycle ordering only for the `local_provider` compatibility backend. Discord Agent does not copy Factory Floor executions, attempts, artifacts, approvals, or runtime events into a competing local authority.
+
+See [Discord product and execution authority](docs/explanation/architecture/execution-authority.md) for the current responsibility matrix, migration gates, compatibility retirement criteria, and owner decisions.
 
 ## Provider support
 
-| Provider | Transport | Task execution | Primary agent | Session continuation | Cancellation |
+| Provider | Transport | Local task execution | Primary agent | Session continuation | Cancellation |
 |---|---|---|---|---|---|
 | Claude | Agent SDK | Full | Full (tool-disabled) | Yes | Yes |
 | Codex | App Server JSON-RPC | Full | Full (read-only, network-disabled) | Yes | Yes |
@@ -81,7 +88,7 @@ npm run register     # Register slash commands
 npm run dev          # Start the bot
 ```
 
-On first start, open `#agent-chat` and select a provider. Run `/add-project` to register a Git repository, then send a normal message in its `#agent` channel to create a task.
+On first start, open `#agent-chat` and select a provider. Run `/add-project` to register a Git repository, then send a normal message in its `#agent` channel to create a local-provider task.
 
 See the [tutorial](docs/tutorials/run-your-first-agent-task.md) for a complete guided walkthrough.
 
@@ -93,8 +100,9 @@ See the [tutorial](docs/tutorials/run-your-first-agent-task.md) for a complete g
 - Provider credentials, API keys, device codes, and webhook tokens are never stored in SQLite.
 - Sensitive content is redacted before SQLite persistence, Discord rendering, and logs.
 - Claude loads user-level settings only; project/local Claude settings are ignored.
-- The primary agent has no repository tools and cannot bypass `TaskCoordinator`.
-- Interrupted work is preserved and requires explicit user action to resume.
+- The primary agent has no repository tools and cannot bypass the execution boundary.
+- Invalid or expired PM decision controls fail closed and record no decision.
+- Interrupted local work is preserved and requires explicit user action to resume.
 
 ## Documentation
 
@@ -102,7 +110,7 @@ See the [tutorial](docs/tutorials/run-your-first-agent-task.md) for a complete g
 |---|---|
 | Learn with a guided tutorial | [Tutorials](docs/tutorials/run-your-first-agent-task.md) |
 | Accomplish a specific task | [How-to guides](docs/how-to/README.md) |
-| Look up commands, config, or states | [Reference](docs/reference/README.md) |
+| Look up commands, config, states or backends | [Reference](docs/reference/README.md) |
 | Understand architecture and design | [Explanation](docs/explanation/README.md) |
 | Contribute to the project | [Contributing](CONTRIBUTING.md) |
 

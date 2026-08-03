@@ -24,6 +24,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify graph fragment compression
+        run: |
+          status=0
+          for file in .deciduous/graph/*.gz; do
+            if gzip -t "$file"; then
+              echo "OK $file"
+            else
+              echo "BAD $file"
+              status=1
+            fi
+          done
+          exit "$status"
       - run: npm run deciduous:generate
       - name: Commit generated projections
         env:

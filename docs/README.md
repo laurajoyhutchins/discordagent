@@ -40,13 +40,14 @@ Architecture, rationale, tradeoffs, and durable design decisions.
 - **Architecture** — [Provider-neutral runtime](explanation/architecture/provider-neutral-runtime.md), [primary agent boundary](explanation/architecture/primary-agent-boundary.md), [task isolation and Git worktrees](explanation/architecture/task-isolation-and-git-worktrees.md), [durable state and recovery](explanation/architecture/durable-state-and-recovery.md), [usage admission](explanation/architecture/usage-admission.md), [Factory Floor Activity boundary](explanation/architecture/factory-floor-activity-boundary.md)
 - **Security** — [Trust model](explanation/security/trust-model.md), [authentication boundaries](explanation/security/authentication-boundaries.md), [secret handling and redaction](explanation/security/secret-handling-and-redaction.md)
 - **Product** — [Why Discord Agent](explanation/product/why-discord-agent.md)
+- **Archaeology** — [Causal decision history and current architecture](archaeology/README.md)
 
 [All explanation](explanation/README.md)
 
 ## Contribute
 
 - [Contributing guide](../CONTRIBUTING.md) — for human contributors
-- [Development environment](contributing/development-environment.md) — setup, commands, tooling
+- [Development environment](contributing/development.md) — setup, commands, tooling
 - [Testing](contributing/testing.md) — testing strategy and patterns
 - [Repository structure](contributing/repository-structure.md) — source layout and conventions
 - [Release process](contributing/release-process.md) — versioning and publishing

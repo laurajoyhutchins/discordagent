@@ -1,0 +1,31 @@
+name: Generate Deciduous projections
+
+on:
+  push:
+    branches:
+      - docs/deciduous-archaeology-backfill
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run deciduous:generate
+      - name: Commit generated projections
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/archaeology
+          if ! git diff --cached --quiet; then
+            git commit -m "docs: generate Deciduous projections"
+            git push
+          fi

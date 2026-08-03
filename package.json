@@ -29,7 +29,11 @@
     "smoke:agent": "tsx src/smoke/agentRoundTrip.ts",
     "smoke": "npm run smoke:host && npm run smoke:discord",
     "docs:links": "node scripts/check-docs-links.mjs",
-    "check:docs": "npm run docs:links"
+    "check:docs": "npm run docs:links && npm run deciduous:check",
+    "deciduous:generate": "node --no-warnings scripts/deciduous.mjs generate",
+    "deciduous:validate": "node --no-warnings scripts/deciduous.mjs validate",
+    "deciduous:project": "node --no-warnings scripts/deciduous.mjs project",
+    "deciduous:check": "node --no-warnings scripts/deciduous.mjs check"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.2.1",

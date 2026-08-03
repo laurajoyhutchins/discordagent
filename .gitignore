@@ -12,5 +12,8 @@ src/data/discordagent-worktrees/
 .DS_Store
 *.log
 
-.deciduous/
+.deciduous/*
+!.deciduous/graph/
+!.deciduous/graph/*.sql
+!.deciduous/graph/*.sql.gz
 docs/superpowers/plans/

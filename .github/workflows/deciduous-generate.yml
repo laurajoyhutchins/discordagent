@@ -23,6 +23,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: python3 scripts/repair-deciduous.py
+      - name: Repair projection typo
+        run: sed -i 's/node\.metada\.lifecycle/node.metadata.lifecycle/' scripts/deciduous-narratives.mjs
       - run: npm run deciduous:generate
       - run: npm run deciduous:validate
       - run: npm run deciduous:check

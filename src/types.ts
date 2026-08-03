@@ -52,7 +52,8 @@ export interface TaskRecord {
   id: string;
   projectName: string;
   provider: AgentProviderId;
-  executionBackend: ExecutionBackend;
+  /** Persisted repository records always include this; optionality preserves legacy projection fixtures. */
+  executionBackend?: ExecutionBackend;
   status: TaskStatus;
   channelId: string;
   threadId: string;

@@ -17,6 +17,34 @@ export interface PrimaryAgentService {
   handleMessage(message: Message): Promise<void>;
 }
 
+interface DecisionComponent {
+  readonly customId: string;
+  readonly values?: readonly string[];
+  isStringSelectMenu?(): boolean;
+}
+
+function selectedDecisionIndex(
+  interaction: DecisionComponent,
+  optionsLength: number,
+): number | undefined {
+  let rawIndex: string | undefined;
+  if (interaction.isStringSelectMenu?.()) {
+    if (interaction.customId !== 'primary_decision_select' || interaction.values?.length !== 1) {
+      return undefined;
+    }
+    [rawIndex] = interaction.values;
+  } else {
+    const match = /^primary_decision:(\d+)$/.exec(interaction.customId);
+    rawIndex = match?.[1];
+  }
+
+  if (rawIndex === undefined || !/^\d+$/.test(rawIndex)) return undefined;
+  const index = Number(rawIndex);
+  return Number.isSafeInteger(index) && index >= 0 && index < optionsLength
+    ? index
+    : undefined;
+}
+
 export function createPrimaryAgentService(deps: {
   channelId: string; ownerId: string; model: PrimaryModel; context: ContextAssembler;
   messages: MessageRepository; memories: MemoryRepository; projects: ProjectRepository; coordinator: TaskCoordinator;
@@ -178,61 +206,73 @@ export function createPrimaryAgentService(deps: {
           content: `${replyText}\n\n**Decision:** ${decision.prompt}`,
           components,
         } as never);
+
+        let interaction;
         try {
-          const interaction = await sent.awaitMessageComponent({
+          interaction = await sent.awaitMessageComponent({
             time: 120_000,
             filter: candidate => candidate.user.id === deps.ownerId,
           });
-          const index = interaction.isStringSelectMenu?.()
-            ? Number(interaction.values[0])
-            : Number(interaction.customId.split(':')[1]);
-          const selected = options[Number.isInteger(index) && index >= 0 && index < options.length ? index : 0];
-          await interaction.update({ content: `Decision recorded: **${selected}**`, components: [] });
-
-          const followResult = await conversation.resolveDecision({
-            conversationId: message.channelId,
-            userId: deps.ownerId,
-            decisionPrompt: decision.prompt,
-            selectedOption: selected,
-          });
-
-          if (followResult.kind === 'reply') {
-            await message.reply(renderReply(followResult.text));
-          } else if (followResult.kind === 'task-proposal') {
-            const fp = followResult.proposal;
-            const reusableSent = await message.reply({
-              content: `${followResult.text}\n\n**Proposed task** — ${fp.projectName}: ${fp.objective}`,
-              components: [{
-                type: 1, components: [
-                  { type: 2, custom_id: 'primary_task_start', label: 'Start task', style: 3 },
-                  { type: 2, custom_id: 'primary_task_cancel', label: 'Cancel', style: 2 },
-                ],
-              }],
-            });
-            try {
-              const followDecision = await reusableSent.awaitMessageComponent({
-                time: 120_000, filter: i => i.user.id === deps.ownerId,
-              });
-              if (followDecision.customId === 'primary_task_start') {
-                await followDecision.update({ content: 'Starting the delegated task…', components: [] });
-                try {
-                  await launch(fp);
-                } catch (error) {
-                  if (error instanceof UsageAdmissionError) {
-                    await message.reply(`${error.message}\n\n${error.recommendation}`);
-                  } else {
-                    throw error;
-                  }
-                }
-              } else {
-                await followDecision.update({ content: 'Task proposal cancelled.', components: [] });
-              }
-            } catch {
-              await reusableSent.edit({ components: [] }).catch(() => undefined);
-            }
-          }
         } catch {
-          await sent.edit({ components: [] }).catch(() => undefined);
+          await sent.edit({
+            content: 'Decision expired. No decision was recorded.',
+            components: [],
+          }).catch(() => undefined);
+          return;
+        }
+
+        const index = selectedDecisionIndex(interaction, options.length);
+        if (index === undefined) {
+          await interaction.update({
+            content: 'Decision rejected: stale or invalid control. No decision was recorded.',
+            components: [],
+          });
+          return;
+        }
+        const selected = options[index];
+        await interaction.update({ content: `Decision recorded: **${selected}**`, components: [] });
+
+        const followResult = await conversation.resolveDecision({
+          conversationId: message.channelId,
+          userId: deps.ownerId,
+          decisionPrompt: decision.prompt,
+          selectedOption: selected,
+        });
+
+        if (followResult.kind === 'reply') {
+          await message.reply(renderReply(followResult.text));
+        } else if (followResult.kind === 'task-proposal') {
+          const fp = followResult.proposal;
+          const reusableSent = await message.reply({
+            content: `${followResult.text}\n\n**Proposed task** — ${fp.projectName}: ${fp.objective}`,
+            components: [{
+              type: 1, components: [
+                { type: 2, custom_id: 'primary_task_start', label: 'Start task', style: 3 },
+                { type: 2, custom_id: 'primary_task_cancel', label: 'Cancel', style: 2 },
+              ],
+            }],
+          });
+          try {
+            const followDecision = await reusableSent.awaitMessageComponent({
+              time: 120_000, filter: i => i.user.id === deps.ownerId,
+            });
+            if (followDecision.customId === 'primary_task_start') {
+              await followDecision.update({ content: 'Starting the delegated task…', components: [] });
+              try {
+                await launch(fp);
+              } catch (error) {
+                if (error instanceof UsageAdmissionError) {
+                  await message.reply(`${error.message}\n\n${error.recommendation}`);
+                } else {
+                  throw error;
+                }
+              }
+            } else {
+              await followDecision.update({ content: 'Task proposal cancelled.', components: [] });
+            }
+          } catch {
+            await reusableSent.edit({ components: [] }).catch(() => undefined);
+          }
         }
         return;
       }

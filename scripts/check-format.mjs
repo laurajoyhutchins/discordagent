@@ -30,9 +30,7 @@ const checkedNames = new Set([
 const legacyMissingFinalNewline = new Set([
   'src/commands/capabilities.test.ts',
   'src/commands/register.ts',
-  'src/commands/turnIntoTask.test.ts',
   'src/commands/turnIntoTask.ts',
-  'src/discord/taskControlHandler.test.ts',
   'src/discord/taskControlHandler.ts',
   'src/handlers/interactionHandler.test.ts',
   'src/repositories/usageRepository.ts',

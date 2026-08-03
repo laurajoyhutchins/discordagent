@@ -7,7 +7,16 @@ import type {
   TaskStatus,
 } from '../agents/contracts.js';
 import type { DatabaseHandle } from '../db/database.js';
-import { parseAgentTaskSettings, parseStoredAgentTaskSettings, type TaskControlCardRecord, type TaskRecord, type TaskControlCardPinState, type WorktreeRecord } from '../types.js';
+import {
+  isExecutionBackend,
+  parseAgentTaskSettings,
+  parseStoredAgentTaskSettings,
+  type ExecutionBackend,
+  type TaskControlCardPinState,
+  type TaskControlCardRecord,
+  type TaskRecord,
+  type WorktreeRecord,
+} from '../types.js';
 import { redactSensitiveText } from '../utils/redaction.js';
 
 export interface CreateTaskWorktreeInput {
@@ -22,6 +31,7 @@ export interface CreateTaskTransaction {
   taskId: string;
   projectName: string;
   provider: AgentProviderId;
+  executionBackend?: ExecutionBackend;
   channelId: string;
   threadId: string;
   objective: string;
@@ -47,8 +57,6 @@ export interface TaskRepository {
   saveControlCard(taskId: string, input: { messageId: string; pinState: TaskControlCardPinState }): void;
 }
 
-
-
 interface WorktreeRow {
   id: string;
   task_id: string;
@@ -64,6 +72,7 @@ interface TaskRow {
   id: string;
   project_name: string;
   provider: AgentProviderId;
+  execution_backend: string;
   status: TaskStatus;
   channel_id: string;
   thread_id: string;
@@ -81,6 +90,7 @@ const TASK_SELECT = `
     t.id,
     p.name AS project_name,
     t.provider,
+    t.execution_backend,
     t.status,
     t.channel_id,
     t.thread_id,
@@ -89,8 +99,8 @@ const TASK_SELECT = `
     t.updated_at,
     t.started_at,
     t.completed_at,
-    ps.session_id AS provider_session_id
-    ,t.settings_json
+    ps.session_id AS provider_session_id,
+    t.settings_json
   FROM tasks t
   JOIN projects p ON p.id = t.project_id
   LEFT JOIN provider_sessions ps ON ps.task_id = t.id
@@ -115,6 +125,9 @@ const LEGAL_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
 };
 
 function toTaskRecord(row: TaskRow): TaskRecord {
+  if (!isExecutionBackend(row.execution_backend)) {
+    throw new Error(`Task has unsupported execution backend: ${row.execution_backend}`);
+  }
   const settings = parseStoredAgentTaskSettings(row.settings_json);
   const isLegacyEmptySnapshot = row.settings_json.trim() === '{}';
   const settingsMalformed = !isLegacyEmptySnapshot && settings !== undefined && Object.keys(settings).length === 0;
@@ -122,6 +135,7 @@ function toTaskRecord(row: TaskRow): TaskRecord {
     id: row.id,
     projectName: row.project_name,
     provider: row.provider,
+    executionBackend: row.execution_backend,
     status: row.status,
     channelId: row.channel_id,
     threadId: row.thread_id,
@@ -135,8 +149,6 @@ function toTaskRecord(row: TaskRow): TaskRecord {
     ...(settingsMalformed ? { settingsMalformed: true } : {}),
   };
 }
-
-
 
 function toWorktreeRecord(row: WorktreeRow): WorktreeRecord {
   return {
@@ -163,6 +175,11 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
 
   return {
     createWithWorktree(input: CreateTaskTransaction): TaskRecord {
+      const executionBackend = input.executionBackend ?? 'local_provider';
+      if (executionBackend !== 'local_provider') {
+        throw new Error('createWithWorktree only accepts the local_provider execution backend');
+      }
+
       const create = db.raw.transaction(() => {
         const project = db.raw.prepare(`
           SELECT id FROM projects WHERE name = ? COLLATE NOCASE AND archived_at IS NULL
@@ -172,14 +189,14 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
         const now = input.createdAt ?? Date.now();
         db.raw.prepare(`
           INSERT INTO tasks (
-            id, project_id, provider, status, channel_id, thread_id,
-            objective, created_at, updated_at
-            , settings_json
-          ) VALUES (?, ?, ?, 'created', ?, ?, ?, ?, ?, ?)
+            id, project_id, provider, execution_backend, status, channel_id, thread_id,
+            objective, created_at, updated_at, settings_json
+          ) VALUES (?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?)
         `).run(
           input.taskId,
           project.id,
           input.provider,
+          executionBackend,
           input.channelId,
           input.threadId,
           redactSensitiveText(input.objective),
@@ -210,6 +227,9 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
 
     attachProviderSession(taskId: string, session: ProviderSession): void {
       const task = requireTask(taskId);
+      if (task.executionBackend !== 'local_provider') {
+        throw new Error(`Task "${taskId}" is not a local_provider task`);
+      }
       if (task.provider !== session.provider) {
         throw new Error(
           `Provider session must match task provider: expected ${task.provider}, received ${session.provider}`,
@@ -307,6 +327,9 @@ export function createTaskRepository(db: DatabaseHandle): TaskRepository {
     reopenForContinuation(taskId: string): TaskRecord {
       const reopen = db.raw.transaction(() => {
         const task = requireTask(taskId);
+        if (task.executionBackend !== 'local_provider') {
+          throw new Error(`Task "${taskId}" is not a local_provider task`);
+        }
         if (!TERMINAL_STATUSES.has(task.status)) {
           throw new Error(`Task "${taskId}" must be terminal before continuation`);
         }

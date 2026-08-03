@@ -1,4 +1,4 @@
-﻿import {
+import {
   REASONING_EFFORTS,
   type AgentProviderId,
   type AgentTaskSettings,
@@ -6,6 +6,9 @@
   type TaskStatus,
 } from './agents/contracts.js';
 import { validateClaudeTimeout } from './settings/validation.js';
+
+export const EXECUTION_BACKENDS = ['local_provider', 'factory_floor'] as const;
+export type ExecutionBackend = (typeof EXECUTION_BACKENDS)[number];
 
 export type ProjectModels = Partial<Record<AgentProviderId, string>>;
 
@@ -49,6 +52,7 @@ export interface TaskRecord {
   id: string;
   projectName: string;
   provider: AgentProviderId;
+  executionBackend: ExecutionBackend;
   status: TaskStatus;
   channelId: string;
   threadId: string;
@@ -80,6 +84,10 @@ export interface TaskControlCardRecord {
   messageId: string;
   pinState: TaskControlCardPinState;
   updatedAt: number;
+}
+
+export function isExecutionBackend(value: unknown): value is ExecutionBackend {
+  return typeof value === 'string' && EXECUTION_BACKENDS.includes(value as ExecutionBackend);
 }
 
 export function parseAgentTaskSettings(value: unknown): AgentTaskSettings | undefined {

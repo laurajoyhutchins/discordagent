@@ -10,6 +10,7 @@ Authoritative descriptions of Discord Agent commands, configuration, and capabil
 | [Discord capabilities](discord-capabilities.md) | Bot permissions, Gateway intents, OAuth scopes, optional features, fallbacks |
 | [Discord Activity launch](discord-activity-launch.md) | Primary Entry Point registration, trusted context, one-time state, platform contract |
 | [Discord Activity OAuth bootstrap](discord-activity-bootstrap.md) | HTTPS broker endpoints, PKCE, live instance validation, persistence, shared contract |
+| [Execution backends](execution-backends.md) | Immutable backend identity, authority, migration and handoff invariants |
 | [Task and project states](task-and-project-states.md) | State values, transitions, persistence behavior |
 | [Filesystem layout](filesystem-layout.md) | Runtime directory structure and file purposes |
 | [Compatibility](compatibility.md) | Node, Git, provider CLI versions |

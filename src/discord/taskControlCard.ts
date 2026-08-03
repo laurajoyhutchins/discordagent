@@ -6,7 +6,11 @@ import {
 } from 'discord.js';
 import type { AgentProviderId, TaskResult, TaskStatus } from '../agents/contracts.js';
 import { providerLabel } from '../agents/providerLabels.js';
-import type { TaskControlCardRecord, TaskControlCardPinState } from '../types.js';
+import type {
+  ExecutionBackend,
+  TaskControlCardPinState,
+  TaskControlCardRecord,
+} from '../types.js';
 import { redactSensitiveText } from '../utils/redaction.js';
 import {
   operatorEmbed,
@@ -27,6 +31,7 @@ export interface TaskControlCardView {
   readonly objective: string;
   readonly projectName: string;
   readonly provider: AgentProviderId;
+  readonly executionBackend?: ExecutionBackend;
   readonly model?: string;
   readonly status: TaskStatus;
   readonly branchName?: string;
@@ -67,13 +72,19 @@ function safe(value: string | undefined): string | undefined {
   return value === undefined ? undefined : redactSensitiveText(value);
 }
 
+function executionBackendLabel(backend: ExecutionBackend): string {
+  return backend === 'factory_floor' ? 'Factory Floor' : 'Local provider';
+}
+
 function linesFor(view: TaskControlCardView, mode: 'plain' | 'rich'): string[] {
   const result = view.result;
   const rich = mode === 'rich';
+  const executionBackend = view.executionBackend ?? 'local_provider';
   return [
     `Objective: ${safe(view.objective)}`,
     `Project: ${safe(view.projectName)}`,
     `Provider: ${rich ? providerLabel(view.provider) : view.provider}`,
+    `Execution backend: ${rich ? executionBackendLabel(executionBackend) : executionBackend}`,
     ...(view.model ? [`Model: ${safe(view.model)}`] : []),
     `State: ${view.status}`,
     ...(view.branchName ? [`Branch: ${safe(view.branchName)}`] : []),
@@ -127,7 +138,11 @@ export function renderTaskControlCard(
     return {
       name: separator >= 0 ? line.slice(0, separator) : 'Status',
       value: (separator >= 0 ? line.slice(separator + 2) : line).slice(0, 1_024),
-      inline: line.startsWith('Provider:') || line.startsWith('Model:') || line.startsWith('State:') || line.startsWith('Session:'),
+      inline: line.startsWith('Provider:')
+        || line.startsWith('Execution backend:')
+        || line.startsWith('Model:')
+        || line.startsWith('State:')
+        || line.startsWith('Session:'),
     };
   }));
   if (JSON.stringify(embed.toJSON()).length > EMBED_OUTPUT_LIMIT) return { content, components };

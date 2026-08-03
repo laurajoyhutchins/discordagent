@@ -328,6 +328,7 @@ export class DiscordTaskRenderer implements TaskRenderer {
       objective: context.task.objective,
       projectName: context.task.projectName,
       provider: context.task.provider,
+      ...(context.task.executionBackend ? { executionBackend: context.task.executionBackend } : {}),
       ...(context.task.settings?.model ? { model: context.task.settings.model } : {}),
       status: context.task.status,
       ...(context.worktree?.branchName ? { branchName: context.worktree.branchName } : {}),

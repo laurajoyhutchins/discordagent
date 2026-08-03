@@ -1,4 +1,4 @@
-name: Inspect archaeology recovery objects
+name: Inspect remaining Deciduous nodes
 
 on:
   pull_request:
@@ -13,29 +13,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 2caf55cdd7a914269dc0dc8328066257e08005db
-          fetch-depth: 1
-      - name: Inspect recovered objects
+          ref: ${{ github.head_ref }}
+      - name: Inspect node fragments 06 through 10
         shell: bash
         run: |
-          set -u
-          for file in .recovery/*.gz; do
-            echo "===== $file ====="
-            sha1sum "$file"
-            wc -c "$file"
-            output="$(mktemp)"
-            if gzip -cd "$file" > "$output" 2>"$output.err"; then
-              echo "gzip=valid"
-            else
-              echo "gzip=invalid"
-              cat "$output.err"
-            fi
-            echo "decoded_bytes=$(wc -c < "$output")"
-            echo "node_inserts=$(grep -c 'INSERT INTO decision_nodes' "$output" || true)"
-            echo "edge_inserts=$(grep -c 'INSERT INTO decision_edges' "$output" || true)"
-            echo "first_lines"
-            head -n 4 "$output" || true
-            echo "last_lines"
-            tail -n 4 "$output" || true
-            rm -f "$output" "$output.err"
-          done
+          python3 - <<'PY'
+          import re
+          import subprocess
+          from pathlib import Path
+
+          for path in sorted(Path('.deciduous/graph').glob('10-nodes-*.sql.gz'))[5:]:
+              result = subprocess.run(['gzip', '-cd', str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+              text = result.stdout.decode('utf-8', errors='ignore')
+              print(f'===== {path.name} rc={result.returncode} bytes={len(text)} =====')
+              for line in text.splitlines():
+                  if not line.startswith('INSERT INTO decision_nodes '):
+                      continue
+                  match = re.search(r"VALUES \((\d+), '([^']+)', '([^']+)', '([^']+)'", line)
+                  if match:
+                      print('id=%s change_id=%s type=%s title=%s' % match.groups())
+                  else:
+                      print('UNPARSED ' + line[:240])
+          PY

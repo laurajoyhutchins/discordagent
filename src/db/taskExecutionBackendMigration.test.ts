@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe('task execution-backend migration', () => {
-  it('backfills prior tasks as local-provider compatibility executions', () => {
+  it('backfills prior tasks and prevents a backend rewrite', () => {
     const db = database('backend-upgrade');
     runMigrations(db, PREVIOUS_MIGRATIONS);
 
@@ -59,10 +59,10 @@ describe('task execution-backend migration', () => {
     expect(db.raw.prepare('SELECT execution_backend FROM tasks WHERE id = ?').get('task-1'))
       .toEqual({ execution_backend: 'local_provider' });
     expect(() => db.raw.prepare('UPDATE tasks SET execution_backend = ? WHERE id = ?')
-      .run('unknown_backend', 'task-1')).toThrow();
+      .run('factory_floor', 'task-1')).toThrow(/immutable/i);
   });
 
-  it('installs the execution-backend constraint on a clean database', () => {
+  it('installs the backend and local-runtime ownership constraints on a clean database', () => {
     const db = database('backend-clean');
     runMigrations(db);
 
@@ -73,5 +73,20 @@ describe('task execution-backend migration', () => {
       version: 14,
       name: 'add immutable task execution backend',
     });
+
+    const triggers = db.raw.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'trigger' AND name IN (
+        'tasks_execution_backend_immutable',
+        'worktrees_require_local_provider_task',
+        'provider_sessions_require_local_provider_task'
+      )
+      ORDER BY name
+    `).all();
+    expect(triggers).toEqual([
+      { name: 'provider_sessions_require_local_provider_task' },
+      { name: 'tasks_execution_backend_immutable' },
+      { name: 'worktrees_require_local_provider_task' },
+    ]);
   });
 });

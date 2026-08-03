@@ -1,0 +1,41 @@
+name: Inspect archaeology recovery objects
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 2caf55cdd7a914269dc0dc8328066257e08005db
+          fetch-depth: 1
+      - name: Inspect recovered objects
+        shell: bash
+        run: |
+          set -u
+          for file in .recovery/*.gz; do
+            echo "===== $file ====="
+            sha1sum "$file"
+            wc -c "$file"
+            output="$(mktemp)"
+            if gzip -cd "$file" > "$output" 2>"$output.err"; then
+              echo "gzip=valid"
+            else
+              echo "gzip=invalid"
+              cat "$output.err"
+            fi
+            echo "decoded_bytes=$(wc -c < "$output")"
+            echo "node_inserts=$(grep -c 'INSERT INTO decision_nodes' "$output" || true)"
+            echo "edge_inserts=$(grep -c 'INSERT INTO decision_edges' "$output" || true)"
+            echo "first_lines"
+            head -n 4 "$output" || true
+            echo "last_lines"
+            tail -n 4 "$output" || true
+            rm -f "$output" "$output.err"
+          done

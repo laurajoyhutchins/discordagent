@@ -36,6 +36,10 @@
 ### Codex
 
 - **CLI:** [Codex CLI](https://codex.ai)
+- **Verified production version:** `0.145.0`
+- **Compatibility policy:** exact-version until a broader range has equivalent executable evidence
+- **Host enforcement:** `npm run smoke:host` fails when Codex is enabled and `codex --version` does not establish `0.145.0`
+- **Evidence:** native Ubuntu 24.04 ARM64 canary installed official `@openai/codex@0.145.0` and generated the app-server JSON schema successfully
 - **Transport:** Local App Server (JSON-RPC over stdio)
 - **Authentication:** Device-code login via `/codex-auth`
 - **Model aliases:** Provider-specific; use exact model IDs with `custom` parameter

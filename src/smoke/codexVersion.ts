@@ -46,13 +46,13 @@ export function checkCodexVersion(
     const detected = compatibility.detectedVersion ?? 'unparseable';
     return {
       status: 'fail',
-      detail: `Codex CLI ${detected} is not the verified production version ${compatibility.expectedVersion}.`,
+      detail: `Codex CLI ${detected} is not the verified version ${compatibility.expectedVersion}.`,
     };
   }
 
   return {
     status: 'pass',
-    detail: `Codex CLI ${VERIFIED_CODEX_CLI_VERSION} matches the verified production version.`,
+    detail: `Codex CLI ${VERIFIED_CODEX_CLI_VERSION} matches the verified version.`,
   };
 }
 

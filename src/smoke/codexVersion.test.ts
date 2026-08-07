@@ -2,17 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { checkCodexVersion } from './codexVersion.js';
 
 describe('Codex host compatibility smoke', () => {
-  it('passes only the verified production version', () => {
+  it('passes only the verified version', () => {
     expect(checkCodexVersion({}, () => ({ ok: true, detail: 'codex-cli 0.145.0' }))).toEqual({
       status: 'pass',
-      detail: 'Codex CLI 0.145.0 matches the verified production version.',
+      detail: 'Codex CLI 0.145.0 matches the verified version.',
     });
   });
 
   it('fails closed when an enabled Codex CLI has drifted', () => {
     expect(checkCodexVersion({}, () => ({ ok: true, detail: 'codex-cli 0.146.0' }))).toEqual({
       status: 'fail',
-      detail: 'Codex CLI 0.146.0 is not the verified production version 0.145.0.',
+      detail: 'Codex CLI 0.146.0 is not the verified version 0.145.0.',
     });
   });
 

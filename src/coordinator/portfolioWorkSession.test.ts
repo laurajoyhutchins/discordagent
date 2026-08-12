@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyBoundedCapabilityProfile } from './portfolioWorkSession.js';
+import { applyBoundedCapabilityProfile, boundedCapabilityProfiles } from './portfolioWorkSession.js';
 
 describe('bounded portfolio capability profile', () => {
   it('adds one named MCP profile to the durable task settings', () => {
@@ -15,13 +15,28 @@ describe('bounded portfolio capability profile', () => {
     });
   });
 
+  it('exposes only portfolio authority profiles from the live host catalog', () => {
+    expect(boundedCapabilityProfiles([
+      'default', 'github', 'linear', 'drive', 'playwright', 'disabled',
+    ])).toEqual(['github', 'linear', 'drive']);
+  });
+
   it.each(['default', 'disabled'])('rejects the broad or non-capability profile %s', profile => {
     expect(() => applyBoundedCapabilityProfile({
       provider: 'claude',
       requestedProfile: profile,
       availableProfiles: ['default', 'disabled', 'linear'],
       settings: {},
-    })).toThrow(/bounded capability profile/i);
+    })).toThrow(/bounded portfolio capability profile/i);
+  });
+
+  it('rejects unrelated MCP servers even when they are live on the host', () => {
+    expect(() => applyBoundedCapabilityProfile({
+      provider: 'claude',
+      requestedProfile: 'playwright',
+      availableProfiles: ['playwright', 'linear'],
+      settings: {},
+    })).toThrow(/bounded portfolio capability profile/i);
   });
 
   it('rejects profiles that are not present in the live host catalog', () => {
@@ -30,7 +45,7 @@ describe('bounded portfolio capability profile', () => {
       requestedProfile: 'linear-admin',
       availableProfiles: ['default', 'disabled', 'linear'],
       settings: {},
-    })).toThrow(/not available/i);
+    })).toThrow(/bounded portfolio capability profile/i);
   });
 
   it('fails closed when the selected provider cannot accept MCP profiles', () => {

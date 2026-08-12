@@ -16,6 +16,7 @@ import { createWorktreeManager, type WorktreeManager } from '../git/worktreeMana
 import type { PrimaryModel } from '../primary/primaryModel.js';
 import type { PrimaryAgentService } from '../primary/primaryAgentService.js';
 import type { PrimaryConversationService } from '../primary/primaryConversationService.js';
+import type { PortfolioContextHydrator } from '../primary/portfolioContext.js';
 import { createEventRepository, type EventRepository } from '../repositories/eventRepository.js';
 import { createMemoryRepository, type MemoryRepository } from '../repositories/memoryRepository.js';
 import { createMessageRepository, type MessageRepository } from '../repositories/messageRepository.js';
@@ -91,6 +92,7 @@ export interface RuntimeOptions {
   disableOpenCode?: boolean;
   primaryModel?: PrimaryModel;
   primaryModelFactory?: (provider: AgentProviderId) => PrimaryModel | undefined;
+  portfolioContext?: PortfolioContextHydrator;
   disablePrimaryAgent?: boolean;
   headlessPrimaryAgent?: boolean;
   primaryProvider?: AgentProviderId;
@@ -281,6 +283,7 @@ export async function startRuntime(
       ...(providerRuntime.codexAuth ? { codexAuth: providerRuntime.codexAuth } : {}),
       ...(options.primaryModel ? { primaryModel: options.primaryModel } : {}),
       ...(options.primaryModelFactory ? { primaryModelFactory: options.primaryModelFactory } : {}),
+      ...(options.portfolioContext ? { portfolioContext: options.portfolioContext } : {}),
       ...(options.disablePrimaryAgent !== undefined ? { disablePrimaryAgent: options.disablePrimaryAgent } : {}),
       ...(options.headlessPrimaryAgent !== undefined ? { headlessPrimaryAgent: options.headlessPrimaryAgent } : {}),
       ...(options.primaryProvider ? { primaryProvider: options.primaryProvider } : {}),

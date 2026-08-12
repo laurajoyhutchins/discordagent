@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { AGENT_PROVIDER_IDS, validateSupportedAgentSettings, type AgentProviderId, type AgentTaskSettings, type ReasoningEffort } from '../agents/contracts.js';
+import { applyBoundedCapabilityProfile } from '../coordinator/portfolioWorkSession.js';
 import type { ProjectRepository } from '../repositories/projectRepository.js';
 import type { ProjectSettingsRepository } from '../repositories/projectSettingsRepository.js';
 import type { SettingsRepository } from '../repositories/settingsRepository.js';
@@ -39,6 +41,7 @@ export interface SettingsService {
     modelOverride?: string;
     reasoningOverride?: ReasoningEffort;
   }): AgentTaskSettings;
+  runWithTaskSettingsOverride<T>(override: { mcpProfile: string }, operation: () => Promise<T>): Promise<T>;
   mcpProfiles(): McpProfileCatalog;
 }
 
@@ -50,6 +53,7 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
   const { settings, projects, projectSettings, hostDefaults, isProviderAvailable } = dependencies;
   const { transaction } = dependencies;
   const profileNames = Object.freeze([...dependencies.mcpProfileCatalog.profiles]);
+  const taskSettingsOverride = new AsyncLocalStorage<{ mcpProfile: string }>();
 
   validateClaudeTimeout(hostDefaults.claudeTimeoutMs);
   validateUsageReserve(hostDefaults.usageReserve);
@@ -250,7 +254,15 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
       result.timeoutMs = globalSettings.claudeTimeoutMs ?? hostDefaults.claudeTimeoutMs;
       if (projectSettingsValue.mcpProfile) result.mcpProfile = projectSettingsValue.mcpProfile;
     }
-    return result;
+    const override = taskSettingsOverride.getStore();
+    return override
+      ? applyBoundedCapabilityProfile({
+          provider: input.provider,
+          requestedProfile: override.mcpProfile,
+          availableProfiles: profileNames,
+          settings: result,
+        })
+      : result;
   }
 
   return {
@@ -260,6 +272,7 @@ export function createSettingsService(dependencies: SettingsServiceDependencies)
     updateGlobalWithActivation,
     updateProject,
     resolveTaskSettings,
+    runWithTaskSettingsOverride: (override, operation) => taskSettingsOverride.run(override, operation),
     mcpProfiles: () => Object.freeze({ profiles: Object.freeze([...profileNames]) }),
   };
 }

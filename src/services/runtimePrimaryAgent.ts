@@ -175,6 +175,9 @@ export async function bootstrapPrimaryAgent(
         if (options.headlessPrimaryAgent) {
           throw new Error('Task launch is unavailable in headless primary-agent mode.');
         }
+        if (proposal.portfolioCapability) {
+          throw new Error('Portfolio work requires fresh Discord capability authorization.');
+        }
         const project = options.projects.findByName(proposal.projectName);
         if (!project) throw new Error(`Project "${proposal.projectName}" is not registered`);
         const channel = await fetchProjectChannel(project.agentChannelId);
@@ -218,6 +221,7 @@ export async function bootstrapPrimaryAgent(
             projects: options.projects,
             coordinator: options.coordinator,
             fetchProjectChannel,
+            settingsService: options.settingsService,
           });
           setPrimaryAgentService(primaryAgent);
         }

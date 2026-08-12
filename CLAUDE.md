@@ -6,7 +6,7 @@ This file intentionally stays small so Claude does not receive a second, driftin
 
 ## Claude-specific boundaries
 
-- Claude task execution lives under `src/agents/claude/` and crosses the generic runtime through the provider-neutral contracts in `src/agents/contracts.ts`.
+- Claude task execution is implemented by `ClaudeProvider` under `src/agents/claude/` and crosses the generic runtime through the provider-neutral contracts in `src/agents/contracts.ts`.
 - The PM-style Claude primary model must remain tool-disabled. It may converse and propose delegation, but it must not edit repositories or bypass `TaskCoordinator`.
 - Claude settings must remain limited to the supported user-level setting source so repository content cannot weaken host policy.
 - Provider credentials, device/authentication material, and session secrets remain host-local and must not be persisted in SQLite, logs, Discord output, commits, or documentation.

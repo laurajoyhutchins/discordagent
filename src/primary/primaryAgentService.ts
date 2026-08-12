@@ -4,11 +4,13 @@ import type { ProjectRepository } from '../repositories/projectRepository.js';
 import type { MessageRepository } from '../repositories/messageRepository.js';
 import type { MemoryRepository } from '../repositories/memoryRepository.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
+import { boundedCapabilityProfiles } from '../coordinator/portfolioWorkSession.js';
 import type { PrimaryModel, PrimaryTaskProposal } from './primaryModel.js';
 import type { ContextAssembler } from './contextAssembler.js';
 import { createPrimaryConversationService, type PrimaryConversationService } from './primaryConversationService.js';
 import { redactSensitiveText } from '../utils/redaction.js';
 import { UsageAdmissionError } from '../services/usageAdmission.js';
+import type { SettingsService } from '../services/settingsService.js';
 import { buildErrorEmbed, isStructuredErrorMessage } from '../discord/errorCard.js';
 
 export interface PrimaryAgentService {
@@ -22,6 +24,7 @@ export function createPrimaryAgentService(deps: {
   messages: MessageRepository; memories: MemoryRepository; projects: ProjectRepository; coordinator: TaskCoordinator;
   fetchProjectChannel(channelId: string): Promise<TextChannel | null>;
   conversationService?: PrimaryConversationService;
+  settingsService?: SettingsService;
 }): PrimaryAgentService {
   const conversation: PrimaryConversationService = deps.conversationService ?? createPrimaryConversationService({
     context: deps.context,
@@ -35,22 +38,39 @@ export function createPrimaryAgentService(deps: {
     },
   });
 
-  async function launch(proposal: PrimaryTaskProposal): Promise<void> {
+  async function launch(proposal: PrimaryTaskProposal, capabilityProfile?: string): Promise<void> {
     const project = deps.projects.findByName(proposal.projectName);
     if (!project) throw new Error(`Project "${proposal.projectName}" is not registered`);
+    const provider = proposal.provider ?? project.defaultProvider;
+    if (capabilityProfile && provider !== 'claude') {
+      throw new Error(`Provider ${provider} does not support bounded MCP capability profiles.`);
+    }
     const channel = await deps.fetchProjectChannel(project.agentChannelId);
     if (!channel) throw new Error(`Project channel for "${proposal.projectName}" is unavailable`);
     const seed = await channel.send(`Delegated by the primary agent: ${proposal.objective}`);
-    await deps.coordinator.startFromMessage({ projectName: project.name, prompt: proposal.objective, message: seed, provider: proposal.provider ?? project.defaultProvider });
+    const start = () => deps.coordinator.startFromMessage({
+      projectName: project.name,
+      prompt: proposal.objective,
+      message: seed,
+      provider,
+    });
+    if (capabilityProfile) {
+      if (!deps.settingsService) throw new Error('Bounded portfolio capability authorization is unavailable on this host.');
+      await deps.settingsService.runWithTaskSettingsOverride({ mcpProfile: capabilityProfile }, start);
+      return;
+    }
+    await start();
   }
 
   async function launchWithFeedback(proposal: PrimaryTaskProposal): Promise<boolean> {
+    if (proposal.portfolioCapability) {
+      throw new Error('Portfolio work requires fresh Discord capability authorization.');
+    }
     try {
       await launch(proposal);
       return true;
     } catch (error) {
       if (error instanceof UsageAdmissionError) {
-        // Re-throw for the caller to handle with Discord-specific rendering
         throw error;
       }
       throw error;
@@ -61,6 +81,67 @@ export function createPrimaryAgentService(deps: {
     return isStructuredErrorMessage(replyText)
       ? { embeds: [buildErrorEmbed(replyText, 'Coordination error')] }
       : replyText;
+  }
+
+  async function handlePortfolioProposal(message: Message, replyText: string, proposal: PrimaryTaskProposal): Promise<boolean> {
+    if (!proposal.portfolioCapability) return false;
+    if (!deps.settingsService) {
+      await message.reply(`${replyText}\n\nBounded portfolio work is unavailable on this host.`);
+      return true;
+    }
+    const project = deps.projects.findByName(proposal.projectName);
+    if (!project) throw new Error(`Project "${proposal.projectName}" is not registered`);
+    const provider = proposal.provider ?? project.defaultProvider;
+    if (provider !== 'claude') {
+      await message.reply(`${replyText}\n\nBounded portfolio work currently requires the Claude provider so one named MCP capability can be isolated per task.`);
+      return true;
+    }
+    const profiles = boundedCapabilityProfiles(deps.settingsService.mcpProfiles().profiles).slice(0, 25);
+    if (profiles.length === 0) {
+      await message.reply(`${replyText}\n\nNo bounded portfolio capability profiles are configured on this host.`);
+      return true;
+    }
+
+    const sent = await message.reply({
+      content: `${replyText}\n\n**Proposed portfolio task** — ${proposal.projectName}: ${proposal.objective}\nSelect the one capability this work session may use.`,
+      components: [{
+        type: 1,
+        components: [{
+          type: 3,
+          custom_id: 'primary_portfolio_capability',
+          placeholder: 'Authorize one capability',
+          options: profiles.map(profile => ({ label: profile.slice(0, 100), value: profile })),
+        }],
+      }],
+    } as never);
+
+    try {
+      const decision = await sent.awaitMessageComponent({
+        time: 120_000,
+        filter: candidate => candidate.user.id === deps.ownerId,
+      });
+      const selected = decision.isStringSelectMenu?.() ? decision.values[0] : undefined;
+      if (!selected || !profiles.includes(selected)) {
+        await decision.update({ content: 'Portfolio task authorization cancelled.', components: [] });
+        return true;
+      }
+      await decision.update({
+        content: `Starting the delegated task with the bounded **${selected}** capability.`,
+        components: [],
+      });
+      try {
+        await launch(proposal, selected);
+      } catch (error) {
+        if (error instanceof UsageAdmissionError) {
+          await message.reply(`${error.message}\n\n${error.recommendation}`);
+        } else {
+          throw error;
+        }
+      }
+    } catch {
+      await sent.edit({ components: [] }).catch(() => undefined);
+    }
+    return true;
   }
 
   return {
@@ -89,6 +170,8 @@ export function createPrimaryAgentService(deps: {
       if (result.kind === 'task-proposal') {
         const proposal = result.proposal;
         const replyText = result.text;
+
+        if (await handlePortfolioProposal(message, replyText, proposal)) return;
 
         if (result.explicit) {
           await message.reply(`${replyText}\n\nStarting the delegated task in **${proposal.projectName}**.`);
@@ -200,6 +283,7 @@ export function createPrimaryAgentService(deps: {
             await message.reply(renderReply(followResult.text));
           } else if (followResult.kind === 'task-proposal') {
             const fp = followResult.proposal;
+            if (await handlePortfolioProposal(message, followResult.text, fp)) return;
             const reusableSent = await message.reply({
               content: `${followResult.text}\n\n**Proposed task** — ${fp.projectName}: ${fp.objective}`,
               components: [{

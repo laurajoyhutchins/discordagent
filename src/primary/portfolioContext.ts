@@ -184,7 +184,7 @@ export function renderPortfolioContext(snapshot: PortfolioContextSnapshot): stri
   if (snapshot.failures.length > 0) {
     lines.push('READ FAILURES');
     for (const failure of snapshot.failures) {
-      lines.push(`- [${failure.source}] @ ${failure.observedAt}: ${failure.message}`);
+      lines.push(`- [${failure.source}] @ ${failure.observedAt}: read failed: [REDACTED]`);
     }
   }
 

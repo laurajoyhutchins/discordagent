@@ -266,6 +266,6 @@ describe('primary conversation service', () => {
     });
 
     const modelInput = respond.mock.calls[0][0];
-    expect(modelInput.context).toContain('AUTHORITATIVE PORTFOLIO CONTEXT unavailable: gateway offline');
+    expect(modelInput.context).toContain('AUTHORITATIVE PORTFOLIO CONTEXT unavailable: [details withheld]');
   });
 });

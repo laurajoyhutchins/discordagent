@@ -5,6 +5,8 @@ import type { MemoryRepository } from '../repositories/memoryRepository.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
 import type { PrimaryModel, PrimaryResponse, PrimaryTaskProposal } from './primaryModel.js';
 import type { ContextAssembler } from './contextAssembler.js';
+import type { PortfolioContextHydrator } from './portfolioContext.js';
+import { renderPortfolioContext } from './portfolioContext.js';
 import { redactSensitiveText, redactSensitiveValue } from '../utils/redaction.js';
 
 export interface PrimaryConversationInput {
@@ -67,6 +69,7 @@ export function createPrimaryConversationService(deps: {
   projects: ProjectRepository;
   coordinator: TaskCoordinator;
   model: PrimaryModel;
+  portfolioContext?: PortfolioContextHydrator;
   launchTask?: (proposal: PrimaryTaskProposal) => Promise<void>;
 }): PrimaryConversationService {
   const allowedMemoryNamespaces = new Set(['user', 'goals', 'projects', 'decisions']);
@@ -120,7 +123,24 @@ export function createPrimaryConversationService(deps: {
   }
 
   async function runModel(conversationId: string, query: string, currentProjectName?: string): Promise<PrimaryResponse> {
-    const context = deps.context.assemble({ channelId: conversationId, query, currentProjectName });
+    let context = deps.context.assemble({ channelId: conversationId, query, currentProjectName });
+
+    if (deps.portfolioContext) {
+      try {
+        const snapshot = await deps.portfolioContext.hydrate({
+          query,
+          ...(currentProjectName ? { currentProjectName } : {}),
+        });
+        if (snapshot) {
+          const portfolioContext = renderPortfolioContext(snapshot);
+          context = context ? `${context}\n\n${portfolioContext}` : portfolioContext;
+        }
+      } catch {
+        const failureContext = 'AUTHORITATIVE PORTFOLIO CONTEXT unavailable: [details withheld]';
+        context = context ? `${context}\n\n${failureContext}` : failureContext;
+      }
+    }
+
     return sanitizeResponse(await deps.model.respond({ context, message: query }));
   }
 

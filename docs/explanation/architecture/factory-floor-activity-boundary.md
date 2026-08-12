@@ -1,5 +1,7 @@
 # Factory Floor Activity boundary
 
+> **Status:** Optional and currently deferred. The already-landed boundary is retained because it documents real integration code and trust invariants, but Factory Floor Activity is not a prerequisite for the current primary Discord work-surface roadmap tracked in [#83](https://github.com/laurajoyhutchins/discordagent/issues/83).
+
 A Factory Floor Discord Activity is an operator interface embedded in the Discord Agent experience. It is not another task runtime, event store, or source of durable execution truth.
 
 The authoritative cross-repository design lives in Factory Floor:
@@ -7,7 +9,7 @@ The authoritative cross-repository design lives in Factory Floor:
 - [Discord Activity operator interface](https://github.com/laurajoyhutchins/factory-floor/blob/main/docs/explanation/discord-activity-operator-interface.md)
 - [Cross-repository implementation sequence](https://github.com/laurajoyhutchins/factory-floor/issues/33)
 
-This page records only the durable Discord Agent boundary. Active sequencing, dependencies, and delivery status belong in the tracking issue rather than public architecture documentation.
+This page records only the durable Discord Agent boundary. Active sequencing, dependencies, and delivery status belong in GitHub issues rather than this architecture page.
 
 ## Authority boundary
 
@@ -118,7 +120,7 @@ The feature is disabled by default. After database migrations, Discord Agent may
 
 The HTTPS broker has a stricter lifecycle because it creates a public entrypoint. Once that broker is explicitly enabled, it starts only after migrations and Discord readiness, and shutdown stops HTTP intake and synchronization before closing SQLite. A configured broker that cannot bind or validate its public boundary must fail that broker enablement rather than advertise a broken Activity.
 
-Synchronization failures may degrade the Discord projection, but they must not mutate or reinterpret Factory Floor state. Rollout begins with read-only views. Approval and cancellation require the reverse principal-revalidation boundary. Production enablement follows credentialed desktop, web, iOS, and Android acceptance and a canary project binding.
+Synchronization failures may degrade the Discord projection, but they must not mutate or reinterpret Factory Floor state. If this optional integration is resumed later, rollout should begin from current repository evidence rather than the retired project plan.
 
 ## Invariants
 

@@ -135,9 +135,8 @@ export function createPrimaryConversationService(deps: {
           const portfolioContext = renderPortfolioContext(snapshot);
           context = context ? `${context}\n\n${portfolioContext}` : portfolioContext;
         }
-      } catch (error) {
-        const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
-        const failureContext = `AUTHORITATIVE PORTFOLIO CONTEXT unavailable: ${message}`;
+      } catch {
+        const failureContext = 'AUTHORITATIVE PORTFOLIO CONTEXT unavailable: [details withheld]';
         context = context ? `${context}\n\n${failureContext}` : failureContext;
       }
     }

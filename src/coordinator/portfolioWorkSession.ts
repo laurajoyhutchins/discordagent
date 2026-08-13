@@ -2,10 +2,9 @@ import type { AgentProviderId, AgentTaskSettings } from '../agents/contracts.js'
 
 export const FAST_FORWARD_CAPABILITY_PROFILE = 'fast-forward';
 
-const PORTFOLIO_CAPABILITY_PROFILES = new Set([
-  'github',
-  'linear',
-  'drive',
+const PORTFOLIO_CAPABILITY_PROFILES = new Set(['github', 'linear', 'drive']);
+const AUTHORIZED_CAPABILITY_PROFILES = new Set([
+  ...PORTFOLIO_CAPABILITY_PROFILES,
   FAST_FORWARD_CAPABILITY_PROFILE,
 ]);
 
@@ -29,7 +28,7 @@ export function applyBoundedCapabilityProfile(input: {
   if (input.provider !== 'claude') {
     throw new Error(`Provider ${input.provider} does not support bounded MCP capability profiles.`);
   }
-  if (!PORTFOLIO_CAPABILITY_PROFILES.has(requestedProfile)) {
+  if (!AUTHORIZED_CAPABILITY_PROFILES.has(requestedProfile)) {
     throw new Error(`Profile "${requestedProfile || '(empty)'}" is not a bounded portfolio capability profile.`);
   }
   if (!input.availableProfiles.includes(requestedProfile)) {

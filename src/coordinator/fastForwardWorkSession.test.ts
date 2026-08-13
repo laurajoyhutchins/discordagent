@@ -1,4 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('../config.js', () => ({
+  config: {
+    claudeEnabled: false,
+    codexEnabled: false,
+    openCodeEnabled: false,
+    mcpServers: undefined,
+  },
+}));
+
 import { createHostMcpProfiles } from '../services/runtimeProviders.js';
 import {
   FAST_FORWARD_CAPABILITY_PROFILE,

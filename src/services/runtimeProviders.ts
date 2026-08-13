@@ -6,6 +6,7 @@ import { CodexProvider } from '../agents/codex/codexProvider.js';
 import { OpenCodeAcpTransport } from '../agents/opencode/acpTransport.js';
 import { OpenCodeProvider } from '../agents/opencode/opencodeProvider.js';
 import { ProviderRegistry } from '../agents/providerRegistry.js';
+import { FAST_FORWARD_CAPABILITY_PROFILE } from '../coordinator/portfolioWorkSession.js';
 import { config } from '../config.js';
 import { redactErrorMessage } from '../utils/redaction.js';
 import { captureRateLimitEvent, captureSessionResult } from './usageTracker.js';
@@ -21,16 +22,33 @@ export function createHostMcpProfiles(
   configuredServers?: HostMcpServers,
 ): HostMcpProfiles {
   const servers = configuredServers ?? {};
-  const serverNames = Object.keys(servers).filter(name => name !== 'default' && name !== 'disabled');
+  const reservedProfiles = new Set(['default', 'disabled', FAST_FORWARD_CAPABILITY_PROFILE]);
+  const serverNames = Object.keys(servers).filter(name => !reservedProfiles.has(name));
   const filteredServers = Object.fromEntries(serverNames.map(name => [name, servers[name]])) as Record<string, HostMcpServerConfig>;
   const defaultServers = serverNames.length > 0 ? filteredServers : undefined;
-  const profiles = ['default', 'disabled', ...serverNames];
+  const hasFastForwardAuthorities = ['github', 'linear', 'drive'].every(name =>
+    Object.prototype.hasOwnProperty.call(filteredServers, name),
+  );
+  const fastForwardServers: HostMcpServers | undefined = hasFastForwardAuthorities
+    ? {
+        github: filteredServers.github,
+        linear: filteredServers.linear,
+        drive: filteredServers.drive,
+      }
+    : undefined;
+  const profiles = [
+    'default',
+    'disabled',
+    ...serverNames,
+    ...(fastForwardServers ? [FAST_FORWARD_CAPABILITY_PROFILE] : []),
+  ];
 
   return {
     profiles,
     resolve(profile?: string): HostMcpServers | undefined {
       if (profile === undefined || profile === 'default') return defaultServers;
       if (profile === 'disabled') return {};
+      if (profile === FAST_FORWARD_CAPABILITY_PROFILE) return fastForwardServers;
       if (!Object.prototype.hasOwnProperty.call(servers, profile)) return undefined;
       return { [profile]: filteredServers[profile] };
     },

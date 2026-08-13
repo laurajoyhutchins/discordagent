@@ -16,7 +16,7 @@ describe('primary Fast Forward work session', () => {
       edit,
     };
     const reply = vi.fn(async (payload: unknown) => typeof payload === 'object' ? sent : undefined);
-    const startFromMessage = vi.fn(async () => ({}));
+    const startFromMessage = vi.fn(async (_input: unknown) => ({}));
     const runWithTaskSettingsOverride = vi.fn(async (_override: unknown, operation: () => Promise<unknown>) => operation());
     const settingsService = {
       mcpProfiles: () => ({
@@ -31,7 +31,7 @@ describe('primary Fast Forward work session', () => {
       agentChannelId: 'agent-channel',
       defaultProvider: 'claude' as const,
     };
-    const channel = { send: vi.fn(async () => ({ id: 'seed' })) };
+    const channel = { send: vi.fn(async (_content: string) => ({ id: 'seed' })) };
     const conversationService = {
       process: vi.fn(async () => ({
         kind: 'task-proposal' as const,

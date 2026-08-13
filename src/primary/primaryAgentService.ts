@@ -4,7 +4,12 @@ import type { ProjectRepository } from '../repositories/projectRepository.js';
 import type { MessageRepository } from '../repositories/messageRepository.js';
 import type { MemoryRepository } from '../repositories/memoryRepository.js';
 import type { TaskCoordinator } from '../coordinator/taskCoordinator.js';
-import { boundedCapabilityProfiles } from '../coordinator/portfolioWorkSession.js';
+import {
+  FAST_FORWARD_CAPABILITY_PROFILE,
+  boundedCapabilityProfiles,
+  buildFastForwardWorkSessionPrompt,
+  fastForwardCapabilityProfiles,
+} from '../coordinator/portfolioWorkSession.js';
 import type { PrimaryModel, PrimaryTaskProposal } from './primaryModel.js';
 import type { ContextAssembler } from './contextAssembler.js';
 import { createPrimaryConversationService, type PrimaryConversationService } from './primaryConversationService.js';
@@ -45,12 +50,21 @@ export function createPrimaryAgentService(deps: {
     if (capabilityProfile && provider !== 'claude') {
       throw new Error(`Provider ${provider} does not support bounded MCP capability profiles.`);
     }
+    if (proposal.fastForward && capabilityProfile !== FAST_FORWARD_CAPABILITY_PROFILE) {
+      throw new Error('Fast Forward work sessions require the bounded Fast Forward capability profile.');
+    }
     const channel = await deps.fetchProjectChannel(project.agentChannelId);
     if (!channel) throw new Error(`Project channel for "${proposal.projectName}" is unavailable`);
-    const seed = await channel.send(`Delegated by the primary agent: ${proposal.objective}`);
+    const prompt = proposal.fastForward
+      ? buildFastForwardWorkSessionPrompt({
+          objective: proposal.objective,
+          sessionToken: `ff-${randomUUID().replaceAll('-', '').slice(0, 8)}`,
+        })
+      : proposal.objective;
+    const seed = await channel.send(`Delegated by the primary agent: ${prompt}`);
     const start = () => deps.coordinator.startFromMessage({
       projectName: project.name,
-      prompt: proposal.objective,
+      prompt,
       message: seed,
       provider,
     });
@@ -96,7 +110,10 @@ export function createPrimaryAgentService(deps: {
       await message.reply(`${replyText}\n\nBounded portfolio work currently requires the Claude provider so one named MCP capability can be isolated per task.`);
       return true;
     }
-    const profiles = boundedCapabilityProfiles(deps.settingsService.mcpProfiles().profiles).slice(0, 25);
+    const availableProfiles = deps.settingsService.mcpProfiles().profiles;
+    const profiles = (proposal.fastForward
+      ? fastForwardCapabilityProfiles(availableProfiles)
+      : boundedCapabilityProfiles(availableProfiles)).slice(0, 25);
     if (profiles.length === 0) {
       await message.reply(`${replyText}\n\nNo bounded portfolio capability profiles are configured on this host.`);
       return true;

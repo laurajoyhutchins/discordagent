@@ -164,17 +164,11 @@ const parseLegacyOwnerReview = (comment, headSha) => {
       state: 'not-cleared',
       reviewedHead: reviewedHead ?? null,
       commentId: comment.id,
-      source: 'owner-review',
     };
   }
 
   if (reviewedHead.toLowerCase() !== headSha.toLowerCase()) {
-    return {
-      state: 'stale',
-      reviewedHead,
-      commentId: comment.id,
-      source: 'owner-review',
-    };
+    return { state: 'stale', reviewedHead, commentId: comment.id };
   }
 
   const disposition = comment.body.match(
@@ -187,7 +181,6 @@ const parseLegacyOwnerReview = (comment, headSha) => {
         : 'not-cleared',
     reviewedHead,
     commentId: comment.id,
-    source: 'owner-review',
   };
 };
 

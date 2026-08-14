@@ -11,6 +11,7 @@ src/data/discordagent-worktrees/
 .playwright-mcp/
 .DS_Store
 *.log
+.ci/out/
 
 .deciduous/
 docs/superpowers/plans/

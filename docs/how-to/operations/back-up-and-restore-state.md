@@ -15,9 +15,24 @@ The commands below use these placeholders:
 
 Never copy only `discordagent.sqlite` while the service is running in WAL mode. Use the online backup command.
 
+### Production host command form
+
+The production installer builds the TypeScript sources and then removes development dependencies. Operator commands therefore execute the compiled entrypoint under the dedicated service account. The installer creates `/var/lib/discordagent/backups` with mode `0700` for completed artifacts.
+
+Run a production backup as root with the service still active:
+
+```bash
+runuser -u discordagent -- \
+  /usr/bin/node --env-file=/etc/discordagent/discordagent.env \
+  /opt/discordagent/current/dist/commands/databaseMaintenance.js \
+  backup /var/lib/discordagent/backups
+```
+
+Use the same command prefix with `verify`, `stage`, or `activate` and the arguments shown below. Stop `discordagent.service` before staging or activating a restore. Running the compiled entrypoint avoids a dependency on `tsx`, which is intentionally absent from a pruned production release.
+
 ## Create and verify a backup
 
-The service may remain running while the online backup is created.
+The service may remain running while the online backup is created. These package scripts execute the same compiled maintenance entrypoint and require a built checkout.
 
 ```bash
 npm run database:backup -- <backup-root>

@@ -48,8 +48,8 @@
 
 - **Driver:** `better-sqlite3` ^12.4.1
 - **Migrations:** Versioned, transactional, recorded in `schema_migrations`
-- **Latest migration in current source:** 10
-- Databases upgraded by older releases may retain higher-numbered historical migration records; current code ignores migration records for migrations that are no longer part of the source tree.
+- **Current migration version:** 13
+- Released migration numbers are never reused. Retired schema slots remain reserved with no-op migrations so older databases cannot accidentally skip a future migration.
 
 ## Operating system
 

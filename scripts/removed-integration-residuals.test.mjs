@@ -13,6 +13,7 @@ const removedMarkers = [
   ['FACTORY', 'FLOOR'].join('_'),
   ['factory', 'floor'].join('_'),
   ['factory', 'floor'].join('-'),
+  ['FACTORY', 'FLOOR'].join('-'),
   ['Discord', 'Activity'].join(' '),
   ['discord', 'Activity'].join(''),
   ['discord', 'activity'].join('-'),

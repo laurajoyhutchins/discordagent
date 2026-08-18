@@ -1,0 +1,63 @@
+name: One-time neutral fixture cleanup
+
+on:
+  push:
+    branches:
+      - cleanup/remove-factory-floor
+
+permissions:
+  contents: write
+
+jobs:
+  rename-fixtures:
+    if: github.actor == 'laurajoyhutchins'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: cleanup/remove-factory-floor
+          fetch-depth: 0
+
+      - name: Rename obsolete sample identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          marker_slug = '-'.join(('factory', 'floor'))
+          marker_camel = ''.join(('factory', 'Floor'))
+          changed = []
+          for raw in subprocess.check_output(['git', 'ls-files', '-z']).split(b'\0'):
+              if not raw:
+                  continue
+              path = Path(raw.decode())
+              if path == Path('.github/workflows/one-time-fixture-cleanup.yml'):
+                  continue
+              data = path.read_bytes()
+              if b'\0' in data:
+                  continue
+              text = data.decode('utf-8')
+              updated = text.replace(marker_slug, 'sample-project').replace(marker_camel, 'sampleProject')
+              if updated != text:
+                  path.write_text(updated, encoding='utf-8')
+                  changed.append(str(path))
+          print('\n'.join(changed))
+          PY
+          git rm .github/workflows/one-time-fixture-cleanup.yml
+          git diff --check
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Laura'
+          git config user.email 'laurajoyhutchins@gmail.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'test: neutralize retired integration fixture names'
+          git push origin HEAD:cleanup/remove-factory-floor

@@ -11,8 +11,8 @@ process.env.AUTHORIZED_ROLE_IDS = 'role';
 const { handleMessage } = await import('./messageHandler.js');
 
 const project: Project = {
-  name: 'factory-floor',
-  workingDirectory: '/repos/factory-floor',
+  name: 'sample-project',
+  workingDirectory: '/repos/sample-project',
   categoryId: 'category-1',
   agentChannelId: 'agent-1',
   defaultProvider: 'claude',
@@ -79,7 +79,7 @@ describe('messageHandler coordinator routing', () => {
     await handleMessage(input, dependencies(taskCoordinator));
 
     expect(taskCoordinator.startFromMessage).toHaveBeenCalledWith({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'Implement the worker registry',
       message: input,
       provider: 'claude',
@@ -148,7 +148,7 @@ describe('messageHandler coordinator routing', () => {
     await handleMessage(input, dependencies(taskCoordinator));
 
     expect(taskCoordinator.startFromMessage).toHaveBeenCalledWith({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'Implement the worker registry',
       message: input,
       provider: 'claude',
@@ -169,7 +169,7 @@ describe('messageHandler coordinator routing', () => {
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
-    expect(updateProject).toHaveBeenCalledWith('factory-floor', { openCodeModel: 'openai/gpt-5.4' });
+    expect(updateProject).toHaveBeenCalledWith('sample-project', { openCodeModel: 'openai/gpt-5.4' });
     expect(input.reply).toHaveBeenCalledWith(expect.stringMatching(/OpenCode model/));
   });
 
@@ -184,7 +184,7 @@ describe('messageHandler coordinator routing', () => {
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
-    expect(updateProject).toHaveBeenCalledWith('factory-floor', { defaultProvider: 'opencode' });
+    expect(updateProject).toHaveBeenCalledWith('sample-project', { defaultProvider: 'opencode' });
     expect(input.reply).toHaveBeenCalledWith(expect.stringMatching(/OpenCode/));
   });
 
@@ -262,7 +262,7 @@ describe('messageHandler coordinator routing', () => {
 
     expect(taskCoordinator.startFromMessage).not.toHaveBeenCalled();
     expect(deferPendingTask).toHaveBeenCalledWith({
-      userId: 'user-1', projectName: 'factory-floor', prompt: 'Implement the worker registry', message: input,
+      userId: 'user-1', projectName: 'sample-project', prompt: 'Implement the worker registry', message: input,
     });
     expect(input.reply).toHaveBeenCalledWith(expect.stringContaining('without creating a thread or worktree'));
   });

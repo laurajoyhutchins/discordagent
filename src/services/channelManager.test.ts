@@ -41,14 +41,14 @@ describe('createProjectChannels', () => {
       configurable: true,
     });
 
-    await expect(createProjectChannels(fakeGuild, 'factory-floor', false))
+    await expect(createProjectChannels(fakeGuild, 'sample-project', false))
       .rejects.toThrow(/missing required permissions/i);
     expect(fakeGuild.channels.create).not.toHaveBeenCalled();
   });
 
   it('includes thread sending in authorized project-role overwrites', async () => {
     const fakeGuild = guild();
-    await createProjectChannels(fakeGuild, 'factory-floor', false, ['role-1']);
+    await createProjectChannels(fakeGuild, 'sample-project', false, ['role-1']);
     const category = fakeGuild.channels.create.mock.calls[0][0] as { permissionOverwrites: Array<{ id: string; allow?: string[] }> };
     expect(category.permissionOverwrites.find(item => item.id === 'role-1')?.allow)
       .toEqual(expect.arrayContaining([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessagesInThreads]));
@@ -112,7 +112,7 @@ describe('createProjectChannels', () => {
 
   it('creates a provider-neutral agent channel', async () => {
     const fakeGuild = guild();
-    const result = await createProjectChannels(fakeGuild, 'factory-floor', false);
+    const result = await createProjectChannels(fakeGuild, 'sample-project', false);
 
     expect(fakeGuild.channels.create).toHaveBeenCalledWith(expect.objectContaining({
       name: 'agent',
@@ -124,7 +124,7 @@ describe('createProjectChannels', () => {
 
   it('creates Roborev as a normal bot channel without webhook credentials', async () => {
     const fakeGuild = guild();
-    const result = await createProjectChannels(fakeGuild, 'factory-floor', true);
+    const result = await createProjectChannels(fakeGuild, 'sample-project', true);
 
     expect(fakeGuild.channels.create).toHaveBeenCalledWith(expect.objectContaining({
       name: 'roborev',
@@ -141,7 +141,7 @@ describe('createProjectChannels', () => {
 
   it('derives bot overwrites from the bootstrap profile and preserves private authorized-role access', async () => {
     const fakeGuild = guild();
-    await createProjectChannels(fakeGuild, 'factory-floor', false, ['role-1']);
+    await createProjectChannels(fakeGuild, 'sample-project', false, ['role-1']);
 
     const category = fakeGuild.channels.create.mock.calls[0][0] as { permissionOverwrites: Array<{ id: string; allow?: string[]; deny?: string[] }> };
     const botOverwrite = category.permissionOverwrites.find(item => item.id === 'bot-1');
@@ -166,7 +166,7 @@ describe('createProjectChannels', () => {
       .mockResolvedValueOnce(agent)
       .mockRejectedValueOnce(new Error('roborev create failed'));
 
-    await expect(createProjectChannels(fakeGuild, 'factory-floor', true)).rejects.toThrow(/roborev create failed/);
+    await expect(createProjectChannels(fakeGuild, 'sample-project', true)).rejects.toThrow(/roborev create failed/);
     expect(agent.delete).toHaveBeenCalledOnce();
     expect(category.delete).toHaveBeenCalledOnce();
   });
@@ -179,7 +179,7 @@ describe('createProjectChannels', () => {
       .mockResolvedValueOnce(category)
       .mockRejectedValueOnce(new Error('agent create failed'));
 
-    await expect(createProjectChannels(fakeGuild, 'factory-floor', false))
+    await expect(createProjectChannels(fakeGuild, 'sample-project', false))
       .rejects.toThrow(/agent create failed.*compensation failed.*permission denied/i);
     expect(category.delete).toHaveBeenCalledOnce();
   });

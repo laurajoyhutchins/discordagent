@@ -119,7 +119,7 @@ function payloadText(payload: unknown): string {
 
 describe('DiscordTaskRenderer', () => {
   const task = (status: TaskRecord['status']): TaskRecord => ({
-    id: 'task-card-1', projectName: 'factory-floor', provider: 'claude', status,
+    id: 'task-card-1', projectName: 'sample-project', provider: 'claude', status,
     channelId: 'agent-1', threadId: 'thread-123456789', objective: 'Implement the feature',
     createdAt: 1, updatedAt: 1,
   });

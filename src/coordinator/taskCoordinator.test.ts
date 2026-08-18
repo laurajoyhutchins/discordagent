@@ -144,8 +144,8 @@ function setup(order: string[] = [], usage?: UsageAdmissionService, capabilityPr
   runMigrations(db);
   const baseProjects = createProjectRepository(db);
   baseProjects.create({
-    name: 'factory-floor',
-    workingDirectory: join(directory, 'factory-floor'),
+    name: 'sample-project',
+    workingDirectory: join(directory, 'sample-project'),
     categoryId: 'category-1',
     agentChannelId: 'agent-1',
     defaultProvider: 'claude',
@@ -168,7 +168,7 @@ function setup(order: string[] = [], usage?: UsageAdmissionService, capabilityPr
   };
   const events = createEventRepository(db);
   const worktree: CreatedWorktree = {
-    repositoryPath: join(directory, 'factory-floor'),
+    repositoryPath: join(directory, 'sample-project'),
     worktreePath: join(directory, 'worktree'),
     branchName: 'agent/claude/task-123456',
     baseRef: 'main',
@@ -245,7 +245,7 @@ describe('TaskCoordinator', () => {
       completion: completion.promise,
     });
     const running = context.coordinator.startFromMessage({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'render lifecycle card',
       message: new FakeMessage(new FakeThread()) as unknown as Message,
     });
@@ -276,7 +276,7 @@ describe('TaskCoordinator', () => {
     const message = new FakeMessage(thread, order);
 
     const running = context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Implement registry', message: message as unknown as Message,
+      projectName: 'sample-project', prompt: 'Implement registry', message: message as unknown as Message,
     });
     await waitUntil(() => order.includes('running'));
     expect(order.filter(item => [
@@ -309,7 +309,7 @@ describe('TaskCoordinator', () => {
     const message = new FakeMessage(new FakeThread(), order);
 
     await expect(context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Do work', message: message as unknown as Message,
+      projectName: 'sample-project', prompt: 'Do work', message: message as unknown as Message,
     })).rejects.toThrow(/offline/i);
     expect(message.startCount).toBe(0);
     expect(order).toEqual(['project', 'availability']);
@@ -323,7 +323,7 @@ describe('TaskCoordinator', () => {
     const message = new FakeMessage(new FakeThread());
 
     await expect(context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Unavailable provider', message: message as unknown as Message,
+      projectName: 'sample-project', prompt: 'Unavailable provider', message: message as unknown as Message,
     })).rejects.toThrow(/offline/i);
     expect(resolveSettings).not.toHaveBeenCalled();
     expect(message.startCount).toBe(0);
@@ -331,7 +331,7 @@ describe('TaskCoordinator', () => {
 
   it('does not create unsupported Claude reasoning settings at task start', async () => {
     const context = setup();
-    context.projects.updateReasoning('factory-floor', 'claude', 'high');
+    context.projects.updateReasoning('sample-project', 'claude', 'high');
     let startedInput: StartTaskInput | undefined;
     context.provider.startImpl = async (input) => {
       startedInput = input;
@@ -342,7 +342,7 @@ describe('TaskCoordinator', () => {
     };
 
     await context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Use the configured reasoning depth',
+      projectName: 'sample-project', prompt: 'Use the configured reasoning depth',
       message: new FakeMessage(new FakeThread('thread-reasoning')) as unknown as Message,
     });
 
@@ -363,12 +363,12 @@ describe('TaskCoordinator', () => {
     };
 
     const task = await context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Use resolved settings',
+      projectName: 'sample-project', prompt: 'Use resolved settings',
       message: new FakeMessage(new FakeThread('thread-settings')) as unknown as Message,
     });
 
     expect(context.settingsService.resolveTaskSettings).toHaveBeenCalledWith({
-      projectName: 'factory-floor', provider: 'claude',
+      projectName: 'sample-project', provider: 'claude',
       modelOverride: undefined, reasoningOverride: undefined,
     });
     expect(task.settings).toEqual(resolved);
@@ -389,7 +389,7 @@ describe('TaskCoordinator', () => {
     });
 
     const task = await context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Run tests',
+      projectName: 'sample-project', prompt: 'Run tests',
       message: new FakeMessage(new FakeThread(), order) as unknown as Message,
     }).catch(async error => { throw error; });
 
@@ -412,7 +412,7 @@ describe('TaskCoordinator', () => {
     const message = new FakeMessage(thread);
 
     context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Long running task',
+      projectName: 'sample-project', prompt: 'Long running task',
       message: message as unknown as Message,
     });
     await vi.advanceTimersByTimeAsync(8_000);
@@ -451,7 +451,7 @@ describe('TaskCoordinator', () => {
     });
 
     const task = await context.coordinator.startFromMessage({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'Redact secrets',
       message: new FakeMessage(new FakeThread('thread-redaction')) as unknown as Message,
     });
@@ -476,7 +476,7 @@ describe('TaskCoordinator', () => {
     });
     const thread = new FakeThread('thread-continuation');
     await context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Initial work',
+      projectName: 'sample-project', prompt: 'Initial work',
       message: new FakeMessage(thread) as unknown as Message,
     });
 
@@ -513,7 +513,7 @@ describe('TaskCoordinator', () => {
     });
     const thread = new FakeThread('thread-snapshot');
     await context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Initial work',
+      projectName: 'sample-project', prompt: 'Initial work',
       message: new FakeMessage(thread) as unknown as Message,
     });
     const before = context.tasks.findByThreadId(thread.id);
@@ -550,7 +550,7 @@ describe('TaskCoordinator', () => {
     });
     const thread = new FakeThread('thread-preflight');
     await context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Initial work',
+      projectName: 'sample-project', prompt: 'Initial work',
       message: new FakeMessage(thread) as unknown as Message,
     });
     reserve.mockClear();
@@ -577,7 +577,7 @@ describe('TaskCoordinator', () => {
     const order: string[] = [];
     const context = setup(order, usage);
     const task = context.tasks.createWithWorktree({
-      taskId: 'incompatible-task', projectName: 'factory-floor', provider: 'claude',
+      taskId: 'incompatible-task', projectName: 'sample-project', provider: 'claude',
       channelId: 'agent-1', threadId: 'thread-incompatible', objective: 'Existing task',
       settings: { reasoningEffort: 'high' },
       worktree: { id: 'worktree-incompatible', repositoryPath: '/repo', worktreePath: '/worktree', branchName: 'agent/claude/incompatible', baseRef: 'main' },
@@ -604,7 +604,7 @@ describe('TaskCoordinator', () => {
     const usage = { reserve, posture: vi.fn(() => ({ posture: 'normal' })) } as unknown as UsageAdmissionService;
     const context = setup([], usage);
     const task = context.tasks.createWithWorktree({
-      taskId: 'malformed-task', projectName: 'factory-floor', provider: 'claude',
+      taskId: 'malformed-task', projectName: 'sample-project', provider: 'claude',
       channelId: 'agent-1', threadId: 'thread-malformed', objective: 'Malformed task',
       settings: { model: 'snapshot-model' },
       worktree: { id: 'worktree-malformed', repositoryPath: '/repo', worktreePath: '/worktree', branchName: 'agent/claude/malformed', baseRef: 'main' },
@@ -633,7 +633,7 @@ describe('TaskCoordinator', () => {
     const message = new FakeMessage(new FakeThread(), order);
 
     await expect(context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Unsupported start', message: message as unknown as Message,
+      projectName: 'sample-project', prompt: 'Unsupported start', message: message as unknown as Message,
     })).rejects.toThrow(/Claude.*reasoningEffort.*support/i);
     expect(reserve).not.toHaveBeenCalled();
     expect(message.startCount).toBe(0);
@@ -653,7 +653,7 @@ describe('TaskCoordinator', () => {
       completion: Promise.resolve(completed('handoff-session')),
     });
     await context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Source', message: new FakeMessage(sourceThread) as unknown as Message,
+      projectName: 'sample-project', prompt: 'Source', message: new FakeMessage(sourceThread) as unknown as Message,
     });
     reserve.mockClear();
     const target = {
@@ -678,7 +678,7 @@ describe('TaskCoordinator', () => {
     const capabilityPreflight = { assertCanUseTaskThread: vi.fn(() => { throw new Error('task thread capability denied'); }) };
     const context = setup([], usage, capabilityPreflight);
     const task = context.tasks.createWithWorktree({
-      taskId: 'capability-task', projectName: 'factory-floor', provider: 'claude',
+      taskId: 'capability-task', projectName: 'sample-project', provider: 'claude',
       channelId: 'agent-1', threadId: 'thread-capability', objective: 'Capability task',
       settings: { model: 'snapshot-model' },
       worktree: { id: 'worktree-capability', repositoryPath: '/repo', worktreePath: '/worktree', branchName: 'agent/claude/capability', baseRef: 'main' },
@@ -708,7 +708,7 @@ describe('TaskCoordinator', () => {
     });
     const thread = new FakeThread('thread-legacy');
     await context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Initial legacy work',
+      projectName: 'sample-project', prompt: 'Initial legacy work',
       message: new FakeMessage(thread) as unknown as Message,
     });
 
@@ -738,7 +738,7 @@ describe('TaskCoordinator', () => {
     });
     const thread = new FakeThread('thread-cancel');
     const running = context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Long task',
+      projectName: 'sample-project', prompt: 'Long task',
       message: new FakeMessage(thread) as unknown as Message,
     });
     await waitUntil(() => context.tasks.findByThreadId(thread.id)?.status === 'running');
@@ -761,7 +761,7 @@ describe('TaskCoordinator', () => {
     context.provider.startImpl = async () => start.promise;
     const thread = new FakeThread('thread-cancel-starting');
     const running = context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Cancel before session',
+      projectName: 'sample-project', prompt: 'Cancel before session',
       message: new FakeMessage(thread) as unknown as Message,
     });
     await waitUntil(() => context.tasks.findByThreadId(thread.id)?.status === 'starting');
@@ -787,7 +787,7 @@ describe('TaskCoordinator', () => {
     });
     const thread = new FakeThread('thread-stuck-cancel');
     const running = context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Long task', message: new FakeMessage(thread) as unknown as Message,
+      projectName: 'sample-project', prompt: 'Long task', message: new FakeMessage(thread) as unknown as Message,
     });
     await waitUntil(() => context.tasks.findByThreadId(thread.id)?.status === 'running');
 
@@ -808,7 +808,7 @@ describe('TaskCoordinator', () => {
       completion: Promise.resolve(completed('close-session')),
     });
     const task = await context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Closable task',
+      projectName: 'sample-project', prompt: 'Closable task',
       message: new FakeMessage(new FakeThread('thread-close')) as unknown as Message,
     });
 
@@ -831,7 +831,7 @@ describe('TaskCoordinator', () => {
       completion: completion.promise,
     });
     const running = context.coordinator.startFromMessage({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'Finish despite Discord failure',
       message: new FakeMessage(new FakeThread('thread-render-failure')) as unknown as Message,
     });
@@ -853,7 +853,7 @@ describe('TaskCoordinator', () => {
     const thread = new FakeThread('thread-reject');
 
     await expect(context.coordinator.startFromMessage({
-      projectName: 'factory-floor', prompt: 'Fragile task',
+      projectName: 'sample-project', prompt: 'Fragile task',
       message: new FakeMessage(thread) as unknown as Message,
     })).resolves.toMatchObject({ status: 'failed' });
     expect(context.tasks.findByThreadId(thread.id)).toMatchObject({ status: 'failed' });
@@ -867,7 +867,7 @@ describe('TaskCoordinator', () => {
     for (const [id, status] of [['one', 'starting'], ['two', 'running'], ['three', 'waiting_for_user']] as const) {
       context.tasks.createWithWorktree({
         taskId: id,
-        projectName: 'factory-floor',
+        projectName: 'sample-project',
         provider: 'claude',
         channelId: 'agent-1',
         threadId: `thread-${id}`,

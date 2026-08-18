@@ -4,8 +4,8 @@ import type { Project } from '../types.js';
 import { handleModel } from './model.js';
 
 const project: Project = {
-  name: 'factory-floor',
-  workingDirectory: '/repos/factory-floor',
+  name: 'sample-project',
+  workingDirectory: '/repos/sample-project',
   categoryId: 'category-1',
   agentChannelId: 'agent-1',
   defaultProvider: 'claude',
@@ -39,7 +39,7 @@ describe('/model provider scoping', () => {
       defaultClaudeModel: '',
     });
 
-    expect(update).toHaveBeenCalledWith('factory-floor', { claudeModel: 'sonnet' });
+    expect(update).toHaveBeenCalledWith('sample-project', { claudeModel: 'sonnet' });
   });
 
   it('stores an OpenCode model override in the OpenCode field', async () => {
@@ -54,7 +54,7 @@ describe('/model provider scoping', () => {
       defaultOpenCodeModel: '',
     });
 
-    expect(update).toHaveBeenCalledWith('factory-floor', { openCodeModel: 'anthropic/claude-sonnet-4' });
+    expect(update).toHaveBeenCalledWith('sample-project', { openCodeModel: 'anthropic/claude-sonnet-4' });
   });
 
   it('stores a Codex thinking depth from the slash command', async () => {
@@ -68,7 +68,7 @@ describe('/model provider scoping', () => {
       defaultClaudeModel: '',
     });
 
-    expect(update).toHaveBeenCalledWith('factory-floor', { reasoningEfforts: { codex: 'xhigh' } });
+    expect(update).toHaveBeenCalledWith('sample-project', { reasoningEfforts: { codex: 'xhigh' } });
   });
 
   it('rejects model changes inside an existing task thread', async () => {

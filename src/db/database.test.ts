@@ -39,8 +39,19 @@ describe('database migrations', () => {
       'SELECT version FROM schema_migrations ORDER BY version'
     ).all() as Array<{ version: number }>;
 
-    expect(firstVersions.length).toBeGreaterThan(0);
+    expect(firstVersions.map(row => row.version)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    ]);
     expect(secondVersions).toEqual(firstVersions);
+
+    const reservations = db.raw.prepare(
+      'SELECT version, name FROM schema_migrations WHERE version BETWEEN 11 AND 13 ORDER BY version'
+    ).all();
+    expect(reservations).toEqual([
+      { version: 11, name: 'reserve retired migration slot 11' },
+      { version: 12, name: 'reserve retired migration slot 12' },
+      { version: 13, name: 'reserve retired migration slot 13' },
+    ]);
 
     const tables = db.raw.prepare(
       "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name"
@@ -137,7 +148,7 @@ describe('schema invariants', () => {
         id, name, working_directory, category_id, agent_channel_id,
         default_provider, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run('p1', 'factory-floor', '/repos/factory-floor', 'cat1', 'chan1', 'claude', 1, 1);
+    `).run('p1', 'sample-project', '/repos/sample-project', 'cat1', 'chan1', 'claude', 1, 1);
 
     const insertTask = db.raw.prepare(`
       INSERT INTO tasks (
@@ -156,10 +167,10 @@ describe('schema invariants', () => {
         id, task_id, repository_path, worktree_path, branch_name, base_ref, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    insertWorktree.run('w1', 'task1', '/repos/factory-floor', '/worktrees/task1', 'agent/claude/task1', 'main', 1);
+    insertWorktree.run('w1', 'task1', '/repos/sample-project', '/worktrees/task1', 'agent/claude/task1', 'main', 1);
 
     expect(() => insertWorktree.run(
-      'w2', 'task1', '/repos/factory-floor', '/worktrees/task2', 'agent/claude/task2', 'main', 1
+      'w2', 'task1', '/repos/sample-project', '/worktrees/task2', 'agent/claude/task2', 'main', 1
     )).toThrow();
 
     const insertSession = db.raw.prepare(`

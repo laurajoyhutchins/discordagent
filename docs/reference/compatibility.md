@@ -4,7 +4,6 @@
 
 - **Required:** Node.js 22 or later
 - **Tested:** Node.js 22.x
-- **HTTPS broker:** Node built-in Fetch, Web Streams, TLS, and `AbortSignal.timeout`
 
 ## TypeScript
 
@@ -16,8 +15,6 @@
 - **Version:** 14.x (^14.24.0)
 - **Intents:** Guilds, GuildMembers, GuildMessages, MessageContent
 - **Partials:** Message, Channel
-- **Activity launch:** Global `PRIMARY_ENTRY_POINT` with `APP_HANDLER`; accepted launches use `LAUNCH_ACTIVITY`
-- **Bootstrap validation:** Bot-authenticated Activity Instance API plus OAuth2 authorization-code flow with S256 PKCE
 
 ## Git
 
@@ -47,22 +44,14 @@
 - **Authentication:** CLI-native; no Discord Agent involvement
 - **Behavior:** Capability-dependent; session load/resume requires ACP support
 
-## Factory Floor adapter
-
-- **HTTP contract:** `/api/v1/discord/activity/sessions` create/join, refresh, and revoke boundaries
-- **Service authentication:** Directional HMAC-SHA256 protocol version 1 with exact-body signing and bounded nonce replay protection
-- **Activity command:** One guild-installed, guild-context global Primary Entry Point reconciled at startup
-- **Bootstrap broker:** Optional HTTPS listener with exact-origin CORS, S256 PKCE, live Activity Instance validation, and bounded Discord API responses
-- **Enablement:** Disabled by default; unbound projects and direct provider tasks remain unchanged
-
 ## SQLite
 
 - **Driver:** `better-sqlite3` ^12.4.1
 - **Migrations:** Versioned, transactional, recorded in `schema_migrations`
-- **Current schema version:** 13
+- **Current migration version:** 13
+- Released migration numbers are never reused. Retired schema slots remain reserved with no-op migrations so older databases cannot accidentally skip a future migration.
 
 ## Operating system
 
 - **Tested:** Linux, macOS, Windows (via Node.js cross-platform support)
-- **TLS files:** Must be readable by the Discord Agent process when the optional broker is enabled
 - **Lock mechanism:** TCP port lock (`INSTANCE_LOCK_PORT`, default 47831)

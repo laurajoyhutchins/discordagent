@@ -9,9 +9,9 @@ Discord Agent reads host configuration from environment variables when the proce
 | Variable | Type | Default | Purpose | Sensitive |
 |---|---|---|---|---|
 | `DISCORD_TOKEN` | string | — | Discord bot token | Yes |
-| `DISCORD_CLIENT_ID` | string | — | Discord application ID used for command registration, connectivity checks, and trusted Activity launch binding | No |
-| `DISCORD_GUILD_ID` | string | — | Private Discord server ID and trusted Activity guild boundary | No |
-| `AUTHORIZED_ROLE_IDS` | comma-separated Discord role IDs | — | Roles allowed to use project, task, and Activity launch functionality | No |
+| `DISCORD_CLIENT_ID` | string | — | Discord application ID used for command registration and connectivity checks | No |
+| `DISCORD_GUILD_ID` | string | — | Private Discord server ID | No |
+| `AUTHORIZED_ROLE_IDS` | comma-separated Discord role IDs | — | Roles allowed to use project and task functionality | No |
 
 ### Owner identity
 
@@ -84,54 +84,6 @@ The deterministic host preflight does not make a paid model call. It reports aut
 | `PRIMARY_AGENT_MODEL` | string | provider default | Optional host default model for PM-style primary-agent turns | No |
 | `PRIMARY_USAGE_RESERVE` | number | `10` | Percentage points of provider capacity reserved for coordination and recovery | No |
 
-### Factory Floor Activity adapter
-
-The Factory Floor adapter is disabled unless `FACTORY_FLOOR_ENABLED=true`. Disabled or absent configuration does not affect Discord Agent startup or direct Claude, Codex, and OpenCode tasks. Valid enabled configuration also reconciles the single global `factory-floor` Activity Entry Point after normal guild commands are registered.
-
-| Variable | Type | Default | Purpose | Sensitive |
-|---|---|---|---|---|
-| `FACTORY_FLOOR_ENABLED` | boolean | `false` | Enable Factory Floor adapter composition and global Activity Entry Point reconciliation | No |
-| `FACTORY_FLOOR_BASE_URL` | HTTP(S) origin | — | Factory Floor control-plane origin, without credentials, path, query, or fragment | Potentially |
-| `FACTORY_FLOOR_AGENT_TO_FACTORY_KEY` | string | — | Current HMAC key used only for Discord Agent-to-Factory Floor service requests | Yes |
-| `FACTORY_FLOOR_FACTORY_TO_AGENT_KEY` | string | — | Current HMAC key used only for Factory Floor-to-Discord Agent callbacks | Yes |
-| `FACTORY_FLOOR_PREVIOUS_AGENT_TO_FACTORY_KEY` | string | empty | Previous outgoing-direction key accepted during rotation overlap | Yes |
-| `FACTORY_FLOOR_PREVIOUS_FACTORY_TO_AGENT_KEY` | string | empty | Previous callback-direction key accepted during rotation overlap | Yes |
-| `FACTORY_FLOOR_OPERATOR_TOKEN` | string | empty | Optional least-privileged operator API token; never substitutes for service authentication | Yes |
-| `FACTORY_FLOOR_REQUEST_TIMEOUT_MS` | positive integer milliseconds | `15000` | Per-request timeout for Factory Floor clients | No |
-| `FACTORY_FLOOR_MAX_RETRIES` | integer `0`–`3` | `1` | Retry count for explicitly retryable read requests | No |
-| `FACTORY_FLOOR_LAUNCH_TTL_MS` | integer `30000`–`600000` milliseconds | `120000` | Lifetime of a one-time trusted Activity launch registration | No |
-
-Current and previous keys within one direction must be different, and no key value may appear in both directions. Operator tokens, service-authentication keys, Activity session tokens, Discord OAuth credentials, and the Discord bot token are separate credential classes and must not reuse values.
-
-Service authentication signs the protocol version, directional key identifier, timestamp, nonce, uppercase method, request path, and SHA-256 digest of the exact body bytes. The receiver enforces bounded clock skew, constant-time signature comparison, key-rotation overlap, and replay-nonce consumption.
-
-Discord Agent SQLite stores local project/surface/run linkage, validated Activity instance linkage, bounded replay nonces, and short-lived one-time launch registrations. It does not store HMAC keys, signatures, operator tokens, Activity session tokens, Factory Floor events, approvals, artifacts, or runtime state. Launch registrations are bound to the configured application and guild, current Discord principal and surface, and server-resolved project/run context; browser-selected authority is never persisted.
-
-### Factory Floor Activity bootstrap broker
-
-The HTTPS broker is independently disabled unless `FACTORY_FLOOR_BROKER_ENABLED=true`. It also requires the Factory Floor adapter. Broker configuration failures are logged and isolated from Discord Gateway and direct-provider operation.
-
-| Variable | Type | Default | Purpose | Sensitive |
-|---|---|---|---|---|
-| `FACTORY_FLOOR_BROKER_ENABLED` | boolean | `false` | Start the optional OAuth/bootstrap and mutation-revalidation HTTPS listener | No |
-| `FACTORY_FLOOR_BROKER_HOST` | host | `127.0.0.1` | Listener bind address | No |
-| `FACTORY_FLOOR_BROKER_PORT` | integer `1`–`65535` | `8443` | Listener port | No |
-| `FACTORY_FLOOR_BROKER_PUBLIC_ORIGIN` | HTTPS origin | — | Public broker origin used to construct request URLs | No |
-| `FACTORY_FLOOR_BROKER_ALLOWED_ORIGINS` | comma-separated HTTPS origins | — | Exact Activity origins allowed by CORS | No |
-| `FACTORY_FLOOR_BROKER_REDIRECT_URIS` | comma-separated HTTPS URLs | — | Exact OAuth callback allowlist | No |
-| `FACTORY_FLOOR_BROKER_TLS_CERT_PATH` | file path | — | TLS certificate chain | Potentially |
-| `FACTORY_FLOOR_BROKER_TLS_KEY_PATH` | file path | — | TLS private key | Yes |
-| `DISCORD_CLIENT_SECRET` | string | — | Server-only Discord OAuth application credential | Yes |
-| `FACTORY_FLOOR_BROKER_OAUTH_SCOPES` | comma-separated scopes | `identify` | OAuth scopes requested by the Activity | No |
-| `FACTORY_FLOOR_BROKER_OAUTH_TTL_MS` | integer `30000`–`600000` | `60000` | PKCE attempt lifetime, capped by launch expiry | No |
-| `FACTORY_FLOOR_BROKER_REQUEST_TIMEOUT_MS` | integer `1`–`60000` | `10000` | Discord API and current-member revalidation timeout | No |
-| `FACTORY_FLOOR_BROKER_MAX_RESPONSE_BYTES` | integer `1024`–`1048576` | `32768` | Maximum Discord response body | No |
-| `FACTORY_FLOOR_BROKER_MAX_BODY_BYTES` | integer `1024`–`65536` | `8192` | Maximum browser or service request body | No |
-| `FACTORY_FLOOR_BROKER_REVALIDATION_MAX_REQUESTS` | integer `1`–`1000` | `30` | Maximum revalidation requests per principal and action in one fixed window | No |
-| `FACTORY_FLOOR_BROKER_REVALIDATION_RATE_LIMIT_WINDOW_MS` | integer `1000`–`3600000` | `60000` | Fixed-window duration for principal/action revalidation limits | No |
-
-Browser OAuth routes return JSON with no-store headers and exact-origin CORS. The reverse revalidation route does not use browser CORS; Factory Floor signs its exact request body with the `ff-to-agent` key and `x-factory-floor-service-auth` header. It re-fetches the live Activity instance and current guild member immediately before an `approve` or `cancel` mutation, then verifies application, installation, guild, Activity location and participant, role authorization, adapter, project, surface, and run bindings. The response contains only a stable reason code and minimal attribution. See [Discord Activity OAuth bootstrap](discord-activity-bootstrap.md) and [Discord Activity mutation revalidation](discord-activity-revalidation.md).
-
 ### Storage
 
 | Variable | Type | Default | Purpose | Sensitive |
@@ -181,4 +133,4 @@ The SQLite database is created automatically on first run. Migrations are versio
 
 ## Source of truth
 
-Runtime behavior in `src/config.ts`, provider host defaults in `src/agents/providerConfiguration.ts`, application paths in `src/utils/applicationPaths.ts`, adapter validation in `src/factoryFloor/config.ts`, and broker validation in `src/factoryFloor/activityBootstrapConfig.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug.
+Runtime behavior in `src/config.ts`, provider host defaults in `src/agents/providerConfiguration.ts`, and application paths in `src/utils/applicationPaths.ts` are authoritative. This reference and `.env.example` must agree with them. Treat any discrepancy among the implementation, this page, and `.env.example` as a documentation or configuration bug.

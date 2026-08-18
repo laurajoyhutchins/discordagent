@@ -41,8 +41,8 @@ function fakeProcess() {
 
 function project(overrides: Partial<Project> = {}): Project {
   return {
-    name: 'factory-floor',
-    workingDirectory: '/repos/factory-floor',
+    name: 'sample-project',
+    workingDirectory: '/repos/sample-project',
     categoryId: 'cat-1',
     agentChannelId: 'agent-1',
     defaultProvider: 'claude',
@@ -152,8 +152,8 @@ describe('RoborevReviewSource', () => {
         type: 'review.started',
         ts: '2026-07-18T12:00:00Z',
         job_id: 42,
-        repo: '/repos/factory-floor',
-        repo_name: 'factory-floor',
+        repo: '/repos/sample-project',
+        repo_name: 'sample-project',
         sha: 'abcdef1234567890',
         agent: 'reviewer',
       }) + '\n'));
@@ -161,7 +161,7 @@ describe('RoborevReviewSource', () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
       expect(publish).toHaveBeenCalledWith(
-        expect.objectContaining({ source: 'roborev', projectId: 'factory-floor', status: 'started' }),
+        expect.objectContaining({ source: 'roborev', projectId: 'sample-project', status: 'started' }),
       );
 
       await disposable.dispose();
@@ -218,8 +218,8 @@ describe('RoborevReviewSource', () => {
         type: 'review.completed',
         ts: '2026-07-18T12:00:00Z',
         job_id: 42,
-        repo: '/repos/factory-floor',
-        repo_name: 'factory-floor',
+        repo: '/repos/sample-project',
+        repo_name: 'sample-project',
         sha: 'abcdef1234567890',
         agent: 'reviewer',
         verdict: 'A',
@@ -276,8 +276,8 @@ describe('RoborevReviewSource', () => {
         type: 'review.started',
         ts: '2026-07-18T12:00:00Z',
         job_id: 42,
-        repo: '/repos/factory-floor',
-        repo_name: 'factory-floor',
+        repo: '/repos/sample-project',
+        repo_name: 'sample-project',
         sha: 'abcdef1234567890',
         agent: 'reviewer',
       }) + '\n'));

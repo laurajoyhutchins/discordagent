@@ -39,8 +39,8 @@ function fakeProcess(): ChildProcess {
 
 function project(): Project {
   return {
-    name: 'factory-floor',
-    workingDirectory: '/repos/factory-floor',
+    name: 'sample-project',
+    workingDirectory: '/repos/sample-project',
     categoryId: 'category-1',
     agentChannelId: 'agent-1',
     defaultProvider: 'claude',

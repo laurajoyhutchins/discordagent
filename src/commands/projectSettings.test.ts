@@ -6,8 +6,8 @@ import type { Project } from '../types.js';
 import { panelIdentityRegistry } from '../discord/panelIdentity.js';
 
 const project: Project = {
-  name: 'factory-floor',
-  workingDirectory: 'C:\\secret\\factory-floor',
+  name: 'sample-project',
+  workingDirectory: 'C:\\secret\\sample-project',
   categoryId: 'category-1',
   agentChannelId: 'agent-1',
   defaultProvider: 'codex',
@@ -46,7 +46,7 @@ function commandInteraction(input: { channelId?: string; thread?: boolean } = {}
 }
 
 function selectInteraction(value: string) {
-  const customId = projectSettingsComponentId('agent-1', 'factory-floor', 'model');
+  const customId = projectSettingsComponentId('agent-1', 'sample-project', 'model');
   const message = {
     id: 'project-settings-panel',
     channelId: 'agent-1',
@@ -99,7 +99,7 @@ describe('/project-settings', () => {
   });
 
   it('keeps project model selections provider-scoped', () => {
-    const id = projectSettingsComponentId('agent-1', 'factory-floor', 'model');
+    const id = projectSettingsComponentId('agent-1', 'sample-project', 'model');
     expect(parseProjectSettingsComponentId(id)).toMatchObject({ scope: 'project', channelId: 'agent-1', action: 'model' });
     expect(parseProjectSettingsComponentId('settings:p:agent-1:model')).toBeUndefined();
     expect(parseProjectModelSelection('codex|gpt-5-codex')).toEqual({ provider: 'codex', model: 'gpt-5-codex' });
@@ -117,7 +117,7 @@ describe('/project-settings', () => {
       isAuthorizedMember: () => true,
     });
 
-    expect(settings.updateProject).toHaveBeenCalledWith('factory-floor', { codexModel: 'gpt-5-codex-mini' });
+    expect(settings.updateProject).toHaveBeenCalledWith('sample-project', { codexModel: 'gpt-5-codex-mini' });
     expect(interaction.update).toHaveBeenCalled();
   });
 
@@ -131,7 +131,7 @@ describe('/project-settings', () => {
     });
 
     const payload = interaction.reply.mock.calls[0][0] as { embeds: Array<{ data?: { description?: string } }> };
-    expect(payload.embeds?.[0]?.data?.description ?? '').not.toContain('C:\\secret\\factory-floor');
+    expect(payload.embeds?.[0]?.data?.description ?? '').not.toContain('C:\\secret\\sample-project');
   });
 
   it('resolves the effective provider through project, global, and live availability', async () => {
@@ -229,7 +229,7 @@ describe('/project-settings', () => {
       .some(option => option.value === 'clear|codex')).toBe(true);
 
     const interaction = {
-      customId: projectSettingsComponentId('agent-1', 'factory-floor', 'action'),
+      customId: projectSettingsComponentId('agent-1', 'sample-project', 'action'),
       channelId: 'agent-1',
       user: { id: 'user-1' },
       channel: { isThread: () => false },
@@ -237,7 +237,7 @@ describe('/project-settings', () => {
         id: 'project-settings-panel',
         channelId: 'agent-1',
         author: { id: 'bot-1', bot: true },
-        components: [{ type: 1, components: [{ type: 3, custom_id: projectSettingsComponentId('agent-1', 'factory-floor', 'action') }] }],
+        components: [{ type: 1, components: [{ type: 3, custom_id: projectSettingsComponentId('agent-1', 'sample-project', 'action') }] }],
       },
       guild: { members: { fetch: vi.fn(async () => ({ id: 'user-1' })) } },
       values: ['clear|codex'],
@@ -256,7 +256,7 @@ describe('/project-settings', () => {
       isAuthorizedMember: () => true,
     });
 
-    expect(settings.updateProject).toHaveBeenCalledWith('factory-floor', { codexModel: '' });
+    expect(settings.updateProject).toHaveBeenCalledWith('sample-project', { codexModel: '' });
     expect(interaction.update).toHaveBeenCalled();
   });
 
@@ -299,7 +299,7 @@ describe('/project-settings', () => {
   it('rejects a component after its project is deleted or replaced on the same channel', async () => {
     const settings = service();
     const interaction = selectInteraction('claude|sonnet');
-    interaction.customId = projectSettingsComponentId('agent-1', 'factory-floor', 'model');
+    interaction.customId = projectSettingsComponentId('agent-1', 'sample-project', 'model');
     await handleProjectSettingsComponent(interaction, {
       settings,
       providers: { list: () => ['claude'], availability: vi.fn(async () => ({ available: true })) },
@@ -330,7 +330,7 @@ describe('/project-settings', () => {
   it('accepts an empty custom-model modal to clear the provider override', async () => {
     const settings = service();
     const interaction = {
-      customId: projectSettingsComponentId('agent-1', 'factory-floor', 'model-custom:codex'),
+      customId: projectSettingsComponentId('agent-1', 'sample-project', 'model-custom:codex'),
       channelId: 'agent-1',
       user: { id: 'user-1' },
       channel: { isThread: () => false },
@@ -338,7 +338,7 @@ describe('/project-settings', () => {
         id: 'project-settings-panel',
         channelId: 'agent-1',
         author: { id: 'bot-1', bot: true },
-        components: [{ type: 1, components: [{ type: 3, custom_id: projectSettingsComponentId('agent-1', 'factory-floor', 'model-custom:codex') }] }],
+        components: [{ type: 1, components: [{ type: 3, custom_id: projectSettingsComponentId('agent-1', 'sample-project', 'model-custom:codex') }] }],
       },
       guild: { members: { fetch: vi.fn(async () => ({ id: 'user-1' })) } },
       fields: { getTextInputValue: () => '' },
@@ -356,7 +356,7 @@ describe('/project-settings', () => {
       isAuthorizedMember: () => true,
     });
 
-    expect(settings.updateProject).toHaveBeenCalledWith('factory-floor', { codexModel: '' });
+    expect(settings.updateProject).toHaveBeenCalledWith('sample-project', { codexModel: '' });
     expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ flags: MessageFlags.Ephemeral }));
   });
 });

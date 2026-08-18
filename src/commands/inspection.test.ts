@@ -21,7 +21,7 @@ function interaction() {
 
 describe('inspection commands', () => {
   it('reports active tasks with reservations', async () => {
-    const tasks = { listActive: () => [{ id: 'task-123456', projectName: 'factory-floor', provider: 'codex', status: 'running', objective: 'Implement registry', threadId: 'thread-1' }] } as never;
+    const tasks = { listActive: () => [{ id: 'task-123456', projectName: 'sample-project', provider: 'codex', status: 'running', objective: 'Implement registry', threadId: 'thread-1' }] } as never;
     setAgentRuntimeServices({ providers: new ProviderRegistry(), tasks });
     setUsageAdmissionService({
       reservations: () => [{ id: 'r', taskId: 'task-123456', provider: 'codex', taskClass: 'contained_feature', low: 6, high: 14, confidence: 'low', status: 'active', createdAt: 1 }],

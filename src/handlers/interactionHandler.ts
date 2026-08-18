@@ -17,6 +17,7 @@ import { stopLoopFromButton } from '../services/loopRunner.js';
 import { handleCodexAuth, handleCodexAuthButton } from '../commands/codexAuth.js';
 import { maybeGetProviderOnboardingService } from '../services/agentRuntimeService.js';
 import { handleCapabilities } from '../commands/capabilities.js';
+import { handleChatgptSession } from '../commands/chatgptSession.js';
 import { handleRoborev } from '../commands/roborev.js';
 import { handleSettings, handleSettingsComponent } from '../commands/settings.js';
 import { handleProjectSettings, handleProjectSettingsComponent } from '../commands/projectSettings.js';
@@ -164,6 +165,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
         break;
       case 'capabilities':
         await handleCapabilities(interaction);
+        break;
+      case 'chatgpt-session':
+        await handleChatgptSession(interaction);
         break;
       case 'settings':
         await handleSettings(interaction);

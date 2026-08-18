@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from './database.js';
+import { CHATGPT_SESSION_MIGRATION } from './chatgptSessionMigration.js';
 import { FACTORY_FLOOR_BINDINGS_MIGRATION } from './factoryFloorBindingsMigration.js';
 import { FACTORY_FLOOR_LAUNCH_MIGRATION } from './factoryFloorLaunchMigration.js';
 import { FACTORY_FLOOR_OAUTH_MIGRATION } from './factoryFloorOAuthMigration.js';
@@ -33,6 +34,7 @@ const DEFAULT_MIGRATIONS: readonly Migration[] = [
   FACTORY_FLOOR_BINDINGS_MIGRATION,
   FACTORY_FLOOR_LAUNCH_MIGRATION,
   FACTORY_FLOOR_OAUTH_MIGRATION,
+  CHATGPT_SESSION_MIGRATION,
 ];
 
 function validateMigrations(migrations: readonly Migration[]): void {

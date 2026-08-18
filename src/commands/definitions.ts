@@ -68,6 +68,27 @@ export const commands = [
     .setDescription('Show effective Discord capabilities in this channel'),
 
   new SlashCommandBuilder()
+    .setName('chatgpt-session')
+    .setDescription('Bind a Discord thread to a literal ChatGPT conversation')
+    .addSubcommand(command =>
+      command
+        .setName('bind')
+        .setDescription('Bind this thread to a literal ChatGPT conversation')
+        .addStringOption(opt =>
+          opt
+            .setName('url')
+            .setDescription('Literal https://chatgpt.com/c/... conversation URL')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(command =>
+      command.setName('show').setDescription("Show this thread's ChatGPT conversation binding")
+    )
+    .addSubcommand(command =>
+      command.setName('unbind').setDescription("Retire this thread's ChatGPT conversation binding")
+    ),
+
+  new SlashCommandBuilder()
     .setName('settings')
     .setDescription('View and edit global agent and PM settings in the primary channel'),
 

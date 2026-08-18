@@ -23,6 +23,7 @@ Open a message's context menu and choose **Apps → Turn into task**. The select
 | `/settings` | `#agent-chat` | `AUTHORIZED_USER_ID` | Opens owner-only global settings controls and persists supported global settings |
 | `/project-settings` | Registered project channel | `AUTHORIZED_ROLE_IDS` | Opens project-scoped settings controls and persists supported project settings |
 | `/capabilities` | Guild channel | `AUTHORIZED_ROLE_IDS` | Read-only report of effective Discord capabilities and fallbacks |
+| `/chatgpt-session` | Discord thread | `AUTHORIZED_ROLE_IDS` | Binds, inspects, or retires a metadata-only one-to-one identity between the thread and a literal ChatGPT conversation; does not read or write ChatGPT transcript content |
 | `/agents` | Guild channel | `AUTHORIZED_ROLE_IDS` | Read-only active-task and reservation report |
 | `/usage` | Guild channel | `AUTHORIZED_ROLE_IDS` | Read-only provider-window and admission report |
 | `/cancel` | Task thread | `AUTHORIZED_ROLE_IDS` | Cancels the task while preserving its record and worktree |
@@ -88,6 +89,22 @@ Provider selection succeeds only after an authoritative availability check.
 | `thinking` | No | Codex reasoning effort: `__default__`, `none`, `low`, `medium`, `high`, `xhigh`, or `max` |
 
 Stored settings affect the relevant global or project scope. A prompt-prefixed one-turn override affects only that provider turn. Existing tasks retain immutable provider identity and durable session context.
+
+### `/chatgpt-session`
+
+This command creates only an identity link between the current Discord thread and a literal ChatGPT conversation. It does not contact ChatGPT, inspect browser state, read or mirror ChatGPT messages, submit turns, use an OpenAI API key, or store authenticated browser state.
+
+- `bind url:<https://chatgpt.com/c/...>` validates and canonicalizes the literal conversation URL, then persists the active one-to-one binding.
+- `show` displays the active canonical ChatGPT conversation URL for the current Discord thread.
+- `unbind` retires the active binding while preserving historical binding evidence in SQLite.
+
+Only `https://chatgpt.com/c/<conversation-id>` URLs are accepted. Query strings and fragments are discarded before persistence. Shared links, legacy hosts, non-HTTPS URLs, and lookalike hosts are rejected.
+
+At most one active ChatGPT conversation may be bound to a Discord thread, and one ChatGPT conversation may be bound to at most one Discord thread. Rebinding the same active pair is idempotent. To change the conversation represented by a thread, unbind the existing pair first.
+
+Deleting the Discord thread automatically retires its active ChatGPT binding while preserving the historical row, so the ChatGPT conversation can later be bound to another Discord thread without leaving an orphaned active identity.
+
+This is deliberately a metadata-only skeleton. Future sanctioned transcript or message transport can attach to the same durable identity without changing which system owns the conversation content.
 
 ### `/cancel`
 

@@ -62,6 +62,7 @@ describe('database migrations', () => {
       'usage_snapshots',
       'usage_reservations',
       'pending_auth_flows',
+      'chatgpt_session_bindings',
     ]) {
       expect(names.has(required), `missing table ${required}`).toBe(true);
     }

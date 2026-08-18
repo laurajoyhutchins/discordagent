@@ -14,8 +14,19 @@ const removedMarkers = [
   ['factory', 'floor'].join('_'),
   ['factory', 'floor'].join('-'),
   ['Discord', 'Activity'].join(' '),
+  ['discord', 'Activity'].join(''),
   ['discord', 'activity'].join('-'),
   ['Primary', 'Entry', 'Point'].join(' '),
+  ['PRIMARY', 'ENTRY', 'POINT'].join('_'),
+  ['LAUNCH', 'ACTIVITY'].join('_'),
+  ['APP', 'HANDLER'].join('_'),
+  ['activity', 'Launch'].join(''),
+  ['activity', 'Bootstrap'].join(''),
+  ['activity', 'Revalidation'].join(''),
+  ['discord', 'activity'].join('/'),
+  ['discordsays', '.com'].join(''),
+  ['ff', 'to', 'agent'].join('-'),
+  ['agent', 'to', 'ff'].join('-'),
 ];
 
 test('removed integration leaves no tracked source or documentation residuals', () => {

@@ -41,7 +41,7 @@ describe('ProjectRepository', () => {
 
     expect(projects.create(sampleProject)).toEqual(sampleProject);
     expect(projects.listActive()).toEqual([sampleProject]);
-    expect(projects.findByName('FACTORY-FLOOR')).toEqual(sampleProject);
+    expect(projects.findByName('SAMPLE-PROJECT')).toEqual(sampleProject);
     expect(projects.findByChannelId('agent-1')).toEqual(sampleProject);
     expect(projects.findByChannelId('review-1')).toEqual(sampleProject);
 

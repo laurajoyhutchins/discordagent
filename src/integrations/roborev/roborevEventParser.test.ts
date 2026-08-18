@@ -49,7 +49,7 @@ describe('matchProject', () => {
   });
 
   it('matches case-insensitively', () => {
-    const result = matchProject('/REPOS/FACTORY-FLOOR', [project()]);
+    const result = matchProject('/REPOS/SAMPLE-PROJECT', [project()]);
     expect(result?.name).toBe('sample-project');
   });
 });

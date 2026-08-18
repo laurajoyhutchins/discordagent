@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import type { ChatInputCommandInteraction } from 'discord.js';
+import { describe, expect, it, vi } from 'vitest';
 import { commands } from './definitions.js';
-import { parseChatgptConversationUrl } from './chatgptSession.js';
+import {
+  handleChatgptSession,
+  parseChatgptConversationUrl,
+  type ChatgptSessionCommandDependencies,
+} from './chatgptSession.js';
 
 describe('/chatgpt-session command', () => {
   it('registers bind, show, and unbind subcommands', () => {
@@ -26,5 +31,72 @@ describe('/chatgpt-session command', () => {
     ]) {
       expect(() => parseChatgptConversationUrl(invalid)).toThrow(/ChatGPT conversation URL/i);
     }
+  });
+
+  it('binds the current Discord thread without reading or writing ChatGPT content', async () => {
+    const bind = vi.fn(() => ({
+      id: 'binding-1',
+      discordThreadId: 'thread-1',
+      chatgptConversationId: 'conversation-1',
+      chatgptConversationUrl: 'https://chatgpt.com/c/conversation-1',
+      boundBy: 'user-1',
+      boundAt: 100,
+    }));
+    const dependencies: ChatgptSessionCommandDependencies = {
+      repository: {
+        bind,
+        findActiveByThreadId: vi.fn(() => undefined),
+        retireByThreadId: vi.fn(() => undefined),
+      },
+    };
+    const reply = vi.fn(async () => undefined);
+    const interaction = {
+      channel: { id: 'thread-1', isThread: () => true },
+      user: { id: 'user-1' },
+      options: {
+        getSubcommand: () => 'bind',
+        getString: () => 'https://chatgpt.com/c/conversation-1',
+      },
+      reply,
+    } as unknown as ChatInputCommandInteraction;
+
+    await handleChatgptSession(interaction, dependencies);
+
+    expect(bind).toHaveBeenCalledWith({
+      discordThreadId: 'thread-1',
+      chatgptConversationId: 'conversation-1',
+      boundBy: 'user-1',
+    });
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/metadata-only.*No ChatGPT messages are read, copied, or written/is),
+    }));
+  });
+
+  it('refuses to bind outside a Discord thread before touching persistence', async () => {
+    const bind = vi.fn();
+    const dependencies: ChatgptSessionCommandDependencies = {
+      repository: {
+        bind,
+        findActiveByThreadId: vi.fn(() => undefined),
+        retireByThreadId: vi.fn(() => undefined),
+      },
+    };
+    const reply = vi.fn(async () => undefined);
+    const interaction = {
+      channel: { id: 'channel-1', isThread: () => false },
+      user: { id: 'user-1' },
+      options: {
+        getSubcommand: () => 'bind',
+        getString: () => 'https://chatgpt.com/c/conversation-1',
+      },
+      reply,
+    } as unknown as ChatInputCommandInteraction;
+
+    await handleChatgptSession(interaction, dependencies);
+
+    expect(bind).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringMatching(/inside the Discord thread/i),
+    }));
   });
 });

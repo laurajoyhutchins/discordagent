@@ -102,6 +102,8 @@ Only `https://chatgpt.com/c/<conversation-id>` URLs are accepted. Query strings 
 
 At most one active ChatGPT conversation may be bound to a Discord thread, and one ChatGPT conversation may be bound to at most one Discord thread. Rebinding the same active pair is idempotent. To change the conversation represented by a thread, unbind the existing pair first.
 
+Deleting the Discord thread automatically retires its active ChatGPT binding while preserving the historical row, so the ChatGPT conversation can later be bound to another Discord thread without leaving an orphaned active identity.
+
 This is deliberately a metadata-only skeleton. Future sanctioned transcript or message transport can attach to the same durable identity without changing which system owns the conversation content.
 
 ### `/cancel`

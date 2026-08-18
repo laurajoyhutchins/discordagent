@@ -1,5 +1,6 @@
 import type { DatabaseHandle } from './database.js';
 import { LOOP_SCHEMA_MIGRATION } from './loopSchemaMigration.js';
+import { MIGRATION_COMPATIBILITY_RESERVATIONS } from './migrationCompatibilityReservations.js';
 import { SCHEMA_MIGRATIONS } from './schema.js';
 
 export interface Migration {
@@ -27,6 +28,7 @@ const BOOTSTRAP_SQL = `
 const DEFAULT_MIGRATIONS: readonly Migration[] = [
   ...SCHEMA_MIGRATIONS,
   LOOP_SCHEMA_MIGRATION,
+  ...MIGRATION_COMPATIBILITY_RESERVATIONS,
 ];
 
 function validateMigrations(migrations: readonly Migration[]): void {

@@ -40,7 +40,17 @@ describe('database migrations', () => {
     ).all() as Array<{ version: number }>;
 
     expect(firstVersions.length).toBeGreaterThan(0);
+    expect(firstVersions.at(-1)?.version).toBe(13);
     expect(secondVersions).toEqual(firstVersions);
+
+    const reservations = db.raw.prepare(
+      'SELECT version, name FROM schema_migrations WHERE version BETWEEN 11 AND 13 ORDER BY version'
+    ).all();
+    expect(reservations).toEqual([
+      { version: 11, name: 'reserve retired migration slot 11' },
+      { version: 12, name: 'reserve retired migration slot 12' },
+      { version: 13, name: 'reserve retired migration slot 13' },
+    ]);
 
     const tables = db.raw.prepare(
       "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name"

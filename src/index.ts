@@ -28,18 +28,6 @@ import { createRoborevReviewSource, deliverRoborevNotification } from './integra
 import type { Disposable, ReviewNotification } from './integrations/reviewSource.js';
 import { Repl } from './terminal/repl.js';
 import { activatePrimaryProvider } from './services/agentRuntimeService.js';
-import {
-  createActivityCommandOwnershipStore,
-  createDiscordActivityCommandApi,
-  reconcileFactoryFloorEntryPoint,
-  type DiscordActivityCommandRestClient,
-} from './factoryFloor/activityEntryPoint.js';
-import { getFactoryFloorRuntime } from './factoryFloor/runtime.js';
-import {
-  startOptionalActivityBootstrapBroker,
-  type ActivityBootstrapGuildClient,
-} from './factoryFloor/activityBootstrapRuntime.js';
-import type { ActivityBootstrapServerHandle } from './factoryFloor/activityBootstrapServer.js';
 
 // ── Single-instance lock ─────────────────────────────────────────────
 // Multiple bot processes sharing one token cause duplicate message
@@ -65,7 +53,6 @@ lockServer.listen(LOCK_PORT, '127.0.0.1', () => {
 
 let runtime: RuntimeServices | null = null;
 let reviewSourceDisposable: Disposable | undefined;
-let activityBootstrapServer: ActivityBootstrapServerHandle | undefined;
 let repl: Repl | undefined;
 let shuttingDown = false;
 
@@ -123,7 +110,6 @@ client.once('clientReady', async () => {
 
   const rest = new REST().setToken(config.discordToken);
 
-  // Guild commands remain independent from the optional global Activity Entry Point.
   try {
     await rest.put(
       Routes.applicationGuildCommands(config.clientId, config.guildId),
@@ -132,50 +118,6 @@ client.once('clientReady', async () => {
     console.log('Slash commands registered.');
   } catch (err) {
     console.error('Failed to register slash commands:', redactErrorMessage(err));
-  }
-
-  try {
-    const activityResult = await reconcileFactoryFloorEntryPoint({
-      enabled: Boolean(getFactoryFloorRuntime()),
-      api: createDiscordActivityCommandApi(
-        rest as unknown as DiscordActivityCommandRestClient,
-        config.clientId,
-      ),
-      ownership: createActivityCommandOwnershipStore(runtime.settings),
-    });
-    if (activityResult.action !== 'none') {
-      console.log(`[factoryFloor] Activity Entry Point ${activityResult.action}.`);
-    }
-  } catch (error) {
-    console.error(
-      '[factoryFloor] Failed to reconcile Activity Entry Point; direct providers remain available:',
-      redactErrorMessage(error),
-    );
-  }
-
-  try {
-    const factoryFloorRuntime = getFactoryFloorRuntime();
-    if (factoryFloorRuntime) {
-      activityBootstrapServer = await startOptionalActivityBootstrapBroker({
-        applicationId: config.clientId,
-        botToken: config.discordToken,
-        client: client as unknown as ActivityBootstrapGuildClient,
-        runtime: factoryFloorRuntime,
-        logger: message => console.warn(message),
-      });
-      if (activityBootstrapServer) {
-        console.log('[factoryFloor] Activity bootstrap broker started.');
-      }
-    } else if (process.env.FACTORY_FLOOR_BROKER_ENABLED === 'true') {
-      console.error(
-        '[factoryFloor] Activity bootstrap broker is enabled but the Factory Floor adapter is unavailable.',
-      );
-    }
-  } catch (error) {
-    console.error(
-      '[factoryFloor] Activity bootstrap broker failed to start; direct providers remain available:',
-      redactErrorMessage(error),
-    );
   }
 
   // Start review sources through the generic lifecycle boundary
@@ -299,14 +241,6 @@ async function shutdown(): Promise<void> {
   stopAllLoops();
   clearLoopRunner();
   if (reviewSourceDisposable) await reviewSourceDisposable.dispose();
-  if (activityBootstrapServer) {
-    await activityBootstrapServer.dispose().catch(error => {
-      console.warn(
-        '[factoryFloor] Failed to stop Activity bootstrap broker:',
-        redactErrorMessage(error),
-      );
-    });
-  }
   if (runtime) await stopRuntime(runtime);
   client.destroy();
   process.exit(0);

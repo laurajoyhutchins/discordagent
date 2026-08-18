@@ -27,8 +27,8 @@ const {
 const handles: DatabaseHandle[] = [];
 
 const project: Project = {
-  name: 'factory-floor',
-  workingDirectory: '/repos/factory-floor',
+  name: 'sample-project',
+  workingDirectory: '/repos/sample-project',
   categoryId: 'category-1',
   agentChannelId: 'agent-1',
   defaultProvider: 'claude',
@@ -128,7 +128,7 @@ describe('loopRunner durable task reuse', () => {
     await startLoop(60_000, 'run the tests', project, message);
 
     expect(coordinator.startInExistingThread).toHaveBeenCalledWith({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'run the tests',
       thread,
       provider: 'claude',

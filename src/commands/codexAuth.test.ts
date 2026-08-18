@@ -45,7 +45,7 @@ describe('codex auth command', () => {
 
   it('offers an explicit Start task action only after a fresh authenticated account read', async () => {
     const update = vi.fn(async () => undefined);
-    const pending = { projectName: 'factory-floor', prompt: 'finish the worker registry' };
+    const pending = { projectName: 'sample-project', prompt: 'finish the worker registry' };
     const pendingTasks = { get: vi.fn(() => pending), start: vi.fn(async () => undefined), discard: vi.fn() };
     const interaction = {
       customId: 'codex_auth_check',
@@ -74,7 +74,7 @@ describe('codex auth command', () => {
     await handleCodexAuthButton(interaction, {
       authorizedUserId: 'owner',
       auth: { readAccount: vi.fn(async () => ({ authenticated: true })) } as never,
-      pendingTasks: { get: vi.fn(() => ({ projectName: 'factory-floor', prompt: 'Run API_KEY=pending-secret using https://example.test/device?user_code=url-secret' })) } as never,
+      pendingTasks: { get: vi.fn(() => ({ projectName: 'sample-project', prompt: 'Run API_KEY=pending-secret using https://example.test/device?user_code=url-secret' })) } as never,
     });
 
     const content = String((update as unknown as { mock: { calls: Array<Array<{ content?: string }>> } }).mock.calls[0]?.[0]?.content);

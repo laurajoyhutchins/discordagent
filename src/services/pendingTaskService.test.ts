@@ -6,11 +6,11 @@ describe('PendingTaskService', () => {
     const startFromMessage = vi.fn(async () => ({}));
     const service = createPendingTaskService({ startFromMessage } as never);
     const message = { id: 'message-1' } as never;
-    service.defer({ userId: 'owner', projectName: 'factory-floor', prompt: 'finish the worker registry', message, model: 'gpt-5.4' });
+    service.defer({ userId: 'owner', projectName: 'sample-project', prompt: 'finish the worker registry', message, model: 'gpt-5.4' });
     expect(startFromMessage).not.toHaveBeenCalled();
-    expect(service.get('owner')).toMatchObject({ projectName: 'factory-floor', prompt: 'finish the worker registry' });
+    expect(service.get('owner')).toMatchObject({ projectName: 'sample-project', prompt: 'finish the worker registry' });
     await service.start('owner');
-    expect(startFromMessage).toHaveBeenCalledWith({ projectName: 'factory-floor', prompt: 'finish the worker registry', message, provider: 'codex', model: 'gpt-5.4' });
+    expect(startFromMessage).toHaveBeenCalledWith({ projectName: 'sample-project', prompt: 'finish the worker registry', message, provider: 'codex', model: 'gpt-5.4' });
     expect(service.get('owner')).toBeUndefined();
   });
 

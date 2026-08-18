@@ -65,7 +65,7 @@ function setup(usage: UsageAdmissionService, capabilityPreflight?: { assertCanCr
   runMigrations(db);
   const projects = createProjectRepository(db);
   projects.create({
-    name: 'factory-floor',
+    name: 'sample-project',
     workingDirectory: join(directory, 'repo'),
     categoryId: 'category-1',
     agentChannelId: 'agent-1',
@@ -146,7 +146,7 @@ describe('TaskCoordinator usage admission', () => {
     const context = setup(usage, capabilityPreflight);
 
     await expect(context.coordinator.startFromMessage({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'cannot start without Discord capability',
       message: context.message,
     })).rejects.toThrow(/Create Public Threads/);
@@ -164,7 +164,7 @@ describe('TaskCoordinator usage admission', () => {
     const context = setup(usage);
 
     await expect(context.coordinator.startFromMessage({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'repository-wide refactor',
       message: context.message,
     })).rejects.toThrow(/capacity unavailable/);
@@ -177,7 +177,7 @@ describe('TaskCoordinator usage admission', () => {
     const usage = fakeUsage();
     const context = setup(usage);
     const running = context.coordinator.startFromMessage({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'implement a contained feature',
       message: context.message,
     });
@@ -206,7 +206,7 @@ describe('TaskCoordinator usage admission', () => {
     });
     const context = setup(usage);
     const running = context.coordinator.startFromMessage({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       prompt: 'implement a feature',
       message: context.message,
     });

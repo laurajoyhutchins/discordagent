@@ -4,8 +4,8 @@ import type { Project } from '../types.js';
 import { handleRemoveProject } from './removeProject.js';
 
 const project: Project = {
-  name: 'factory-floor',
-  workingDirectory: '/repos/factory-floor',
+  name: 'sample-project',
+  workingDirectory: '/repos/sample-project',
   categoryId: 'category-1',
   agentChannelId: 'agent-1',
   roborevChannelId: 'review-1',
@@ -14,7 +14,7 @@ const project: Project = {
 
 function interaction() {
   return {
-    options: { getString: vi.fn(() => 'factory-floor') },
+    options: { getString: vi.fn(() => 'sample-project') },
     guild: { id: 'guild-1' },
     reply: vi.fn(async () => undefined),
     deferReply: vi.fn(async () => undefined),
@@ -43,12 +43,12 @@ describe('removeProject', () => {
       notifyRoborevConfigurationChanged,
     });
 
-    expect(getProject).toHaveBeenCalledWith('factory-floor');
+    expect(getProject).toHaveBeenCalledWith('sample-project');
     expect(terminalizeLoopsByProject).toHaveBeenCalledWith(
-      'factory-floor',
+      'sample-project',
       'Project archived',
     );
-    expect(removeProject).toHaveBeenCalledWith('factory-floor');
+    expect(removeProject).toHaveBeenCalledWith('sample-project');
     expect(deleteProjectChannels).toHaveBeenCalledWith(
       command.guild,
       'category-1',

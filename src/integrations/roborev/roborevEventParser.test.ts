@@ -5,8 +5,8 @@ import type { RoborevStreamEvent } from './types.js';
 
 function project(overrides: Partial<Project> = {}): Project {
   return {
-    name: 'factory-floor',
-    workingDirectory: '/repos/factory-floor',
+    name: 'sample-project',
+    workingDirectory: '/repos/sample-project',
     categoryId: 'cat-1',
     agentChannelId: 'agent-1',
     defaultProvider: 'claude',
@@ -17,22 +17,22 @@ function project(overrides: Partial<Project> = {}): Project {
 
 describe('matchProject', () => {
   it('matches an exact working-directory path', () => {
-    const result = matchProject('/repos/factory-floor', [project()]);
-    expect(result?.name).toBe('factory-floor');
+    const result = matchProject('/repos/sample-project', [project()]);
+    expect(result?.name).toBe('sample-project');
   });
 
   it('matches a repository nested under the project directory', () => {
-    const result = matchProject('/repos/factory-floor/src/lib', [project()]);
-    expect(result?.name).toBe('factory-floor');
+    const result = matchProject('/repos/sample-project/src/lib', [project()]);
+    expect(result?.name).toBe('sample-project');
   });
 
   it('does not match a similarly prefixed path', () => {
-    const result = matchProject('/repos/factory-floor-copy', [project()]);
+    const result = matchProject('/repos/sample-project-copy', [project()]);
     expect(result).toBeUndefined();
   });
 
   it('returns undefined when the project has no roborev channel', () => {
-    const result = matchProject('/repos/factory-floor', [
+    const result = matchProject('/repos/sample-project', [
       project({ roborevChannelId: undefined }),
     ]);
     expect(result).toBeUndefined();
@@ -44,13 +44,13 @@ describe('matchProject', () => {
   });
 
   it('handles trailing slashes on both sides', () => {
-    const result = matchProject('/repos/factory-floor/', [project()]);
-    expect(result?.name).toBe('factory-floor');
+    const result = matchProject('/repos/sample-project/', [project()]);
+    expect(result?.name).toBe('sample-project');
   });
 
   it('matches case-insensitively', () => {
     const result = matchProject('/REPOS/FACTORY-FLOOR', [project()]);
-    expect(result?.name).toBe('factory-floor');
+    expect(result?.name).toBe('sample-project');
   });
 });
 
@@ -59,17 +59,17 @@ describe('normalizeToNotification', () => {
     type: 'review.started',
     ts: '2026-07-18T12:00:00Z',
     job_id: 42,
-    repo: '/repos/factory-floor',
-    repo_name: 'factory-floor',
+    repo: '/repos/sample-project',
+    repo_name: 'sample-project',
     sha: 'abcdef1234567890',
     agent: 'reviewer',
   };
 
   it('normalizes a review.started event', () => {
-    const notification = normalizeToNotification(baseEvent, 'factory-floor');
+    const notification = normalizeToNotification(baseEvent, 'sample-project');
 
     expect(notification.source).toBe('roborev');
-    expect(notification.projectId).toBe('factory-floor');
+    expect(notification.projectId).toBe('sample-project');
     expect(notification.revision).toBe('abcdef1234567890');
     expect(notification.status).toBe('started');
     expect(notification.summary).toBe('Reviewing abcdef12');
@@ -81,7 +81,7 @@ describe('normalizeToNotification', () => {
   it('normalizes a review.completed event with verdict A', () => {
     const notification = normalizeToNotification(
       { ...baseEvent, type: 'review.completed', verdict: 'A' },
-      'factory-floor',
+      'sample-project',
     );
 
     expect(notification.status).toBe('passed');
@@ -93,7 +93,7 @@ describe('normalizeToNotification', () => {
   it('normalizes a review.completed event with verdict F', () => {
     const notification = normalizeToNotification(
       { ...baseEvent, type: 'review.completed', verdict: 'F' },
-      'factory-floor',
+      'sample-project',
     );
 
     expect(notification.status).toBe('failed');
@@ -103,7 +103,7 @@ describe('normalizeToNotification', () => {
   it('normalizes a review.completed event without a verdict', () => {
     const notification = normalizeToNotification(
       { ...baseEvent, type: 'review.completed' },
-      'factory-floor',
+      'sample-project',
     );
 
     expect(notification.status).toBe('warning');
@@ -113,7 +113,7 @@ describe('normalizeToNotification', () => {
   it('handles unknown event types gracefully', () => {
     const notification = normalizeToNotification(
       { ...baseEvent, type: 'review.pending' },
-      'factory-floor',
+      'sample-project',
     );
 
     expect(notification.source).toBe('roborev');

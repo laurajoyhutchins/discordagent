@@ -14,8 +14,8 @@ const directories: string[] = [];
 const handles: DatabaseHandle[] = [];
 
 const project: Project = {
-  name: 'factory-floor',
-  workingDirectory: '/repos/factory-floor',
+  name: 'sample-project',
+  workingDirectory: '/repos/sample-project',
   categoryId: 'category-1',
   agentChannelId: 'agent-1',
   defaultProvider: 'claude',
@@ -90,7 +90,7 @@ function createLoop(
 ) {
   return loops.create({
     id: 'loop-1',
-    projectName: 'factory-floor',
+    projectName: 'sample-project',
     channelId: 'agent-1',
     threadId: 'thread-1',
     prompt: 'run the tests',
@@ -251,7 +251,7 @@ describe('ScheduledLoopService execution lifecycle', () => {
       threadId: 'thread-2',
       startedAt: 20_000,
     });
-    expect(state.service.terminalizeByProject('factory-floor', 'Project archived')).toEqual([
+    expect(state.service.terminalizeByProject('sample-project', 'Project archived')).toEqual([
       expect.objectContaining({ id: 'loop-2', status: 'terminal' }),
     ]);
     expect(state.service.terminalizeByThread('thread-2', 'duplicate thread deletion')).toBeUndefined();

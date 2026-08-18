@@ -9,11 +9,11 @@ import {
 const view: TaskControlCardView = {
   taskId: 'task-1',
   objective: 'Implement api_key=sk-proj-1234567890 safely',
-  projectName: 'factory-floor',
+  projectName: 'sample-project',
   provider: 'claude',
   model: 'claude-sonnet',
   status: 'running',
-  branchName: 'agent/claude/factory-floor-123',
+  branchName: 'agent/claude/sample-project-123',
   sessionState: 'active',
   phase: 'Inspecting files',
   usagePosture: 'healthy',
@@ -32,10 +32,10 @@ describe('task control card rendering', () => {
     const serialized = JSON.stringify(payload);
 
     expect(embed).toMatchObject({ title: 'Task · Running' });
-    expect(serialized).toContain('factory-floor');
+    expect(serialized).toContain('sample-project');
     expect(serialized).toContain('Claude');
     expect(serialized).toContain('claude-sonnet');
-    expect(serialized).toContain('agent/claude/factory-floor-123');
+    expect(serialized).toContain('agent/claude/sample-project-123');
     expect(serialized).toContain('[REDACTED]');
     expect(serialized).not.toContain('sk-proj-1234567890');
     expect(serialized).not.toContain('task-1');

@@ -11,7 +11,7 @@ import {
 function startedNotification(overrides: Partial<ReviewNotification> = {}): ReviewNotification {
   return {
     source: 'roborev',
-    projectId: 'factory-floor',
+    projectId: 'sample-project',
     revision: 'abcdef1234567890',
     status: 'started',
     summary: 'Reviewing abcdef12',
@@ -23,7 +23,7 @@ function startedNotification(overrides: Partial<ReviewNotification> = {}): Revie
 function completedNotification(overrides: Partial<ReviewNotification> = {}): ReviewNotification {
   return {
     source: 'roborev',
-    projectId: 'factory-floor',
+    projectId: 'sample-project',
     revision: 'abcdef1234567890',
     status: 'passed',
     summary: 'Review abcdef12 — A',

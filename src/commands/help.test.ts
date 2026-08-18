@@ -20,8 +20,8 @@ function registerProject(): void {
     legacyPath: join(directory, 'projects.json'),
   });
   addProject({
-    name: 'factory-floor',
-    workingDirectory: '/repos/factory-floor',
+    name: 'sample-project',
+    workingDirectory: '/repos/sample-project',
     categoryId: 'category-1',
     agentChannelId: 'agent-1',
     roborevChannelId: 'review-1',
@@ -44,10 +44,10 @@ describe('contextual help presentation', () => {
   });
 
   it('guides a project channel toward one concrete durable task', () => {
-    const embed = buildHelpEmbed({ context: 'project', projectName: 'factory-floor' }).toJSON();
+    const embed = buildHelpEmbed({ context: 'project', projectName: 'sample-project' }).toJSON();
     const serialized = JSON.stringify(embed);
 
-    expect(serialized).toContain('factory-floor');
+    expect(serialized).toContain('sample-project');
     expect(serialized).toMatch(/isolated durable task/i);
     expect(serialized).toContain('/project-settings');
   });

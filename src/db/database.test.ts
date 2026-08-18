@@ -137,7 +137,7 @@ describe('schema invariants', () => {
         id, name, working_directory, category_id, agent_channel_id,
         default_provider, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run('p1', 'factory-floor', '/repos/factory-floor', 'cat1', 'chan1', 'claude', 1, 1);
+    `).run('p1', 'sample-project', '/repos/sample-project', 'cat1', 'chan1', 'claude', 1, 1);
 
     const insertTask = db.raw.prepare(`
       INSERT INTO tasks (
@@ -156,10 +156,10 @@ describe('schema invariants', () => {
         id, task_id, repository_path, worktree_path, branch_name, base_ref, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    insertWorktree.run('w1', 'task1', '/repos/factory-floor', '/worktrees/task1', 'agent/claude/task1', 'main', 1);
+    insertWorktree.run('w1', 'task1', '/repos/sample-project', '/worktrees/task1', 'agent/claude/task1', 'main', 1);
 
     expect(() => insertWorktree.run(
-      'w2', 'task1', '/repos/factory-floor', '/worktrees/task2', 'agent/claude/task2', 'main', 1
+      'w2', 'task1', '/repos/sample-project', '/worktrees/task2', 'agent/claude/task2', 'main', 1
     )).toThrow();
 
     const insertSession = db.raw.prepare(`

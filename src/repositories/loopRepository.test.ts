@@ -18,8 +18,8 @@ function setup() {
   runMigrations(db);
   const projects = createProjectRepository(db);
   projects.create({
-    name: 'factory-floor',
-    workingDirectory: '/repos/factory-floor',
+    name: 'sample-project',
+    workingDirectory: '/repos/sample-project',
     categoryId: 'category-1',
     agentChannelId: 'agent-1',
     defaultProvider: 'claude',
@@ -41,7 +41,7 @@ afterEach(() => {
 
 const firstLoop = {
   id: 'loop-1',
-  projectName: 'factory-floor',
+  projectName: 'sample-project',
   channelId: 'agent-1',
   threadId: 'thread-1',
   prompt: 'run the tests',

@@ -213,4 +213,59 @@ describe('primary conversation service', () => {
     const agentCall = ctx.append.mock.calls[1][0];
     expect(agentCall.content).toContain('[REDACTED]');
   });
+
+  it('adds hydrated authoritative evidence to the model context', async () => {
+    const respond = vi.fn().mockResolvedValue({ reply: 'LJH-211 is in progress.' });
+    const hydrate = vi.fn().mockResolvedValue({
+      hydratedAt: '2026-08-12T20:00:00Z',
+      requestedSources: ['linear'],
+      records: [
+        {
+          source: 'linear',
+          sourceId: 'LJH-211',
+          text: 'Hydration is In Progress',
+          observedAt: '2026-08-12T19:50:32Z',
+        },
+      ],
+      failures: [],
+    });
+    const ctx = base({
+      context: { assemble: () => 'LOCAL CONTEXT' },
+      model: { respond },
+      portfolioContext: { hydrate },
+    });
+
+    await ctx.service.process({
+      conversationId: 'conv-1',
+      userId: 'owner',
+      text: 'What is executable or blocked in Linear?',
+      currentProjectName: 'discordagent',
+    });
+
+    expect(hydrate).toHaveBeenCalledWith({
+      query: 'What is executable or blocked in Linear?',
+      currentProjectName: 'discordagent',
+    });
+    const modelInput = respond.mock.calls[0][0];
+    expect(modelInput.context).toContain('LOCAL CONTEXT');
+    expect(modelInput.context).toContain('AUTHORITATIVE PORTFOLIO CONTEXT');
+    expect(modelInput.context).toContain('[linear] LJH-211 @ 2026-08-12T19:50:32Z');
+  });
+
+  it('degrades a hydration-layer failure explicitly', async () => {
+    const respond = vi.fn().mockResolvedValue({ reply: 'Authoritative context is unavailable.' });
+    const ctx = base({
+      model: { respond },
+      portfolioContext: { hydrate: vi.fn().mockRejectedValue(new Error('gateway offline')) },
+    });
+
+    await ctx.service.process({
+      conversationId: 'conv-1',
+      userId: 'owner',
+      text: 'What is the current portfolio status?',
+    });
+
+    const modelInput = respond.mock.calls[0][0];
+    expect(modelInput.context).toContain('AUTHORITATIVE PORTFOLIO CONTEXT unavailable: [details withheld]');
+  });
 });

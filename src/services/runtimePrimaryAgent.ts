@@ -16,6 +16,7 @@ import {
   type PrimaryConversationService,
 } from '../primary/primaryConversationService.js';
 import type { PrimaryModel, PrimaryTaskProposal } from '../primary/primaryModel.js';
+import type { PortfolioContextHydrator } from '../primary/portfolioContext.js';
 import type { MemoryRepository } from '../repositories/memoryRepository.js';
 import type { MessageRepository } from '../repositories/messageRepository.js';
 import type { ProjectRepository } from '../repositories/projectRepository.js';
@@ -68,6 +69,7 @@ export interface PrimaryAgentBootstrapOptions {
   codexAuth?: CodexAuthService;
   primaryModel?: PrimaryModel;
   primaryModelFactory?: (provider: AgentProviderId) => PrimaryModel | undefined;
+  portfolioContext?: PortfolioContextHydrator;
   disablePrimaryAgent?: boolean;
   headlessPrimaryAgent?: boolean;
   primaryProvider?: AgentProviderId;
@@ -173,6 +175,9 @@ export async function bootstrapPrimaryAgent(
         if (options.headlessPrimaryAgent) {
           throw new Error('Task launch is unavailable in headless primary-agent mode.');
         }
+        if (proposal.portfolioCapability) {
+          throw new Error('Portfolio work requires fresh Discord capability authorization.');
+        }
         const project = options.projects.findByName(proposal.projectName);
         if (!project) throw new Error(`Project "${proposal.projectName}" is not registered`);
         const channel = await fetchProjectChannel(project.agentChannelId);
@@ -199,6 +204,7 @@ export async function bootstrapPrimaryAgent(
           projects: options.projects,
           coordinator: options.coordinator,
           model,
+          ...(options.portfolioContext ? { portfolioContext: options.portfolioContext } : {}),
           launchTask: sharedLaunchTask,
         });
         delegatingConversationService.setTarget(realService);
@@ -215,6 +221,7 @@ export async function bootstrapPrimaryAgent(
             projects: options.projects,
             coordinator: options.coordinator,
             fetchProjectChannel,
+            settingsService: options.settingsService,
           });
           setPrimaryAgentService(primaryAgent);
         }

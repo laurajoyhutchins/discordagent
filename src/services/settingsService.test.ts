@@ -27,7 +27,7 @@ function setup() {
   runMigrations(database);
   const projects = createProjectRepository(database);
   projects.create({
-    name: 'factory-floor',
+    name: 'sample-project',
     workingDirectory: directory,
     categoryId: 'category',
     agentChannelId: 'channel',
@@ -59,16 +59,16 @@ describe('SettingsService', () => {
   it('resolves one-message model, project model, global model, then host defaults', () => {
     const { service, projects, settings } = setup();
 
-    expect(service.resolveTaskSettings({ projectName: 'factory-floor', provider: 'codex' }).model)
+    expect(service.resolveTaskSettings({ projectName: 'sample-project', provider: 'codex' }).model)
       .toBe('host-codex');
     settings.setDefaultModel('codex', 'global-codex');
-    expect(service.resolveTaskSettings({ projectName: 'factory-floor', provider: 'codex' }).model)
+    expect(service.resolveTaskSettings({ projectName: 'sample-project', provider: 'codex' }).model)
       .toBe('global-codex');
-    projects.updateModel('factory-floor', 'codex', 'project-codex');
-    expect(service.resolveTaskSettings({ projectName: 'factory-floor', provider: 'codex' }).model)
+    projects.updateModel('sample-project', 'codex', 'project-codex');
+    expect(service.resolveTaskSettings({ projectName: 'sample-project', provider: 'codex' }).model)
       .toBe('project-codex');
     expect(service.resolveTaskSettings({
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       provider: 'codex',
       modelOverride: 'message-codex',
     }).model).toBe('message-codex');
@@ -76,23 +76,23 @@ describe('SettingsService', () => {
 
   it('resolves only settings supported by each provider', () => {
     const { service, projects } = setup();
-    projects.updateReasoning('factory-floor', 'codex', 'high');
-    projects.updateReasoning('factory-floor', 'claude', 'high');
-    service.updateProject('factory-floor', { mcpProfile: 'browser' });
+    projects.updateReasoning('sample-project', 'codex', 'high');
+    projects.updateReasoning('sample-project', 'claude', 'high');
+    service.updateProject('sample-project', { mcpProfile: 'browser' });
 
-    expect(service.resolveTaskSettings({ projectName: 'factory-floor', provider: 'codex' }))
+    expect(service.resolveTaskSettings({ projectName: 'sample-project', provider: 'codex' }))
       .toEqual({ model: 'host-codex', reasoningEffort: 'high' });
-    expect(service.resolveTaskSettings({ projectName: 'factory-floor', provider: 'claude' }))
+    expect(service.resolveTaskSettings({ projectName: 'sample-project', provider: 'claude' }))
       .toEqual({ model: 'host-claude', timeoutMs: 60_000, mcpProfile: 'browser' });
   });
 
   it('falls back to the global model after a project model is cleared', () => {
     const { service, projects, settings } = setup();
     settings.setDefaultModel('codex', 'global-codex');
-    projects.updateModel('factory-floor', 'codex', 'project-codex');
-    projects.updateModel('factory-floor', 'codex');
+    projects.updateModel('sample-project', 'codex', 'project-codex');
+    projects.updateModel('sample-project', 'codex');
 
-    expect(service.resolveTaskSettings({ projectName: 'factory-floor', provider: 'codex' }).model)
+    expect(service.resolveTaskSettings({ projectName: 'sample-project', provider: 'codex' }).model)
       .toBe('global-codex');
   });
 
@@ -101,21 +101,21 @@ describe('SettingsService', () => {
 
     expect(() => service.updateGlobal({ claudeTimeoutMs: 1 })).toThrow(/timeout/i);
     expect(() => service.updateGlobal({ usageReserve: 51 })).toThrow(/reserve/i);
-    expect(() => service.updateProject('factory-floor', { mcpProfile: 'unknown' })).toThrow(/profile/i);
+    expect(() => service.updateProject('sample-project', { mcpProfile: 'unknown' })).toThrow(/profile/i);
     expect(service.global().claudeTimeoutMs).toBeUndefined();
     expect(service.global().usageReserve).toBeUndefined();
-    expect(service.project('factory-floor').mcpProfile).toBeUndefined();
+    expect(service.project('sample-project').mcpProfile).toBeUndefined();
   });
 
   it('uses null to clear MCP profile and undefined to leave it unchanged', () => {
     const { service } = setup();
-    service.updateProject('factory-floor', { mcpProfile: 'browser' });
-    expect(service.project('factory-floor').mcpProfile).toBe('browser');
+    service.updateProject('sample-project', { mcpProfile: 'browser' });
+    expect(service.project('sample-project').mcpProfile).toBe('browser');
 
-    service.updateProject('factory-floor', {});
-    expect(service.project('factory-floor').mcpProfile).toBe('browser');
-    service.updateProject('factory-floor', { mcpProfile: null });
-    expect(service.project('factory-floor').mcpProfile).toBeUndefined();
+    service.updateProject('sample-project', {});
+    expect(service.project('sample-project').mcpProfile).toBe('browser');
+    service.updateProject('sample-project', { mcpProfile: null });
+    expect(service.project('sample-project').mcpProfile).toBeUndefined();
   });
 
   it('returns an immutable copy of the MCP profile catalog', () => {
@@ -131,25 +131,25 @@ describe('SettingsService', () => {
   it('rejects unsupported Roborev setting updates at the service boundary', () => {
     const { service } = setup();
     // @ts-expect-error roborevEnabled is not a supported settings update.
-    expect(() => service.updateProject('factory-floor', { roborevEnabled: false }))
+    expect(() => service.updateProject('sample-project', { roborevEnabled: false }))
       .toThrow(/roborev.*setting|unsupported/i);
   });
 
   it('rejects Claude reasoning project settings but preserves Codex reasoning', () => {
     const { service } = setup();
-    expect(() => service.updateProject('factory-floor', { reasoningEfforts: { claude: 'high' } }))
+    expect(() => service.updateProject('sample-project', { reasoningEfforts: { claude: 'high' } }))
       .toThrow(/Claude.*reasoningEffort.*support/i);
-    expect(() => service.updateProject('factory-floor', { reasoningEfforts: { codex: 'high' } })).not.toThrow();
+    expect(() => service.updateProject('sample-project', { reasoningEfforts: { codex: 'high' } })).not.toThrow();
   });
 
   it('keeps reasoning project-scoped when the global PM model changes', () => {
     const { service, projects } = setup();
-    projects.updateReasoning('factory-floor', 'codex', 'high');
+    projects.updateReasoning('sample-project', 'codex', 'high');
     service.updateGlobal({ primaryAgentModel: 'pm-model' });
 
     expect(service.global()).toMatchObject({ primaryAgentModel: 'pm-model' });
     expect('reasoningEffort' in service.global()).toBe(false);
-    expect(service.project('factory-floor').reasoningEfforts?.codex).toBe('high');
+    expect(service.project('sample-project').reasoningEfforts?.codex).toBe('high');
   });
 
   it('rejects missing projects and unavailable provider changes', () => {
@@ -167,10 +167,10 @@ describe('SettingsService', () => {
 
   it('keeps canonical project fields authoritative over project_settings values', () => {
     const { service, projects, projectSettings } = setup();
-    projects.updateModel('factory-floor', 'codex', 'canonical-codex');
-    projectSettings.set('factory-floor', 'mcpProfile', 'browser');
+    projects.updateModel('sample-project', 'codex', 'canonical-codex');
+    projectSettings.set('sample-project', 'mcpProfile', 'browser');
 
-    expect(service.project('factory-floor')).toMatchObject({
+    expect(service.project('sample-project')).toMatchObject({
       defaultProvider: 'codex',
       codexModel: 'canonical-codex',
       baseBranch: 'main',
@@ -183,19 +183,19 @@ describe('SettingsService', () => {
     const { service, projectSettings } = setup();
 
     // @ts-expect-error Roborev channel identity is not a settings mutation.
-    expect(() => service.updateProject('factory-floor', { roborevChannelId: 'new-roborev' }))
+    expect(() => service.updateProject('sample-project', { roborevChannelId: 'new-roborev' }))
       .toThrow(/roborev.*lifecycle|not.*setting/i);
 
-    expect(projectSettings.list('factory-floor')).toEqual({});
-    expect(service.project('factory-floor').roborevChannelId).toBe('canonical-roborev');
+    expect(projectSettings.list('sample-project')).toEqual({});
+    expect(service.project('sample-project').roborevChannelId).toBe('canonical-roborev');
   });
 
   it('rejects blank or whitespace base branches without clearing the canonical value', () => {
     const { service, projects } = setup();
 
-    expect(() => service.updateProject('factory-floor', { baseBranch: '   ' }))
+    expect(() => service.updateProject('sample-project', { baseBranch: '   ' }))
       .toThrow(/base branch/i);
-    expect(projects.findByName('factory-floor')?.baseBranch).toBe('main');
+    expect(projects.findByName('sample-project')?.baseBranch).toBe('main');
   });
 
   it('rolls back all global mutations when a repository write fails', () => {
@@ -230,11 +230,11 @@ describe('SettingsService', () => {
       transaction: operation => context.settingsRaw.transaction(operation)(),
     });
 
-    expect(() => transactional.updateProject('factory-floor', {
+    expect(() => transactional.updateProject('sample-project', {
       defaultProvider: 'claude', codexModel: 'new-model',
     })).toThrow(/project write failed/);
-    expect(transactional.project('factory-floor').defaultProvider).toBe('codex');
-    expect(transactional.project('factory-floor').codexModel).toBeUndefined();
+    expect(transactional.project('sample-project').defaultProvider).toBe('codex');
+    expect(transactional.project('sample-project').codexModel).toBeUndefined();
   });
 
   it('rolls back global settings when PM activation fails', async () => {
@@ -270,7 +270,7 @@ function setupDependencies() {
   runMigrations(database);
   const projects: ProjectRepository = createProjectRepository(database);
   projects.create({
-    name: 'factory-floor', workingDirectory: directory, categoryId: 'category',
+    name: 'sample-project', workingDirectory: directory, categoryId: 'category',
     agentChannelId: `channel-${Date.now()}`, defaultProvider: 'codex',
   });
   const settings: SettingsRepository = createSettingsRepository(database);

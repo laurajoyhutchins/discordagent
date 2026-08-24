@@ -59,18 +59,18 @@ describe('projectStore compatibility facade', () => {
     initializeProjectStore(paths);
 
     addProject({
-      name: 'factory-floor',
-      workingDirectory: '/repos/factory-floor',
+      name: 'sample-project',
+      workingDirectory: '/repos/sample-project',
       categoryId: 'category-2',
       agentChannelId: 'agent-2',
       defaultProvider: 'claude',
       roborevChannelId: 'review-2',
     });
 
-    expect(getProject('factory-floor')).toMatchObject({ roborevChannelId: 'review-2' });
-    expect(getProject('factory-floor')).not.toHaveProperty('roborevWebhookId');
-    expect(getProject('factory-floor')).not.toHaveProperty('roborevWebhookToken');
-    expect(removeProject('factory-floor')?.name).toBe('factory-floor');
-    expect(getProject('factory-floor')).toBeUndefined();
+    expect(getProject('sample-project')).toMatchObject({ roborevChannelId: 'review-2' });
+    expect(getProject('sample-project')).not.toHaveProperty('roborevWebhookId');
+    expect(getProject('sample-project')).not.toHaveProperty('roborevWebhookToken');
+    expect(removeProject('sample-project')?.name).toBe('sample-project');
+    expect(getProject('sample-project')).toBeUndefined();
   });
 });

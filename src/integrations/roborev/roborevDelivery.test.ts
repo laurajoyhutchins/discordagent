@@ -10,7 +10,7 @@ import { deliverRoborevNotification } from './roborevDelivery.js';
 
 const notification: ReviewNotification = {
   source: 'roborev',
-  projectId: 'factory-floor',
+  projectId: 'sample-project',
   revision: 'abcdef1234567890',
   status: 'warning',
   summary: 'Review abcdef12 — B',

@@ -24,9 +24,9 @@ afterEach(() => {
   while (directories.length > 0) rmSync(directories.pop()!, { recursive: true, force: true });
 });
 
-const factoryFloor = {
-  name: 'factory-floor',
-  workingDirectory: '/repos/factory-floor',
+const sampleProject = {
+  name: 'sample-project',
+  workingDirectory: '/repos/sample-project',
   categoryId: 'category-1',
   agentChannelId: 'agent-1',
   defaultProvider: 'claude' as const,
@@ -39,48 +39,48 @@ describe('ProjectRepository', () => {
   it('creates, reads, updates, archives, and deterministically reactivates projects', () => {
     const { db, projects } = setup();
 
-    expect(projects.create(factoryFloor)).toEqual(factoryFloor);
-    expect(projects.listActive()).toEqual([factoryFloor]);
-    expect(projects.findByName('FACTORY-FLOOR')).toEqual(factoryFloor);
-    expect(projects.findByChannelId('agent-1')).toEqual(factoryFloor);
-    expect(projects.findByChannelId('review-1')).toEqual(factoryFloor);
+    expect(projects.create(sampleProject)).toEqual(sampleProject);
+    expect(projects.listActive()).toEqual([sampleProject]);
+    expect(projects.findByName('SAMPLE-PROJECT')).toEqual(sampleProject);
+    expect(projects.findByChannelId('agent-1')).toEqual(sampleProject);
+    expect(projects.findByChannelId('review-1')).toEqual(sampleProject);
 
-    expect(projects.updateDefaultProvider('factory-floor', 'codex').defaultProvider).toBe('codex');
-    expect(projects.updateModel('factory-floor', 'codex', 'gpt-5.6-codex').models).toEqual({
+    expect(projects.updateDefaultProvider('sample-project', 'codex').defaultProvider).toBe('codex');
+    expect(projects.updateModel('sample-project', 'codex', 'gpt-5.6-codex').models).toEqual({
       claude: 'sonnet',
       codex: 'gpt-5.6-codex',
     });
-    expect(projects.updateModel('factory-floor', 'claude', undefined).models).toEqual({
+    expect(projects.updateModel('sample-project', 'claude', undefined).models).toEqual({
       codex: 'gpt-5.6-codex',
     });
-    expect(projects.updateReasoning('factory-floor', 'codex', 'xhigh').reasoningEfforts).toEqual({
+    expect(projects.updateReasoning('sample-project', 'codex', 'xhigh').reasoningEfforts).toEqual({
       codex: 'xhigh',
     });
 
     const originalId = (db.raw.prepare('SELECT id FROM projects WHERE name = ?')
-      .get('factory-floor') as { id: string }).id;
-    expect(projects.archive('factory-floor')?.name).toBe('factory-floor');
+      .get('sample-project') as { id: string }).id;
+    expect(projects.archive('sample-project')?.name).toBe('sample-project');
     expect(projects.listActive()).toEqual([]);
-    expect(projects.findByName('factory-floor')).toBeUndefined();
+    expect(projects.findByName('sample-project')).toBeUndefined();
 
     const reactivated = projects.create({
-      ...factoryFloor,
-      workingDirectory: '/repos/factory-floor-v2',
+      ...sampleProject,
+      workingDirectory: '/repos/sample-project-v2',
       agentChannelId: 'agent-2',
       roborevChannelId: undefined,
     });
     const reactivatedId = (db.raw.prepare('SELECT id FROM projects WHERE name = ?')
-      .get('factory-floor') as { id: string }).id;
+      .get('sample-project') as { id: string }).id;
 
-    expect(reactivated.workingDirectory).toBe('/repos/factory-floor-v2');
+    expect(reactivated.workingDirectory).toBe('/repos/sample-project-v2');
     expect(reactivatedId).toBe(originalId);
   });
 
   it('rejects duplicate active projects and returns undefined for missing updates', () => {
     const { projects } = setup();
-    projects.create(factoryFloor);
+    projects.create(sampleProject);
 
-    expect(() => projects.create(factoryFloor)).toThrow(/already exists/i);
+    expect(() => projects.create(sampleProject)).toThrow(/already exists/i);
     expect(projects.archive('missing')).toBeUndefined();
     expect(() => projects.updateDefaultProvider('missing', 'codex')).toThrow(/not found/i);
     expect(() => projects.updateModel('missing', 'claude', 'opus')).toThrow(/not found/i);
@@ -139,11 +139,11 @@ describe('legacy project import', () => {
     writeFileSync(malformedPath, '{not-json');
     expect(() => importLegacyProjects(db, malformedPath)).toThrow(/parse legacy projects/i);
 
-    projects.create(factoryFloor);
+    projects.create(sampleProject);
     const duplicatePath = join(directory, 'duplicates.json');
     writeFileSync(duplicatePath, JSON.stringify({ projects: [{
-      ...factoryFloor,
-      claudeChannelId: factoryFloor.agentChannelId,
+      ...sampleProject,
+      claudeChannelId: sampleProject.agentChannelId,
       agentChannelId: undefined,
     }] }));
 

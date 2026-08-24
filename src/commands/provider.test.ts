@@ -4,8 +4,8 @@ import type { Project } from '../types.js';
 import { handleProvider } from './provider.js';
 
 const project: Project = {
-  name: 'factory-floor',
-  workingDirectory: '/repos/factory-floor',
+  name: 'sample-project',
+  workingDirectory: '/repos/sample-project',
   categoryId: 'category-1',
   agentChannelId: 'agent-1',
   defaultProvider: 'claude',
@@ -52,7 +52,7 @@ describe('/provider', () => {
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
-    expect(update).toHaveBeenCalledWith('factory-floor', { defaultProvider: 'claude' });
+    expect(update).toHaveBeenCalledWith('sample-project', { defaultProvider: 'claude' });
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringContaining('Claude'),
     }));
@@ -68,7 +68,7 @@ describe('/provider', () => {
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
-    expect(update).toHaveBeenCalledWith('factory-floor', { defaultProvider: 'codex' });
+    expect(update).toHaveBeenCalledWith('sample-project', { defaultProvider: 'codex' });
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringMatching(/Codex/i),
     }));
@@ -84,7 +84,7 @@ describe('/provider', () => {
       checkProvider: vi.fn(async () => ({ available: true })),
     });
 
-    expect(update).toHaveBeenCalledWith('factory-floor', { defaultProvider: 'opencode' });
+    expect(update).toHaveBeenCalledWith('sample-project', { defaultProvider: 'opencode' });
     expect(command.reply).toHaveBeenCalledWith(expect.objectContaining({
       content: expect.stringMatching(/OpenCode/),
     }));

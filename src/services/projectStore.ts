@@ -2,10 +2,6 @@ import { dirname, join } from 'node:path';
 import type { AgentProviderId, ReasoningEffort } from '../agents/contracts.js';
 import { openDatabase, type DatabaseHandle } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
-import {
-  clearFactoryFloorRuntime,
-  initializeFactoryFloorRuntime,
-} from '../factoryFloor/runtime.js';
 import { importLegacyProjects } from '../repositories/legacyProjectImporter.js';
 import {
   createProjectRepository,
@@ -54,11 +50,9 @@ export function initializeProjectStore(paths: ProjectStorePaths = {}): void {
   importLegacyProjects(database, legacyPath);
   projects = createProjectRepository(database);
   settings = createSettingsRepository(database);
-  initializeFactoryFloorRuntime(database);
 }
 
 export function closeProjectStore(): void {
-  clearFactoryFloorRuntime();
   projects = null;
   settings = null;
   ephemeralState.clear();

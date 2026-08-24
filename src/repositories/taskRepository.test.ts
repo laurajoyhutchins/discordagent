@@ -19,8 +19,8 @@ function setup() {
   handles.push(db);
   runMigrations(db);
   createProjectRepository(db).create({
-    name: 'factory-floor',
-    workingDirectory: join(directory, 'factory-floor'),
+    name: 'sample-project',
+    workingDirectory: join(directory, 'sample-project'),
     categoryId: 'category-1',
     agentChannelId: 'agent-1',
     defaultProvider: 'claude',
@@ -38,14 +38,14 @@ function transaction(
 ): CreateTaskTransaction {
   return {
     taskId: id,
-    projectName: 'factory-floor',
+    projectName: 'sample-project',
     provider: 'claude',
     channelId: 'agent-1',
     threadId: `thread-${id}`,
     objective: `Objective ${id}`,
     worktree: {
       id: `worktree-${id}`,
-      repositoryPath: '/repos/factory-floor',
+      repositoryPath: '/repos/sample-project',
       worktreePath: `/worktrees/${id}`,
       branchName: `agent/claude/${id}`,
       baseRef: 'main',
@@ -66,7 +66,7 @@ describe('TaskRepository', () => {
 
     expect(created).toMatchObject({
       id: 'task-one',
-      projectName: 'factory-floor',
+      projectName: 'sample-project',
       provider: 'claude',
       status: 'created',
       threadId: 'thread-task-one',
@@ -81,7 +81,7 @@ describe('TaskRepository', () => {
     expect(() => tasks.createWithWorktree(transaction('task-two', {
       worktree: {
         id: 'worktree-task-two',
-        repositoryPath: '/repos/factory-floor',
+        repositoryPath: '/repos/sample-project',
         worktreePath: '/worktrees/task-one',
         branchName: 'agent/claude/task-two',
         baseRef: 'main',

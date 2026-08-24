@@ -15,8 +15,8 @@ function setup() {
   handles.push(db);
   runMigrations(db);
   createProjectRepository(db).create({
-    name: 'factory-floor',
-    workingDirectory: '/repos/factory-floor',
+    name: 'sample-project',
+    workingDirectory: '/repos/sample-project',
     categoryId: 'category-1',
     agentChannelId: 'agent-1',
     defaultProvider: 'claude',
@@ -28,17 +28,17 @@ describe('ProjectSettingsRepository', () => {
   it('persists and clears a typed project setting', () => {
     const { settings } = setup();
 
-    settings.set('factory-floor', 'mcpProfile', 'browser');
-    expect(settings.get('factory-floor', 'mcpProfile')).toBe('browser');
-    settings.clear('factory-floor', 'mcpProfile');
-    expect(settings.get('factory-floor', 'mcpProfile')).toBeUndefined();
+    settings.set('sample-project', 'mcpProfile', 'browser');
+    expect(settings.get('sample-project', 'mcpProfile')).toBe('browser');
+    settings.clear('sample-project', 'mcpProfile');
+    expect(settings.get('sample-project', 'mcpProfile')).toBeUndefined();
   });
 
   it('rejects missing and archived projects', () => {
     const { settings, db } = setup();
     expect(() => settings.get('missing', 'mcpProfile')).toThrow('Project "missing" not found');
     db.raw.prepare('UPDATE projects SET archived_at = ?').run(Date.now());
-    expect(() => settings.list('factory-floor')).toThrow('Project "factory-floor" not found');
+    expect(() => settings.list('sample-project')).toThrow('Project "sample-project" not found');
   });
 
   it('rejects canonical keys before writing to SQLite', () => {
@@ -46,13 +46,13 @@ describe('ProjectSettingsRepository', () => {
     const before = db.raw.prepare('SELECT COUNT(*) AS count FROM project_settings').get() as { count: number };
 
     expect(() => settings.set(
-      'factory-floor',
+      'sample-project',
       'defaultProvider' as never,
       'codex' as never,
     )).toThrow(/unknown project setting key/i);
 
     const after = db.raw.prepare('SELECT COUNT(*) AS count FROM project_settings').get() as { count: number };
     expect(after.count).toBe(before.count);
-    expect(settings.list('factory-floor')).toEqual({});
+    expect(settings.list('sample-project')).toEqual({});
   });
 });

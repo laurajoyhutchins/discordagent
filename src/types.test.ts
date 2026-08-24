@@ -4,8 +4,8 @@ import { normalizeProject, type Project, type TaskRecord, type WorktreeRecord } 
 describe('project normalization', () => {
   it('maps legacy Claude-specific project fields to provider-neutral fields', () => {
     const project = normalizeProject({
-      name: 'factory-floor',
-      workingDirectory: '/repos/factory-floor',
+      name: 'sample-project',
+      workingDirectory: '/repos/sample-project',
       categoryId: 'category-1',
       claudeChannelId: 'channel-1',
       model: 'opus',

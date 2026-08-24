@@ -70,8 +70,8 @@ function createHost(input: {
 function startInput() {
   return {
     taskId: 'task-1',
-    projectName: 'factory-floor',
-    workingDirectory: '/repos/factory-floor',
+    projectName: 'sample-project',
+    workingDirectory: '/repos/sample-project',
     channelId: 'agent-1',
     threadId: 'thread-1',
     prompt: 'Implement the worker registry',
@@ -291,7 +291,7 @@ describe('ClaudeProvider', () => {
     expect(completed).toBe(false);
 
     expect(captured?.prompt).toBe('Implement the worker registry');
-    expect(captured?.options?.cwd).toBe('/repos/factory-floor');
+    expect(captured?.options?.cwd).toBe('/repos/sample-project');
     expect(captured?.options?.model).toBe('request-model');
     expect(captured?.options?.settingSources).toEqual(['user']);
     expect(captured?.options?.env).toEqual({ SAFE_VALUE: 'ok' });
@@ -319,7 +319,7 @@ describe('ClaudeProvider', () => {
       { type: 'usage', usage: { utilization: 0.4, resetsAt: 999 } },
     ]));
     expect(rateLimit).toHaveBeenCalledWith(expect.objectContaining({ utilization: 0.4 }));
-    expect(sessionResult).toHaveBeenCalledWith('factory-floor', expect.objectContaining({
+    expect(sessionResult).toHaveBeenCalledWith('sample-project', expect.objectContaining({
       type: 'result',
       subtype: 'success',
     }));
